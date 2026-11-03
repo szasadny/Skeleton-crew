@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Audit{% endblock %}
+{% block content %}
+<h1>Audit</h1>
+<form method="get" action="/audit" class="filters">
+  <label for="kind">Kind</label>
+  <select id="kind" name="kind">
+    <option value="">All</option>
+    {% for k in kinds %}<option value="{{ k.value }}"{% if k.value == kind %} selected{% endif %}>{{ k.value }}</option>{% endfor %}
+  </select>
+  <button type="submit" class="secondary">Filter</button>
+</form>
+{% if events %}
+<table>
+  <thead><tr><th>Time</th><th>Kind</th><th>Outcome</th><th>Summary</th><th>Run</th><th>Details</th></tr></thead>
+  <tbody>
+  {% for event in events %}
+  <tr>
+    <td>{{ event.at | dt }}</td>
+    <td>{{ event.kind.value }}</td>
+    <td>{{ event.outcome.value }}</td>
+    <td>{{ event.summary }}</td>
+    <td>{% if event.run_id %}<a href="/runs/{{ event.run_id }}">{{ event.run_id }}</a>{% endif %}</td>
+    <td class="mono">{{ event.payload | tojson if event.payload else "" }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>No events on this page.</p>
+{% endif %}
+{{ m.pager("/audit", page, has_next, "&kind=" ~ kind if kind else "") }}
+{% endblock %}

@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Rules: {{ key }}{% endblock %}
+{% block content %}
+<h1>Rules</h1>
+{{ m.rule_tabs(keys, key) }}
+<h2>Revision {{ revision.id }}, {{ revision.created_at | dt }}</h2>
+<pre class="block">{{ revision.content }}</pre>
+<p><a href="/rules/{{ key }}">Back to the editor</a></p>
+{% endblock %}

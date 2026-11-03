@@ -1,0 +1,16 @@
+{
+	# Browsers send no SNI for IP addresses; without this Caddy has no certificate to pick.
+	default_sni {$SC_SITE_ADDRESS}
+}
+
+{$SC_SITE_ADDRESS} {
+	tls internal
+	request_body {
+		max_size 1MB
+	}
+	reverse_proxy controller:8080
+}
+
+:80 {
+	redir https://{host}{uri} permanent
+}

@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Runs{% endblock %}
+{% block content %}
+<h1>Runs</h1>
+{% if runs %}
+<table>
+  <thead><tr><th>Run</th><th>Trigger</th><th>Dry run</th><th>State</th><th>Started</th><th>Finished</th><th>Note</th></tr></thead>
+  <tbody>
+  {% for run in runs %}
+  <tr>
+    <td><a href="/runs/{{ run.id }}">{{ run.id }}</a></td>
+    <td>{{ run.trigger }}</td>
+    <td>{{ "Yes" if run.dry_run else "No" }}</td>
+    <td>{{ run.state.value }}</td>
+    <td>{{ run.started_at | dt }}</td>
+    <td>{{ run.finished_at | dt }}</td>
+    <td>{{ run.note or "" }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>No runs on this page.</p>
+{% endif %}
+{{ m.pager("/runs", page, has_next) }}
+{% endblock %}

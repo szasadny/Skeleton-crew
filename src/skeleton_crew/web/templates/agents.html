@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Agents{% endblock %}
+{% block content %}
+<h1>Agents</h1>
+{{ m.general_errors(errors) }}
+<form method="post" action="/agents">
+  {{ m.csrf() }}
+  {% for role in roles %}
+  {% set p = "agents." ~ role.value ~ "." %}
+  <fieldset>
+    <legend>{{ role.value | capitalize }}</legend>
+    <div class="grid">
+      {{ m.select(p ~ "backend", "Backend", backends, values, errors) }}
+      {{ m.select(p ~ "model", "Model", models.get(values.get(p ~ "backend"), ()), values, errors) }}
+      {{ m.select(p ~ "effort", "Effort", efforts, values, errors) }}
+      {{ m.checkbox(p ~ "web_tools", "Web tools", values, errors) }}
+    </div>
+  </fieldset>
+  {% endfor %}
+  <fieldset>
+    <legend>Claude Code</legend>
+    {{ m.select("claude_auth_mode", "Auth mode", auth_modes, values, errors) }}
+  </fieldset>
+  <button type="submit">Save</button>
+</form>
+{% endblock %}

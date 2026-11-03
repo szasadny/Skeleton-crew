@@ -1,0 +1,140 @@
+import logging
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from skeleton_crew.agents.base import AgentBackend
+from skeleton_crew.agents.rules import compose_rules, default_rules
+from skeleton_crew.domain.settings import AgentBackendName, AppSettings, Role
+from skeleton_crew.domain.task_state import TaskKind
+from skeleton_crew.domain.trust_policy import IssueComment
+from skeleton_crew.github.gateway import Gateway, IssueRef, PullRef
+from skeleton_crew.github.preflight import check_repository
+from skeleton_crew.github.trust import trusted_issues
+from skeleton_crew.pipeline.deps import PipelineDeps
+from skeleton_crew.runtime.egress import apply_allowlist
+from skeleton_crew.store import rules_store, runs_store
+
+COMMON_RULES = "common"
+
+log = logging.getLogger(__name__)
+
+type Candidate = tuple[IssueRef, Sequence[IssueComment]]
+type OpenPr = tuple[IssueRef, Sequence[IssueComment], PullRef]
+
+
+@dataclass(frozen=True)
+class Candidates:
+    ready: list[Candidate]
+    refine: list[Candidate]
+    open_prs: list[OpenPr]
+
+
+@dataclass(frozen=True)
+class Quotas:
+    issues: int
+    refines: int
+    fixes: int
+
+
+def make_backends(
+    deps: PipelineDeps, settings: AppSettings
+) -> dict[AgentBackendName, AgentBackend]:
+    names = sorted({agent.backend for agent in settings.agents.values()})
+    return {name: deps.backend_factory(name, settings) for name in names}
+
+
+async def preflight_problems(
+    deps: PipelineDeps,
+    settings: AppSettings,
+    gw: Gateway,
+    backends: Mapping[AgentBackendName, AgentBackend],
+) -> list[str]:
+    config = deps.config
+    try:
+        report = await check_repository(
+            gw,
+            base_branch=settings.repo.base_branch,
+            allow_unprotected=settings.repo.allow_unprotected_base_branch,
+        )
+        problems = list(report.problems)
+        problems += await deps.runtime.health(
+            image=config.agent_image,
+            network=config.agent_network,
+            proxy_container=config.egress_proxy_container,
+        )
+    except Exception as exc:
+        log.exception("preflight check failed")
+        return [f"preflight check failed: {type(exc).__name__}"]
+    for backend in backends.values():
+        problems += backend.credential_problems()
+    return problems
+
+
+async def apply_egress(
+    deps: PipelineDeps, settings: AppSettings, backends: Mapping[AgentBackendName, AgentBackend]
+) -> None:
+    domains = set(settings.runtime.egress_allowlist)
+    for backend in backends.values():
+        domains.update(backend.egress_domains())
+    await apply_allowlist(
+        deps.runtime,
+        domains,
+        deps.config.egress_allowlist_path,
+        deps.config.egress_proxy_container,
+    )
+
+
+def _has_label(issue: IssueRef, label: str) -> bool:
+    return any(name.casefold() == label.casefold() for name in issue.labels)
+
+
+async def find_candidates(deps: PipelineDeps, settings: AppSettings, gw: Gateway) -> Candidates:
+    labels, trusted = settings.labels, settings.repo.trusted_users
+    bot = deps.config.github_bot_login
+    ready: list[Candidate] = []
+    open_prs: list[OpenPr] = []
+    for issue, comments in await trusted_issues(gw, labels.ready, trusted, bot):
+        if _has_label(issue, labels.hitl) or _has_label(issue, labels.refine):
+            continue
+        pull = await gw.open_skeleton_pr_for(issue.number)
+        if pull is None:
+            ready.append((issue, comments))
+        else:
+            open_prs.append((issue, comments, pull))
+    refine: list[Candidate] = [
+        (issue, comments)
+        for issue, comments in await trusted_issues(gw, labels.refine, trusted, bot)
+        if not _has_label(issue, labels.hitl)
+    ]
+    return Candidates(ready, refine, open_prs)
+
+
+def local_midnight(now: datetime, timezone: str) -> datetime:
+    local = now.astimezone(ZoneInfo(timezone))
+    return local.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(UTC)
+
+
+async def remaining_quotas(session: AsyncSession, settings: AppSettings, now: datetime) -> Quotas:
+    since = local_midnight(now, settings.schedule.timezone)
+    workers = await runs_store.count_worker_tasks_since(session, since)
+    refines = await runs_store.count_refine_tasks_since(session, since)
+    fixes = await runs_store.count_worker_tasks_since(session, since, TaskKind.PR_FIX)
+    limits = settings.limits
+    return Quotas(
+        max(limits.issues_per_day - workers, 0),
+        max(limits.refines_per_day - refines, 0),
+        max(limits.conflict_fixes_per_day - fixes, 0),
+    )
+
+
+async def load_rules(session: AsyncSession) -> dict[Role, str]:
+    common = await rules_store.active_rules(session, COMMON_RULES) or default_rules(COMMON_RULES)
+    rules: dict[Role, str] = {}
+    for role in Role:
+        own = await rules_store.active_rules(session, role.value) or default_rules(role.value)
+        rules[role] = compose_rules(common, own)
+    return rules

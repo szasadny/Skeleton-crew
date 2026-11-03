@@ -1,0 +1,48 @@
+{% import "_macros.html" as m with context %}
+<dl class="facts">
+  <dt>State</dt><dd>{{ "Running" if running else "Idle" }}</dd>
+  <dt>Next scheduled run</dt><dd>{{ next_run | dt if next_run else "Not scheduled" }}</dd>
+  <dt>Dry run</dt><dd>{{ "On" if settings.dry_run else "Off" }}</dd>
+  <dt>Kill switch</dt><dd{% if settings.kill_switch %} class="danger"{% endif %}>{{ "Engaged" if settings.kill_switch else "Off" }}</dd>
+</dl>
+<div class="actions">
+  <form method="post" action="/actions/run-now">{{ m.csrf() }}<button type="submit"{% if running or settings.kill_switch %} disabled{% endif %}>Run now</button></form>
+  <form method="post" action="/actions/dry-run">{{ m.csrf() }}
+    <input type="hidden" name="enabled" value="{{ 'off' if settings.dry_run else 'on' }}">
+    <button type="submit" class="secondary">{{ "Disable dry run" if settings.dry_run else "Enable dry run" }}</button>
+  </form>
+  {% if settings.kill_switch %}
+  <form method="post" action="/actions/release">{{ m.csrf() }}<button type="submit" class="secondary">Release kill switch</button></form>
+  {% else %}
+  <form method="post" action="/actions/kill">{{ m.csrf() }}<button type="submit" class="danger">Kill switch</button></form>
+  {% endif %}
+</div>
+
+<h2>Last run</h2>
+{% if last_run %}
+<p>
+  <a href="/runs/{{ last_run.id }}">Run {{ last_run.id }}</a>: {{ last_run.state.value }}, {{ last_run.trigger }}{% if last_run.dry_run %}, dry run{% endif %}.
+  Started {{ last_run.started_at | dt }}{% if last_run.finished_at %}, finished {{ last_run.finished_at | dt }}{% endif %}.
+</p>
+{% if last_run_states %}<p>Tasks: {% for state, count in last_run_states %}{{ state }} {{ count }}{% if not loop.last %}, {% endif %}{% endfor %}</p>{% endif %}
+{% else %}
+<p>No runs yet.</p>
+{% endif %}
+
+<h2>Active tasks</h2>
+{% if active_tasks %}
+<table>
+  <thead><tr><th>Issue</th><th>State</th><th>PR</th></tr></thead>
+  <tbody>
+  {% for task in active_tasks %}
+  <tr>
+    <td>#{{ task.issue_number }} {{ task.issue_title }}</td>
+    <td>{{ task.state.value }}</td>
+    <td>{% if task.pr_number %}<a href="https://github.com/{{ repo }}/pull/{{ task.pr_number }}">#{{ task.pr_number }}</a>{% endif %}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>No active tasks.</p>
+{% endif %}

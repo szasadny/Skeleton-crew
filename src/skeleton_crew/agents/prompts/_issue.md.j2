@@ -1,0 +1,9 @@
+Issue #{{ issue.number }}:
+
+{{ issue.title | untrusted("issue #" ~ issue.number ~ " title") }}
+
+{{ issue.body | untrusted("issue #" ~ issue.number ~ " body") }}
+{% for comment in comments %}
+
+{{ comment.body | untrusted("comment by " ~ comment.author) }}
+{% endfor %}

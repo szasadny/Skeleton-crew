@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Transcripts{% endblock %}
+{% block content %}
+<h1>Transcripts: {{ key }}</h1>
+<p><a href="/runs/{{ run.id }}">Back to run {{ run.id }}</a></p>
+{% if names %}
+<ul class="plain">{% for name in names %}<li><a href="/runs/{{ run.id }}/transcripts/{{ key }}/{{ name }}">{{ name }}</a></li>{% endfor %}</ul>
+{% else %}
+<p>No transcripts.</p>
+{% endif %}
+{% endblock %}

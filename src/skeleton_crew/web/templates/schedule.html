@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Schedule{% endblock %}
+{% block content %}
+<h1>Schedule</h1>
+{{ m.general_errors(errors) }}
+<form method="post" action="/schedule">
+  {{ m.csrf() }}
+  <fieldset>
+    <legend>Weekdays</legend>
+    {% for day in weekdays %}
+    <label class="inline"><input type="checkbox" name="schedule.weekdays" value="{{ day.value }}"{% if day.value in values.get("schedule.weekdays", []) %} checked{% endif %}> {{ day.value | capitalize }}</label>
+    {% endfor %}
+    <p class="hint">No weekdays selected means no scheduled runs.</p>
+    {{ m.field_errors(errors, "schedule.weekdays") }}
+  </fieldset>
+  <div class="field">
+    <label for="schedule.start_time">Start time</label>
+    <input id="schedule.start_time" name="schedule.start_time" type="time" required value="{{ (values.get('schedule.start_time') or '')[:5] }}">
+    {{ m.field_errors(errors, "schedule.start_time") }}
+  </div>
+  {{ m.number(window, values, errors) }}
+  {{ m.text("schedule.timezone", "Timezone", values, errors, list="timezones") }}
+  <datalist id="timezones">{% for tz in timezones %}<option value="{{ tz }}">{% endfor %}</datalist>
+  <button type="submit">Save</button>
+</form>
+{% endblock %}

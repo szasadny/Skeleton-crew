@@ -1,0 +1,150 @@
+:root {
+  --fg: #1f2328;
+  --muted: #59636e;
+  --bg: #ffffff;
+  --panel: #f6f8fa;
+  --border: #d1d9e0;
+  --accent: #0969da;
+  --danger: #cf222e;
+  --notice: #dafbe1;
+  --alert: #ffebe9;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--fg);
+  background: var(--bg);
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+h1 { font-size: 1.5rem; margin: 0 0 1rem; }
+h2 { font-size: 1.15rem; margin: 2rem 0 0.75rem; }
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  padding: 0.6rem 1.5rem;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.brand { font-weight: 600; }
+
+.nav { display: flex; flex-wrap: wrap; gap: 1rem; flex: 1; }
+.nav a { color: var(--muted); }
+.nav a.current { color: var(--fg); font-weight: 600; }
+
+.logout { margin: 0; }
+
+main { max-width: 72rem; margin: 0 auto; padding: 1.5rem; }
+
+.narrow { max-width: 22rem; margin: 3rem auto; }
+
+.notice, .alert {
+  padding: 0.6rem 0.9rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  margin: 0 0 1rem;
+}
+.notice { background: var(--notice); }
+.alert { background: var(--alert); }
+.alert p { margin: 0.2rem 0; }
+
+.facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.3rem 1.5rem;
+  margin: 0 0 1rem;
+}
+.facts dt { color: var(--muted); }
+.facts dd { margin: 0; }
+
+.danger { color: var(--danger); font-weight: 600; }
+
+.actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.actions form { margin: 0; }
+
+fieldset {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  margin: 0 0 1rem;
+}
+legend { font-weight: 600; padding: 0 0.3rem; }
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+  gap: 0 1rem;
+}
+
+.field { margin: 0 0 0.9rem; }
+.field label { display: block; font-weight: 500; margin-bottom: 0.2rem; }
+.field.checkbox label { font-weight: 400; }
+label.inline { margin-right: 1rem; white-space: nowrap; }
+
+input[type="text"], input[type="number"], input[type="time"], input[type="password"],
+select, textarea {
+  width: 100%;
+  max-width: 32rem;
+  padding: 0.35rem 0.5rem;
+  font: inherit;
+  color: inherit;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+textarea { max-width: none; }
+.mono, textarea.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+
+.hint { color: var(--muted); font-size: 0.85rem; margin: 0.2rem 0 0; }
+.field-error { color: var(--danger); font-size: 0.85rem; margin: 0.2rem 0 0; }
+
+button {
+  font: inherit;
+  padding: 0.4rem 0.9rem;
+  border-radius: 6px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #ffffff;
+  cursor: pointer;
+}
+button.secondary { background: var(--bg); color: var(--fg); border-color: var(--border); }
+button.danger { background: var(--danger); border-color: var(--danger); color: #ffffff; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.spaced { margin-top: 0.75rem; }
+
+table { width: 100%; border-collapse: collapse; margin: 0 0 1rem; }
+th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { color: var(--muted); font-weight: 500; }
+
+.tabs { display: flex; gap: 0.25rem; margin: 0 0 1rem; border-bottom: 1px solid var(--border); }
+.tabs a { padding: 0.35rem 0.8rem; color: var(--muted); }
+.tabs a.current { color: var(--fg); font-weight: 600; border-bottom: 2px solid var(--accent); }
+
+.plain { list-style: none; padding: 0; }
+.plain li { padding: 0.15rem 0; }
+
+pre.block {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.75rem;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 13px;
+}
+
+.pager { display: flex; gap: 1rem; align-items: center; }
+.filters { display: flex; gap: 0.5rem; align-items: center; margin: 0 0 1rem; }
+.filters select { width: auto; }

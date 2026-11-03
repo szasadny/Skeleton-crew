@@ -1,0 +1,194 @@
+import re
+from datetime import time
+from enum import StrEnum
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+
+class Weekday(StrEnum):
+    MON = "mon"
+    TUE = "tue"
+    WED = "wed"
+    THU = "thu"
+    FRI = "fri"
+    SAT = "sat"
+    SUN = "sun"
+
+
+class Role(StrEnum):
+    SELECTOR = "selector"
+    REFINER = "refiner"
+    REVIEWER = "reviewer"
+    WORKER = "worker"
+
+
+RULE_KEYS: tuple[str, ...] = ("common", *(role.value for role in Role))
+
+
+class AgentBackendName(StrEnum):
+    CLAUDE_CODE = "claude_code"
+
+
+class ClaudeAuthMode(StrEnum):
+    SUBSCRIPTION = "subscription"
+    API_KEY = "api_key"
+
+
+class Effort(StrEnum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    XHIGH = "xhigh"
+    MAX = "max"
+
+
+_DOMAIN_RE = re.compile(r"^(\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
+_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/\[\]-]{0,99}$")
+_LOGIN_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(\[bot\])?$")
+
+
+class _Frozen(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+
+class Schedule(_Frozen):
+    weekdays: frozenset[Weekday] = frozenset()
+    start_time: time = time(1, 0)
+    window_hours: float = Field(default=6.0, gt=0, le=24)
+    timezone: str = "Europe/Amsterdam"
+
+    @field_validator("timezone")
+    @classmethod
+    def _valid_timezone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except ZoneInfoNotFoundError, ValueError:
+            raise ValueError(f"unknown timezone: {value}") from None
+        return value
+
+
+class Limits(_Frozen):
+    issues_per_day: int = Field(default=3, ge=0, le=50)
+    refines_per_day: int = Field(default=5, ge=0, le=50)
+    conflict_fixes_per_day: int = Field(default=5, ge=0, le=50)
+    max_parallel_workers: int = Field(default=2, ge=1, le=10)
+    session_timeout_minutes: int = Field(default=60, ge=5, le=480)
+    worker_timeout_hours: float = Field(default=4.0, gt=0, le=24)
+    max_turns: int = Field(default=200, ge=10, le=2000)
+    max_ci_rounds: int = Field(default=3, ge=0, le=10)
+    max_review_rounds: int = Field(default=3, ge=0, le=10)
+    max_continues: int = Field(default=5, ge=0, le=20)
+    max_new_issues_per_worker: int = Field(default=3, ge=0, le=10)
+    max_budget_usd_per_session: float | None = Field(default=None, gt=0)
+    max_diff_lines: int = Field(default=1500, ge=10, le=50_000)
+    max_comment_chars: int = Field(default=1500, ge=200, le=20_000)
+    max_code_comment_lines: int = Field(default=2, ge=1, le=20)
+    ci_poll_seconds: int = Field(default=60, ge=10, le=900)
+    ci_timeout_minutes: int = Field(default=60, ge=5, le=480)
+    ci_grace_minutes: int = Field(default=10, ge=1, le=120)
+
+
+class RoleAgent(_Frozen):
+    backend: AgentBackendName = AgentBackendName.CLAUDE_CODE
+    model: str = "opus"
+    effort: Effort = Effort.MEDIUM
+    web_tools: bool = False
+
+    @field_validator("model")
+    @classmethod
+    def _valid_model(cls, value: str) -> str:
+        if not _MODEL_RE.fullmatch(value):
+            raise ValueError("model name contains unsupported characters")
+        return value
+
+
+def _default_agents() -> dict[Role, RoleAgent]:
+    return {
+        Role.SELECTOR: RoleAgent(),
+        Role.REFINER: RoleAgent(),
+        Role.REVIEWER: RoleAgent(effort=Effort.HIGH),
+        Role.WORKER: RoleAgent(),
+    }
+
+
+class LabelNames(_Frozen):
+    ready: str = "skeleton"
+    refine: str = "skeleton refine"
+    hitl: str = "skeleton HITL"
+
+    @model_validator(mode="after")
+    def _distinct_and_non_empty(self) -> LabelNames:
+        names = [self.ready, self.refine, self.hitl]
+        if any(not n.strip() or len(n) > 50 for n in names):
+            raise ValueError("label names must be 1-50 non-blank characters")
+        if len({n.casefold() for n in names}) != 3:
+            raise ValueError("label names must be distinct")
+        return self
+
+
+class RepoPolicy(_Frozen):
+    base_branch: str = "main"
+    protected_paths: tuple[str, ...] = (".github/**", ".gitmodules")
+    setup_command: str | None = Field(default=None, max_length=500)
+    require_ci: bool = True
+    allow_unprotected_base_branch: bool = False
+    trusted_users: tuple[str, ...] = ()
+
+    @field_validator("trusted_users")
+    @classmethod
+    def _valid_logins(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        for login in value:
+            if not _LOGIN_RE.fullmatch(login):
+                raise ValueError(f"invalid GitHub login: {login}")
+        return value
+
+    @field_validator("protected_paths")
+    @classmethod
+    def _valid_patterns(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        for pattern in value:
+            if not pattern or pattern.startswith("/") or ".." in pattern.split("/"):
+                raise ValueError(f"invalid protected path pattern: {pattern}")
+        return value
+
+
+class RuntimeLimits(_Frozen):
+    egress_allowlist: tuple[str, ...] = (
+        "pypi.org",
+        "files.pythonhosted.org",
+        "registry.npmjs.org",
+        "registry-1.docker.io",
+        "auth.docker.io",
+        "production.cloudflare.docker.com",
+    )
+    cpus: float = Field(default=2.0, gt=0, le=64)
+    memory_gb: float = Field(default=4.0, gt=0, le=256)
+    pids: int = Field(default=2048, ge=128, le=65_536)
+
+    @field_validator("egress_allowlist")
+    @classmethod
+    def _valid_domains(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        for domain in value:
+            if not _DOMAIN_RE.fullmatch(domain):
+                raise ValueError(f"invalid domain: {domain}")
+        return value
+
+
+class AppSettings(_Frozen):
+    schedule: Schedule = Schedule()
+    limits: Limits = Limits()
+    agents: dict[Role, RoleAgent] = Field(default_factory=_default_agents)
+    claude_auth_mode: ClaudeAuthMode = ClaudeAuthMode.SUBSCRIPTION
+    labels: LabelNames = LabelNames()
+    repo: RepoPolicy = RepoPolicy()
+    runtime: RuntimeLimits = RuntimeLimits()
+    dry_run: bool = True
+    kill_switch: bool = False
+
+    @field_validator("agents")
+    @classmethod
+    def _all_roles(cls, value: dict[Role, RoleAgent]) -> dict[Role, RoleAgent]:
+        missing = set(Role) - set(value)
+        if missing:
+            raise ValueError(f"missing agent config for: {sorted(missing)}")
+        return value

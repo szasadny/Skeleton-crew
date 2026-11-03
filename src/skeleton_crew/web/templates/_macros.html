@@ -1,0 +1,69 @@
+{% macro csrf() %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endmacro %}
+
+{% macro field_errors(errors, name) %}
+{% for error in errors.get(name, []) %}<p class="field-error">{{ error }}</p>{% endfor %}
+{% endmacro %}
+
+{% macro general_errors(errors) %}
+{% if errors.get("") %}<div class="alert">{% for error in errors[""] %}<p>{{ error }}</p>{% endfor %}</div>{% endif %}
+{% endmacro %}
+
+{% macro value_of(values, name) %}{{ values.get(name) if values.get(name) is not none else "" }}{% endmacro %}
+
+{% macro text(name, label, values, errors, type="text", list=none) %}
+<div class="field">
+  <label for="{{ name }}">{{ label }}</label>
+  <input id="{{ name }}" name="{{ name }}" type="{{ type }}" value="{{ value_of(values, name) }}"{% if list %} list="{{ list }}"{% endif %}>
+  {{ field_errors(errors, name) }}
+</div>
+{% endmacro %}
+
+{% macro number(spec, values, errors) %}
+<div class="field">
+  <label for="{{ spec.name }}">{{ spec.label }}</label>
+  <input id="{{ spec.name }}" name="{{ spec.name }}" type="number" step="{{ spec.step }}"
+    {%- if spec.min is not none %} min="{{ spec.min }}"{% endif %}
+    {%- if spec.max is not none %} max="{{ spec.max }}"{% endif %}
+    {%- if not spec.optional %} required{% endif %} value="{{ value_of(values, spec.name) }}">
+  {% if spec.optional %}<p class="hint">Leave empty for no limit.</p>{% endif %}
+  {{ field_errors(errors, spec.name) }}
+</div>
+{% endmacro %}
+
+{% macro lines(name, label, values, errors, hint="One per line.") %}
+<div class="field">
+  <label for="{{ name }}">{{ label }}</label>
+  <textarea id="{{ name }}" name="{{ name }}" rows="5">{{ (values.get(name) or []) | join("\n") }}</textarea>
+  <p class="hint">{{ hint }}</p>
+  {{ field_errors(errors, name) }}
+</div>
+{% endmacro %}
+
+{% macro checkbox(name, label, values, errors) %}
+<div class="field checkbox">
+  <label><input name="{{ name }}" type="checkbox"{% if values.get(name) %} checked{% endif %}> {{ label }}</label>
+  {{ field_errors(errors, name) }}
+</div>
+{% endmacro %}
+
+{% macro select(name, label, options, values, errors) %}
+<div class="field">
+  <label for="{{ name }}">{{ label }}</label>
+  <select id="{{ name }}" name="{{ name }}">
+    {% for option in options %}{% set v = option.value if option.value is defined else option %}<option value="{{ v }}"{% if values.get(name) == v %} selected{% endif %}>{{ v }}</option>{% endfor %}
+  </select>
+  {{ field_errors(errors, name) }}
+</div>
+{% endmacro %}
+
+{% macro pager(base, page, has_next, extra="") %}
+<nav class="pager">
+  {% if page > 1 %}<a href="{{ base }}?page={{ page - 1 }}{{ extra }}">Previous</a>{% endif %}
+  <span>Page {{ page }}</span>
+  {% if has_next %}<a href="{{ base }}?page={{ page + 1 }}{{ extra }}">Next</a>{% endif %}
+</nav>
+{% endmacro %}
+
+{% macro rule_tabs(keys, key) %}
+<nav class="tabs">{% for k in keys %}<a href="/rules/{{ k }}"{% if k == key %} class="current"{% endif %}>{{ k }}</a>{% endfor %}</nav>
+{% endmacro %}

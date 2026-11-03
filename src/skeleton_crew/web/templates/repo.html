@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Repo{% endblock %}
+{% block content %}
+<h1>Repo</h1>
+{{ m.general_errors(errors) }}
+<form method="post" action="/repo">
+  {{ m.csrf() }}
+  <fieldset>
+    <legend>Labels</legend>
+    <div class="grid">
+      {{ m.text("labels.ready", "Ready", values, errors) }}
+      {{ m.text("labels.refine", "Refine", values, errors) }}
+      {{ m.text("labels.hitl", "Human in the loop", values, errors) }}
+    </div>
+  </fieldset>
+  <fieldset>
+    <legend>Repository</legend>
+    {{ m.text("repo.base_branch", "Base branch", values, errors) }}
+    {{ m.lines("repo.protected_paths", "Protected paths", values, errors, "One glob pattern per line.") }}
+    {{ m.text("repo.setup_command", "Setup command", values, errors) }}
+    {{ m.checkbox("repo.require_ci", "Require CI", values, errors) }}
+    {{ m.checkbox("repo.allow_unprotected_base_branch", "Allow unprotected base branch", values, errors) }}
+    <p class="hint">Only for repositories without rulesets (free private repos). GitHub then no longer requires your approval before a merge; the crew still cannot merge. See SECURITY.md.</p>
+    {{ m.lines("repo.trusted_users", "Trusted users", values, errors, "One GitHub login per line.") }}
+  </fieldset>
+  <fieldset>
+    <legend>Containers</legend>
+    {{ m.lines("runtime.egress_allowlist", "Egress allowlist", values, errors, "One domain per line. A leading dot allows subdomains.") }}
+    <div class="grid">
+      {% for spec in resources %}{{ m.number(spec, values, errors) }}{% endfor %}
+    </div>
+  </fieldset>
+  <button type="submit">Save</button>
+</form>
+{% endblock %}

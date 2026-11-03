@@ -1,0 +1,91 @@
+[project]
+name = "skeleton-crew"
+version = "0.1.0"
+description = "Self-hosted orchestrator that lets Claude Code workers resolve labelled GitHub issues under hard guardrails."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.14"
+dependencies = [
+    "aiosqlite>=0.22.1",
+    "alembic>=1.20.1",
+    "apscheduler>=3.11,<4",
+    "argon2-cffi>=25.1.0",
+    "docker>=7.2.0",
+    "fastapi>=0.162.0",
+    "githubkit[auth-app]>=0.17.0",
+    "httpx>=0.28.1",
+    "itsdangerous>=2.2.0",
+    "jinja2>=3.1.6",
+    "pydantic>=2.14.1",
+    "pydantic-settings>=2.16.2",
+    "python-multipart>=0.0.32",
+    "sqlalchemy[asyncio]>=2.1.6",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[project.scripts]
+skeleton-crew = "skeleton_crew.cli:main"
+
+[dependency-groups]
+dev = [
+    "import-linter>=2.15",
+    "mypy>=1.18",
+    "pytest>=8.4",
+    "pytest-asyncio>=1.2",
+    "respx>=0.23.1",
+    "ruff>=0.14",
+    "types-docker>=7.2.0.20261006",
+]
+
+[build-system]
+requires = ["uv_build>=0.11,<0.12"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "ASYNC", "S", "PT", "TID"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]
+
+[tool.mypy]
+strict = true
+python_version = "3.14"
+files = ["src", "tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["tests/fakes"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = [
+    "error",
+    # githubkit 0.17 nudges towards httpx2; respx (our HTTP mock) only patches httpx.
+    "ignore:Using `httpx` with GitHubKit is deprecated:DeprecationWarning",
+]
+addopts = "--strict-markers -m 'not docker'"
+markers = [
+    "docker: needs a real Docker daemon with the Sysbox runtime (run on the VM)",
+]
+
+[tool.importlinter]
+root_package = "skeleton_crew"
+
+[[tool.importlinter.contracts]]
+name = "Layers (ARCHITECTURE.md §3)"
+type = "layers"
+layers = [
+    "skeleton_crew.cli",
+    "skeleton_crew.web",
+    "skeleton_crew.scheduler",
+    "skeleton_crew.pipeline",
+    "skeleton_crew.github | skeleton_crew.runtime | skeleton_crew.agents | skeleton_crew.store",
+    "skeleton_crew.models",
+    "skeleton_crew.core",
+    "skeleton_crew.domain",
+]

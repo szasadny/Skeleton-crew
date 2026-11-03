@@ -1,0 +1,68 @@
+name: skeleton-crew
+
+services:
+  controller:
+    build:
+      context: .
+      dockerfile: docker/controller.Dockerfile
+    image: skeleton-crew-controller:latest
+    env_file: .env
+    environment:
+      SC_DATA_DIR: ${SC_DATA_DIR:-/var/lib/skeleton-crew}
+    group_add:
+      - "${DOCKER_GID:?run scripts/install.sh to set DOCKER_GID}"
+    volumes:
+      # Same path as on the host: the controller hands these paths to Docker for agent mounts.
+      - ${SC_DATA_DIR:-/var/lib/skeleton-crew}:${SC_DATA_DIR:-/var/lib/skeleton-crew}
+      - /var/run/docker.sock:/var/run/docker.sock
+      - type: bind
+        source: ${SC_GITHUB_APP_PRIVATE_KEY_PATH:?set SC_GITHUB_APP_PRIVATE_KEY_PATH in .env}
+        target: ${SC_GITHUB_APP_PRIVATE_KEY_PATH}
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      - egress-proxy
+    restart: unless-stopped
+
+  egress-proxy:
+    build: src/skeleton_crew/runtime/images/egress-proxy
+    image: skeleton-crew-egress-proxy:latest
+    container_name: skeleton-crew-egress-proxy
+    volumes:
+      - ${SC_DATA_DIR:-/var/lib/skeleton-crew}/egress:/etc/squid/allowlist:ro
+    networks:
+      - agents
+      - egress
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2.11.7-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SC_SITE_ADDRESS: ${SC_SITE_ADDRESS:?set SC_SITE_ADDRESS in .env}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - controller
+    restart: unless-stopped
+
+  agent-image:
+    profiles:
+      - build
+    build: src/skeleton_crew/runtime/images/agent
+    image: skeleton-crew-agent:latest
+
+networks:
+  agents:
+    name: skeleton-crew-agents
+    internal: true
+  egress: {}
+
+volumes:
+  caddy-data: {}
+  caddy-config: {}
