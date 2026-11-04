@@ -33,6 +33,8 @@ _CONTEXTS: dict[PromptName, dict[str, object]] = {
         "comments": _comments(),
         "branch": "skeleton/6-fix-it",
         "setup_command": "make setup",
+        "check_command": "make check",
+        "max_comment_lines": 2,
         "protected_paths": [".github/**", ".gitmodules"],
         "max_new_issues": 3,
     },
@@ -43,6 +45,8 @@ _CONTEXTS: dict[PromptName, dict[str, object]] = {
         "branch": "skeleton/8-fix-it",
         "base_branch": "main",
         "setup_command": None,
+        "check_command": None,
+        "max_comment_lines": 2,
         "protected_paths": [".github/**"],
         "max_new_issues": 3,
         "conflicts": ["app.py", _HOSTILE],
@@ -55,7 +59,10 @@ _CONTEXTS: dict[PromptName, dict[str, object]] = {
         "comments": _comments(),
         "worker_summary": _HOSTILE,
         "diff_stats": _HOSTILE,
-        "comment_flags": [{"path": _HOSTILE, "start_line": 3, "length": 9}],
+        "comment_flags": [
+            {"path": _HOSTILE, "start_line": 3, "length": 9, "reason": _HOSTILE},
+            {"path": "app.py", "start_line": 1, "length": 4, "reason": None},
+        ],
         "ci_state": "success",
     },
 }
@@ -94,16 +101,57 @@ def test_roles_map_to_their_templates() -> None:
 
 def test_worker_prompt_states_branch_setup_and_push_rule() -> None:
     text = render_prompt(PromptName.WORKER, _CONTEXTS[PromptName.WORKER], json_schema=_SCHEMA)
-    for part in ("skeleton/6-fix-it", "`make setup`", '".github/**"', "at most 3", "git push"):
+    parts = (
+        "skeleton/6-fix-it",
+        "already ran `make setup`",
+        "runs `make check`",
+        "longer than 2 lines",
+        "`comment_objections`",
+        '".github/**"',
+        "at most 3",
+        "git push",
+    )
+    for part in parts:
         assert part in text
     assert "`gh`" in text
 
 
-def test_worker_prompt_without_setup_command() -> None:
-    context = {**_CONTEXTS[PromptName.WORKER], "setup_command": None, "protected_paths": []}
+def test_worker_prompt_without_setup_or_check_command() -> None:
+    context = {
+        **_CONTEXTS[PromptName.WORKER],
+        "setup_command": None,
+        "check_command": None,
+        "protected_paths": [],
+    }
     text = render_prompt(PromptName.WORKER, context, json_schema=_SCHEMA)
-    assert "Setup command: none" in text
+    assert "Setup: none configured" in text
+    assert "Checks: run the repository's own checks" in text
     assert "delete them: none" in text
+
+
+@pytest.mark.parametrize("kind", ["policy_failed", "check_failed"])
+def test_update_prompt_knows_every_followup_kind(kind: str) -> None:
+    context = {
+        **_CONTEXTS[PromptName.WORKER_UPDATE],
+        "conflicts": [],
+        "kind": kind,
+        "details": "make check: 1 failed",
+    }
+    text = render_prompt(PromptName.WORKER_UPDATE, context, json_schema=_SCHEMA)
+    assert "make check: 1 failed" in text
+
+
+def test_followup_prompt_for_failed_checks() -> None:
+    context = {"kind": "check_failed", "details": "FAILED test_app"}
+    text = render_prompt(PromptName.WORKER_FOLLOWUP, context, json_schema=_SCHEMA)
+    assert "repository checks failed" in text
+    assert "FAILED test_app" in text
+
+
+def test_reviewer_prompt_shows_the_workers_reason_per_flag() -> None:
+    text = render_prompt(PromptName.REVIEWER, _CONTEXTS[PromptName.REVIEWER], json_schema=_SCHEMA)
+    assert "app.py:1 (4 comment lines), worker reason: none" in text
+    assert "without a worker reason is a major finding" in text
 
 
 def test_update_prompt_lists_conflicts_and_forbids_merging() -> None:

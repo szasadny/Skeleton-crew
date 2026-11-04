@@ -84,6 +84,7 @@ class Limits(_Frozen):
     max_diff_lines: int = Field(default=1500, ge=10, le=50_000)
     max_comment_chars: int = Field(default=1500, ge=200, le=20_000)
     max_code_comment_lines: int = Field(default=2, ge=1, le=20)
+    command_timeout_minutes: int = Field(default=30, ge=1, le=240)
     ci_poll_seconds: int = Field(default=60, ge=10, le=900)
     ci_timeout_minutes: int = Field(default=60, ge=5, le=480)
     ci_grace_minutes: int = Field(default=10, ge=1, le=120)
@@ -131,6 +132,7 @@ class RepoPolicy(_Frozen):
     base_branch: str = "main"
     protected_paths: tuple[str, ...] = (".github/**", ".gitmodules")
     setup_command: str | None = Field(default=None, max_length=500)
+    check_command: str | None = Field(default=None, max_length=500)
     require_ci: bool = True
     allow_unprotected_base_branch: bool = False
     trusted_users: tuple[str, ...] = ()

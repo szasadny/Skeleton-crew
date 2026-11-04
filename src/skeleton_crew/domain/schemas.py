@@ -56,12 +56,19 @@ class NewIssue(_AgentOutput):
     body: Text4000
 
 
+class CommentObjection(_AgentOutput):
+    path: FindingPath
+    line: int = Field(ge=1)
+    reason: Text300
+
+
 class WorkerResult(_AgentOutput):
     status: Literal["done", "scope_too_large", "blocked"]
     summary: Text1500
     pr_title: PrTitle
     note: Text1500 | None = None
     new_issues: list[NewIssue] = Field(default_factory=list, max_length=10)
+    comment_objections: list[CommentObjection] = Field(default_factory=list, max_length=20)
 
     @model_validator(mode="after")
     def _note_explains_non_done(self) -> Self:

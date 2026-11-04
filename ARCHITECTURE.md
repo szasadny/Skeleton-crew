@@ -137,17 +137,17 @@ QUEUED → PREPARING → CODING → POLICY_CHECK → AWAITING_CI → REVIEWING �
 any non-terminal state → ESCALATED | FAILED | ABORTED
 ```
 
-While a task is `AWAITING_CI` its container stays alive, but no session runs, so waiting costs no tokens. A CI failure or a review finding resumes the same agent session.
+While a task is `AWAITING_CI` its container stays alive, but no session runs, so waiting costs no tokens. A CI failure or a review finding resumes the same agent session. A failed `check_command` is a policy-check failure that counts against `max_ci_rounds`.
 
 ### 4.3 From agent work to PR
 
 The controller never runs git inside a directory an agent can write to: a planted `.git/config` or hook would execute on the controller.
 
 1. The gateway clones the repo into `<data>/tasks/<id>/controller/` (credentials via a one-shot header, never stored). This clone is never mounted into a container.
-2. `runtime/workspace` makes a plain local copy at `<data>/tasks/<id>/agent/` and mounts it at `/workspace`.
-3. After a session, the controller execs `git diff --binary <base>` **inside the container** (external diff and textconv disabled) and reads it as plain bytes.
+2. `runtime/workspace` makes a plain local copy at `<data>/tasks/<id>/agent/` and mounts it at `/workspace`. If `setup_command` is set, the controller execs it in the worker container before the first session; failure escalates.
+3. After a session, the controller execs `check_command` in the container if set, except while resolving a merge conflict; a failure goes back to the worker with the output tail. Repo commands run as the agent user with no extra env, so they never see the model credential. Then it execs `git diff --binary <base>` **inside the container** (external diff and textconv disabled) and reads it as plain bytes.
 4. In the controller clone, with hooks and fsmonitor disabled, it applies the patch on `<base>` and creates a commit whose tree is "base + patch" and whose parent is the current branch tip. Commit metadata comes from the controller, not the agent.
-5. `diff_policy`, `comment_policy` and gitleaks run on that commit versus base. Only then does the gateway push `skeleton/<n>-<slug>` and open or update the PR.
+5. `diff_policy`, `comment_policy` and gitleaks run on that commit versus base. A long comment block is a violation unless the worker contested it in `comment_objections` with a reason, matched on path and first line; contested blocks go to the reviewer, who decides. Only then does the gateway push `skeleton/<n>-<slug>` and open or update the PR.
 
 Reviewer, refiner and selector sessions get a fresh read-only copy.
 
@@ -183,7 +183,7 @@ SQLite in the data directory, with Alembic migrations applied at startup.
 ### 6.1 Configuration
 
 - **Bootstrap** (`.env`, `core/config.py`, prefix `SC_`): target repo `owner/name`, GitHub App id and key path, agent credentials, UI password hash, session secret, data directory, image and network names. Never editable in the UI and never logged.
-- **Runtime** (`domain/settings.py`, edited in the UI): schedule, limits, per-role agent (backend, model, effort, web tools), label names, protected paths, `setup_command`, egress allowlist, resource limits, `dry_run`, kill switch.
+- **Runtime** (`domain/settings.py`, edited in the UI): schedule, limits, per-role agent (backend, model, effort, web tools), label names, protected paths, `setup_command`, `check_command`, egress allowlist, resource limits, `dry_run`, kill switch.
 
 ### 6.2 Agent backends
 

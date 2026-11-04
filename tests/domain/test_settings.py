@@ -116,11 +116,20 @@ def test_invalid_timezone_is_rejected(tz: str) -> None:
         ("max_comment_chars", 199),
         ("max_code_comment_lines", 0),
         ("max_budget_usd_per_session", 0),
+        ("command_timeout_minutes", 0),
+        ("command_timeout_minutes", 241),
     ],
 )
 def test_out_of_range_limits_are_rejected(field: str, value: Any) -> None:
     with pytest.raises(ValidationError):
         Limits.model_validate({field: value})
+
+
+@pytest.mark.parametrize("field", ["setup_command", "check_command"])
+def test_repo_commands_are_optional_and_bounded(field: str) -> None:
+    assert getattr(RepoPolicy(), field) is None
+    with pytest.raises(ValidationError):
+        RepoPolicy.model_validate({field: "x" * 501})
 
 
 def test_missing_role_agent_is_rejected() -> None:

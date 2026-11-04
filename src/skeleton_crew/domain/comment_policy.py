@@ -1,5 +1,5 @@
 import re
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 
 from skeleton_crew.domain.errors import PolicyViolation
@@ -17,6 +17,14 @@ class CommentFlag:
     path: str
     start_line: int
     length: int
+
+
+@dataclass(frozen=True)
+class ContestedFlag:
+    path: str
+    start_line: int
+    length: int
+    reason: str | None
 
 
 _HUNK_RE = re.compile(r"@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@.*")
@@ -154,3 +162,21 @@ def flag_long_comment_blocks(lines: Sequence[AddedLine], max_lines: int) -> list
             flags.append(CommentFlag(lines[start].path, lines[start].line, end - start + 1))
         start = end + 1
     return flags
+
+
+def contest_flags(
+    flags: Sequence[CommentFlag], reasons: Mapping[tuple[str, int], str]
+) -> tuple[list[CommentFlag], list[ContestedFlag]]:
+    open_flags: list[CommentFlag] = []
+    contested: list[ContestedFlag] = []
+    for flag in flags:
+        reason = reasons.get((flag.path, flag.start_line))
+        if reason is None:
+            open_flags.append(flag)
+        else:
+            contested.append(ContestedFlag(flag.path, flag.start_line, flag.length, reason))
+    return open_flags, contested
+
+
+def uncontested(flags: Sequence[CommentFlag]) -> list[ContestedFlag]:
+    return [ContestedFlag(f.path, f.start_line, f.length, None) for f in flags]

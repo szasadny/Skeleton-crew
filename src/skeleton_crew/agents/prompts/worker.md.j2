@@ -2,8 +2,11 @@
 
 Implement the issue below in the repository at `/workspace`. Work on the current checkout. The controller commits your changes to branch `{{ branch }}`.
 
-- Setup command: {% if setup_command %}`{{ setup_command }}`{% else %}none, follow the repository docs{% endif %}
+- Setup: {% if setup_command %}the controller already ran `{{ setup_command }}`{% else %}none configured, follow the repository docs{% endif %}
 
+- Checks: {% if check_command %}the controller runs `{{ check_command }}` when you finish; if it fails you get its output back{% else %}run the repository's own checks{% endif %}
+
+- Comment blocks longer than {{ max_comment_lines }} lines are rejected. If one is really needed, keep it and list it in `comment_objections` with its path, first line and reason; the reviewer decides.
 - Protected paths, never create, edit or delete them: {{ protected_paths | map("tojson") | join(", ") if protected_paths else "none" }}
 - Report at most {{ max_new_issues }} out-of-scope problems in `new_issues`.
 - The controller commits, pushes and opens the PR. Never run `git push` and never use `gh`.

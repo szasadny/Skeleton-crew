@@ -1,6 +1,13 @@
 from dataclasses import dataclass
 
-from skeleton_crew.domain.comment_policy import CommentFlag, added_lines, flag_long_comment_blocks
+from skeleton_crew.domain.comment_policy import (
+    CommentFlag,
+    ContestedFlag,
+    added_lines,
+    contest_flags,
+    flag_long_comment_blocks,
+    uncontested,
+)
 from skeleton_crew.domain.diff_policy import FileChange, check_diff, parse_diff_summary
 from skeleton_crew.domain.errors import PolicyViolation
 from skeleton_crew.domain.merge_policy import check_resolution, conflict_markers
@@ -24,6 +31,14 @@ PATCH_TIMEOUT_S = 300.0
 @dataclass(frozen=True)
 class PolicyCheck:
     head_sha: str | None
+    violations: list[str]
+    patch: bytes
+    changes: list[FileChange]
+    comment_flags: list[ContestedFlag]
+
+
+@dataclass(frozen=True)
+class _Inspection:
     violations: list[str]
     patch: bytes
     changes: list[FileChange]
@@ -68,19 +83,31 @@ async def check_change(job: WorkerJob, result: WorkerResult) -> PolicyCheck:
         )
     except PolicyViolation as exc:
         return PolicyCheck(None, [str(exc)], patch, [], [])
-    check = await inspect_commit(job, head, patch)
-    if not resolving or check.head_sha is None:
-        return check
-    raw, numstat, _ = await diff_summary(repo, job.patch_base_sha, head)
-    try:
-        touched = [c.path for c in parse_diff_summary(raw, numstat)]
-    except PolicyViolation as exc:
-        return PolicyCheck(head, [str(exc)], check.patch, [], [])
-    violations = check.violations + check_resolution(touched, job.conflicts)
-    return PolicyCheck(head, violations, check.patch, check.changes, check.comment_flags)
+    found = await _inspect(job, head, patch)
+    open_flags, contested = contest_flags(found.comment_flags, job.comment_objections)
+    limit = job.ctx.settings.limits.max_code_comment_lines
+    violations = found.violations + [
+        f"{f.path}:{f.start_line}: comment block of {f.length} lines, limit is {limit}"
+        for f in open_flags
+    ]
+    if resolving:
+        raw, numstat, _ = await diff_summary(repo, job.patch_base_sha, head)
+        try:
+            touched = [c.path for c in parse_diff_summary(raw, numstat)]
+        except PolicyViolation as exc:
+            return PolicyCheck(head, [str(exc)], found.patch, [], [])
+        violations += check_resolution(touched, job.conflicts)
+    return PolicyCheck(head, violations, found.patch, found.changes, contested)
 
 
 async def inspect_commit(job: WorkerJob, head: str, agent_patch: bytes) -> PolicyCheck:
+    found = await _inspect(job, head, agent_patch)
+    return PolicyCheck(
+        head, found.violations, found.patch, found.changes, uncontested(found.comment_flags)
+    )
+
+
+async def _inspect(job: WorkerJob, head: str, agent_patch: bytes) -> _Inspection:
     repo = job.paths.controller_repo
     is_update = job.kind is not TaskKind.ISSUE
     # The reviewer of an updated PR needs the whole change, not only the agent's last patch.
@@ -90,7 +117,7 @@ async def inspect_commit(job: WorkerJob, head: str, agent_patch: bytes) -> Polic
         changes = parse_diff_summary(raw, numstat)
         lines = added_lines(unified)
     except PolicyViolation as exc:
-        return PolicyCheck(head, [str(exc)], patch, [], [])
+        return _Inspection([str(exc)], patch, [], [])
     settings = job.ctx.settings
     violations = [
         f"{v.path}: {v.reason}"
@@ -103,4 +130,4 @@ async def inspect_commit(job: WorkerJob, head: str, agent_patch: bytes) -> Polic
     if is_update:
         violations += conflict_markers(lines)
     flags = flag_long_comment_blocks(lines, settings.limits.max_code_comment_lines)
-    return PolicyCheck(head, violations, patch, changes, flags)
+    return _Inspection(violations, patch, changes, flags)

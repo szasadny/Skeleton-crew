@@ -17,6 +17,7 @@ _PAGE = SettingsPage(
         "repo.base_branch": Kind.TEXT,
         "repo.protected_paths": Kind.LINES,
         "repo.setup_command": Kind.OPTIONAL_TEXT,
+        "repo.check_command": Kind.OPTIONAL_TEXT,
         "repo.require_ci": Kind.BOOL,
         "repo.allow_unprotected_base_branch": Kind.BOOL,
         "repo.trusted_users": Kind.LINES,

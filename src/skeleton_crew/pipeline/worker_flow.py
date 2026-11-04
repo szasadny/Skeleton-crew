@@ -14,6 +14,7 @@ from skeleton_crew.github.gateway import CiState, FailedJob, IssueRef
 from skeleton_crew.pipeline.ci_watcher import wait_for_ci
 from skeleton_crew.pipeline.deps import RunContext
 from skeleton_crew.pipeline.escalation import Escalation, escalate_issue
+from skeleton_crew.pipeline.repo_commands import run_repo_command
 from skeleton_crew.pipeline.sessions import remove_sandbox, run_agent, start_sandbox
 from skeleton_crew.pipeline.task_record import WorkerTaskRecord
 from skeleton_crew.pipeline.texts import (
@@ -137,6 +138,11 @@ async def _start_worker_sandbox(job: WorkerJob) -> None:
         transcripts=paths.transcripts,
     )
     await job.record.update(container_id=job.sandbox.handle.id)
+    command = ctx.settings.repo.setup_command
+    if command:
+        setup = await run_repo_command(job, command, "setup")
+        if not setup.ok:
+            raise Escalation(f"the setup command failed ({setup.status})")
 
 
 async def _work(job: WorkerJob) -> None:
@@ -148,6 +154,9 @@ async def iterate(job: WorkerJob, follow_up: FollowUp | None) -> None:
     while True:
         result = await _code(job, follow_up)
         await job.record.fire(TaskEvent.CODE_DONE)
+        follow_up = await _run_checks(job)
+        if follow_up is not None:
+            continue
         check = await check_change(job, result)
         if check.violations or check.head_sha is None:
             job.policy_rounds += 1
@@ -166,6 +175,22 @@ async def iterate(job: WorkerJob, follow_up: FollowUp | None) -> None:
         follow_up = await review(job, check, result.summary, ci_state)
         if follow_up is None:
             return
+
+
+async def _run_checks(job: WorkerJob) -> FollowUp | None:
+    command = job.ctx.settings.repo.check_command
+    # While resolving a merge only conflicted files may change; CI reports the rest.
+    if not command or job.merge_parents:
+        return None
+    checks = await run_repo_command(job, command, "check")
+    if checks.ok:
+        return None
+    job.ci_rounds += 1
+    limit = job.ctx.settings.limits.max_ci_rounds
+    if job.ci_rounds > limit:
+        raise Escalation(f"the check command still fails after {limit} fix rounds")
+    await job.record.fire(TaskEvent.POLICY_FAILED, ci_rounds=job.ci_rounds)
+    return "check_failed", f"`{command}` failed ({checks.status}):\n\n{checks.output_tail}".strip()
 
 
 def _prompt(job: WorkerJob, follow_up: FollowUp | None) -> tuple[PromptName, dict[str, object]]:
@@ -211,6 +236,7 @@ async def _code(job: WorkerJob, follow_up: FollowUp | None) -> WorkerResult:
     if reply.result is None:
         raise Escalation(f"worker session failed: {reply.error}")
     await _report_new_issues(job, reply.result)
+    job.comment_objections |= {(o.path, o.line): o.reason for o in reply.result.comment_objections}
     if reply.result.status != "done":
         raise Escalation(f"worker reported {reply.result.status}: {reply.result.note}")
     return reply.result
@@ -223,6 +249,8 @@ def _initial_context(job: WorkerJob) -> dict[str, object]:
         "comments": job.comments,
         "branch": job.branch,
         "setup_command": settings.repo.setup_command,
+        "check_command": settings.repo.check_command,
+        "max_comment_lines": settings.limits.max_code_comment_lines,
         "protected_paths": list(settings.repo.protected_paths),
         "max_new_issues": settings.limits.max_new_issues_per_worker,
     }

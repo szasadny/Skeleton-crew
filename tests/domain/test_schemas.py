@@ -71,6 +71,13 @@ def test_strings_are_stripped() -> None:
         worker(new_issues=[{"title": "a\nb", "body": "b"}]),
         worker(new_issues=[{"title": "t", "body": "x" * 4001}]),
         worker(new_issues="not a list"),
+        worker(comment_objections=[{"path": "a.py", "line": 0, "reason": "r"}]),
+        worker(comment_objections=[{"path": "a.py", "line": 1, "reason": ""}]),
+        worker(comment_objections=[{"path": "a.py", "line": 1, "reason": "x" * 301}]),
+        worker(comment_objections=[{"path": "a\nb.py", "line": 1, "reason": "r"}]),
+        worker(comment_objections=[{"path": "a.py", "line": 1}]),
+        worker(comment_objections=[{"path": "a.py", "line": 1, "reason": "r", "skip": True}]),
+        worker(comment_objections=[{"path": "a.py", "line": 1, "reason": "r"}] * 21),
         worker(summary=5),
         json.dumps({"status": "done", "summary": "s"}),
         "",
@@ -94,6 +101,12 @@ def test_non_done_status_with_note_parses(status: str) -> None:
 def test_worker_with_new_issues_at_limit_parses() -> None:
     issues = [{"title": "t" * 120, "body": "b" * 4000}] * 10
     assert len(parse_output(WorkerResult, worker(new_issues=issues)).new_issues) == 10
+
+
+def test_worker_comment_objections_parse() -> None:
+    raw = worker(comment_objections=[{"path": " app.py ", "line": 3, "reason": "License."}])
+    [objection] = parse_output(WorkerResult, raw).comment_objections
+    assert (objection.path, objection.line, objection.reason) == ("app.py", 3, "License.")
 
 
 def test_models_are_frozen() -> None:

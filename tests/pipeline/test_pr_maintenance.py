@@ -9,6 +9,7 @@ from pipeline_helpers import (
     Harness,
     assert_no_forbidden_writes,
     git,
+    is_repo_command,
     review_json,
     worker_json,
 )
@@ -227,6 +228,34 @@ async def test_resolution_may_not_touch_files_outside_the_conflict(harness: Harn
     assert "README.md: changed outside the merge conflict" in second.prompt
     [(_, merged)] = harness.gateway.pushes
     assert _remote_file(harness, merged, "README.md") == "# Demo\n"
+
+
+async def test_check_command_waits_until_the_conflict_is_resolved(harness: Harness) -> None:
+    await _open_pr(harness, {"app.py": HI})
+    _advance_main(harness, {"app.py": HELLO})
+    harness.repo(check_command="make check")
+    _workspace_editor(harness, {"app.py": BOTH})
+    harness.backend.script(Role.WORKER, worker_json())
+    harness.backend.script(Role.REVIEWER, review_json())
+
+    run_id = await harness.run()
+
+    task = await _only_task(harness, run_id)
+    assert (task.kind, task.state) == (TaskKind.PR_FIX, TaskState.DONE)
+    assert not any(is_repo_command(call.argv) for call in harness.runtime.execs)
+
+
+async def test_comment_blocks_in_a_clean_merge_go_to_the_reviewer(harness: Harness) -> None:
+    await _open_pr(harness, {"app.py": "# one\n# two\n# three\n" + HI}, state=TaskState.FAILED)
+    _advance_main(harness, {"README.md": "# Demo v2\n"})
+    harness.backend.script(Role.REVIEWER, review_json())
+
+    run_id = await harness.run()
+
+    task = await _only_task(harness, run_id)
+    assert (task.kind, task.state) == (TaskKind.PR_UPDATE, TaskState.DONE)
+    [review] = harness.backend.prompts(Role.REVIEWER)
+    assert "app.py:1 (3 comment lines), worker reason: none" in review.prompt
 
 
 async def test_unresolvable_conflict_escalates_the_issue(harness: Harness) -> None:

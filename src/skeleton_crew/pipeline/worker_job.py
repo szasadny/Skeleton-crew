@@ -1,6 +1,6 @@
 import shutil
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from skeleton_crew.domain.task_state import TaskKind
@@ -35,6 +35,7 @@ class WorkerJob:
     ci_rounds: int = 0
     review_rounds: int = 0
     policy_rounds: int = 0
+    comment_objections: dict[tuple[str, int], str] = field(default_factory=dict)
 
 
 def review_root(paths: TaskPaths) -> Path:

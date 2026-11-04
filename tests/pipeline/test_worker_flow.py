@@ -4,11 +4,14 @@ from pathlib import Path
 
 import pytest
 from fake_agent import stopped_outcome
+from fake_runtime import ExecCall
 from pipeline_helpers import (
     BLOCKER,
     Harness,
     assert_no_forbidden_writes,
+    command_result,
     git,
+    is_repo_command,
     review_json,
     selection_json,
     worker_json,
@@ -20,10 +23,13 @@ from skeleton_crew.core.audit import AuditKind, AuditOutcome
 from skeleton_crew.domain.settings import Role
 from skeleton_crew.domain.task_state import TaskState
 from skeleton_crew.github.gateway import CiState, CiStatus, FailedJob
-from skeleton_crew.pipeline.sessions import INBOX, WORKSPACE
+from skeleton_crew.pipeline.sessions import AGENT_USER, INBOX, WORKSPACE
+from skeleton_crew.runtime.containers import ExecResult
 
 BRANCH = "skeleton/1-add-greeting"
 GREETING = {"app.py": "def main() -> None:\n    print('hi')\n"}
+COMMENTED = {"app.py": "# Licensed under X.\n# See LICENSE.\n# All rights reserved.\nprint('hi')\n"}
+LICENSE_OBJECTION = {"path": "app.py", "line": 1, "reason": "License header the repo requires."}
 
 
 @pytest.fixture
@@ -62,6 +68,7 @@ async def test_happy_path_opens_pr_and_sets_green_review_check(harness: Harness)
     assert "author Skeleton Crew" in commit
     assert git(harness.remote, "show", f"{task.head_sha}:app.py").decode() == GREETING["app.py"]
     assert task.pr_number is not None
+    assert not any(is_repo_command(call.argv) for call in harness.runtime.execs)
     assert_no_forbidden_writes(harness)
 
 
@@ -334,3 +341,172 @@ async def test_worker_timeout_escalates(harness: Harness) -> None:
     assert "timed out" in str(task.escalation_reason)
     assert harness.actions() == ["push_branch", "open_pr", "comment", "change_labels"]
     assert not harness.runtime.running
+
+
+def _commands(harness: Harness, *results: tuple[int, bytes]) -> list[ExecCall]:
+    pending = list(results)
+    calls: list[ExecCall] = []
+
+    def respond(call: ExecCall) -> ExecResult:
+        calls.append(call)
+        code, output = pending.pop(0) if len(pending) > 1 else pending[0]
+        return command_result(code, output)
+
+    harness.runtime.script(is_repo_command, respond)
+    return calls
+
+
+async def test_long_comment_block_goes_back_to_the_worker_before_any_push(
+    harness: Harness,
+) -> None:
+    harness.patches = [harness.patch(COMMENTED), harness.patch(GREETING)]
+    harness.backend.script(Role.WORKER, worker_json(), worker_json())
+    harness.backend.script(Role.REVIEWER, review_json())
+
+    run_id = await harness.run()
+
+    [task] = await harness.tasks(run_id)
+    assert (task.state, task.policy_rounds) == (TaskState.DONE, 1)
+    assert harness.actions() == ["push_branch", "open_pr", "set_review_check"]
+    follow_up = harness.backend.prompts(Role.WORKER)[1]
+    assert "app.py:1: comment block of 3 lines, limit is 2" in follow_up.prompt
+    [push] = harness.writes("push_branch")
+    assert git(harness.remote, "show", f"{push.args['sha']}:app.py").decode() == GREETING["app.py"]
+
+
+async def test_contested_comment_block_is_judged_by_the_reviewer(harness: Harness) -> None:
+    harness.patches = [harness.patch(COMMENTED)]
+    harness.backend.script(
+        Role.WORKER, worker_json(), worker_json(comment_objections=[LICENSE_OBJECTION])
+    )
+    harness.backend.script(Role.REVIEWER, review_json())
+
+    run_id = await harness.run()
+
+    [task] = await harness.tasks(run_id)
+    assert (task.state, task.policy_rounds) == (TaskState.DONE, 1)
+    [review] = harness.backend.prompts(Role.REVIEWER)
+    assert "app.py:1 (3 comment lines), worker reason: License header" in review.prompt
+    assert harness.actions() == ["push_branch", "open_pr", "set_review_check"]
+
+
+async def test_comment_block_contested_up_front_costs_no_policy_round(harness: Harness) -> None:
+    harness.patches = [harness.patch(COMMENTED)]
+    harness.backend.script(Role.WORKER, worker_json(comment_objections=[LICENSE_OBJECTION]))
+    harness.backend.script(Role.REVIEWER, review_json())
+
+    run_id = await harness.run()
+
+    [task] = await harness.tasks(run_id)
+    assert (task.state, task.policy_rounds) == (TaskState.DONE, 0)
+
+
+async def test_rejected_contest_goes_back_through_review(harness: Harness) -> None:
+    harness.patches = [harness.patch(COMMENTED), harness.patch(GREETING)]
+    harness.backend.script(
+        Role.WORKER, worker_json(comment_objections=[LICENSE_OBJECTION]), worker_json()
+    )
+    unjustified = {"severity": "major", "path": "app.py", "line": 1, "message": "Not needed."}
+    harness.backend.script(
+        Role.REVIEWER, review_json("changes_requested", [unjustified]), review_json()
+    )
+
+    run_id = await harness.run()
+
+    [task] = await harness.tasks(run_id)
+    assert (task.state, task.review_rounds, task.policy_rounds) == (TaskState.DONE, 1, 0)
+    assert "Not needed." in harness.backend.prompts(Role.WORKER)[1].prompt
+
+
+async def test_objection_on_another_line_does_not_lift_the_flag(harness: Harness) -> None:
+    harness.limits(max_review_rounds=1)
+    harness.patches = [harness.patch(COMMENTED)]
+    wrong_line = {**LICENSE_OBJECTION, "line": 2}
+    harness.backend.script(
+        Role.WORKER,
+        worker_json(comment_objections=[wrong_line]),
+        worker_json(comment_objections=[wrong_line]),
+    )
+
+    run_id = await harness.run()
+
+    [task] = await harness.tasks(run_id)
+    assert task.state is TaskState.ESCALATED
+    assert "push_branch" not in harness.actions()
+    assert harness.backend.prompts(Role.REVIEWER) == []
+
+
+async def test_setup_command_runs_before_the_worker_without_credentials(
+    harness: Harness,
+) -> None:
+    harness.repo(setup_command="make deps")
+    calls = _commands(harness, (0, b"installed"))
+    harness.patches = [harness.patch(GREETING)]
+    harness.backend.script(Role.WORKER, worker_json())
+    harness.backend.script(Role.REVIEWER, review_json())
+
+    run_id = await harness.run()
+
+    [task] = await harness.tasks(run_id)
+    assert task.state is TaskState.DONE
+    [setup] = calls
+    assert "make deps" in setup.argv[2]
+    assert (setup.env, setup.user, setup.cwd) == ({}, AGENT_USER, WORKSPACE)
+    worker_execs = [c for c in harness.runtime.execs if c.handle.id == setup.handle.id]
+    assert worker_execs[0] is setup
+    assert worker_execs[1].argv[:2] == ("fake-agent", "worker")
+    assert "already ran `make deps`" in harness.backend.prompts(Role.WORKER)[0].prompt
+    assert_no_forbidden_writes(harness)
+
+
+async def test_failed_setup_command_escalates_without_a_worker_session(
+    harness: Harness,
+) -> None:
+    harness.repo(setup_command="make deps")
+    _commands(harness, (2, b"no such target"))
+    harness.patches = [harness.patch(GREETING)]
+
+    run_id = await harness.run()
+
+    [task] = await harness.tasks(run_id)
+    assert task.state is TaskState.ESCALATED
+    assert "the setup command failed (exit 2)" in str(task.escalation_reason)
+    assert harness.backend.prompts(Role.WORKER) == []
+    [comment] = harness.writes("comment")
+    assert "no such target" not in str(comment.args["body"])
+
+
+async def test_failed_check_goes_back_to_the_worker_before_any_push(harness: Harness) -> None:
+    harness.repo(check_command="make check")
+    calls = _commands(harness, (1, b"FAILED test_app"), (0, b"ok"))
+    harness.patches = [harness.patch(GREETING)]
+    harness.backend.script(Role.WORKER, worker_json(), worker_json())
+    harness.backend.script(Role.REVIEWER, review_json())
+
+    run_id = await harness.run()
+
+    [task] = await harness.tasks(run_id)
+    assert (task.state, task.ci_rounds, task.policy_rounds) == (TaskState.DONE, 1, 0)
+    assert len(calls) == 2
+    assert all(c.env == {} for c in calls)
+    follow_up = harness.backend.prompts(Role.WORKER)[1]
+    assert follow_up.resume_session_id == "worker-session"
+    assert "repository checks failed" in follow_up.prompt
+    assert "`make check` failed (exit 1)" in follow_up.prompt
+    assert "FAILED test_app" in follow_up.prompt
+    assert harness.actions() == ["push_branch", "open_pr", "set_review_check"]
+
+
+async def test_check_rounds_exhausted_escalates_without_push(harness: Harness) -> None:
+    harness.limits(max_ci_rounds=0)
+    harness.repo(check_command="make check")
+    _commands(harness, (1, b"FAILED"))
+    harness.patches = [harness.patch(GREETING)]
+    harness.backend.script(Role.WORKER, worker_json())
+
+    run_id = await harness.run()
+
+    [task] = await harness.tasks(run_id)
+    assert task.state is TaskState.ESCALATED
+    assert "check command still fails after 0 fix rounds" in str(task.escalation_reason)
+    assert harness.actions() == ["comment", "change_labels"]

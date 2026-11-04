@@ -15,4 +15,5 @@
   - `blocked`: you cannot finish for another reason. Explain in `note`.
 - Merge conflicts: keep the intent of both sides, remove every conflict marker and change only the conflicted files. Other changes it needs follow after CI reports them.
 - Report real problems outside your scope as `new_issues`, not by fixing them.
+- Long comment blocks are rejected by the controller. Shorten them, or contest a block that must stay in `comment_objections` with a short reason.
 - `pr_title`: imperative, under 72 characters. `summary`: what changed and why, a few lines.

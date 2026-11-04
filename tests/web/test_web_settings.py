@@ -49,6 +49,7 @@ def _repo_form(**overrides: str) -> dict[str, str]:
         "repo.base_branch": "main",
         "repo.protected_paths": ".github/**",
         "repo.setup_command": "",
+        "repo.check_command": "",
         "repo.require_ci": "on",
         "repo.trusted_users": "",
         "runtime.egress_allowlist": "pypi.org",
@@ -196,6 +197,7 @@ async def test_repo_round_trip(web: Web) -> None:
         **{
             "repo.protected_paths": ".github/**\r\n\r\n  infra/**  \r\n",
             "repo.setup_command": "make deps",
+            "repo.check_command": "make check",
             "repo.trusted_users": "alice\nbob",
             "runtime.egress_allowlist": "pypi.org\n.example.com",
             "runtime.pids": "4096",
@@ -206,6 +208,7 @@ async def test_repo_round_trip(web: Web) -> None:
     settings = await web.settings()
     assert settings.repo.protected_paths == (".github/**", "infra/**")
     assert settings.repo.setup_command == "make deps"
+    assert settings.repo.check_command == "make check"
     assert settings.repo.require_ci is False
     assert settings.repo.trusted_users == ("alice", "bob")
     assert settings.runtime.egress_allowlist == ("pypi.org", ".example.com")

@@ -1,6 +1,8 @@
 {% set intros = {
   "ci_failed": "After the merge, CI fails. Fix the cause. Failing job logs:",
   "review_changes": "After the merge, the reviewer requested changes. Address every finding:",
+  "policy_failed": "After the merge, your change violates repository policy and was rejected. Fix every violation:",
+  "check_failed": "After the merge, the repository checks fail. Fix the cause. Check output:",
 } %}
 # Task: update a pull request
 
@@ -20,8 +22,11 @@ If other files must change too, for example tests that `{{ base_branch }}` chang
 {{ details | untrusted(kind ~ " details") }}
 {% endif %}
 
-- Setup command: {% if setup_command %}`{{ setup_command }}`{% else %}none, follow the repository docs{% endif %}
+- Setup: {% if setup_command %}the controller already ran `{{ setup_command }}`{% else %}none configured, follow the repository docs{% endif %}
 
+- Checks: {% if check_command %}the controller runs `{{ check_command }}` when you finish; if it fails you get its output back{% else %}run the repository's own checks{% endif %}
+
+- Comment blocks longer than {{ max_comment_lines }} lines are rejected. If one is really needed, keep it and list it in `comment_objections` with its path, first line and reason; the reviewer decides.
 - Protected paths, never create, edit or delete them: {{ protected_paths | map("tojson") | join(", ") if protected_paths else "none" }}
 - Report at most {{ max_new_issues }} out-of-scope problems in `new_issues`.
 - The controller commits and pushes. Never run `git push` or `git merge`, and never use `gh`.

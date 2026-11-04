@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from skeleton_crew.agents.base import AgentBackend, SessionOutcome, SessionRequest, failed_outcome
 from skeleton_crew.core.audit import AuditKind, AuditOutcome
 from skeleton_crew.core.config import BootstrapConfig
-from skeleton_crew.domain.settings import AgentBackendName, AppSettings, Limits, Role
+from skeleton_crew.domain.settings import AgentBackendName, AppSettings, Limits, RepoPolicy, Role
 from skeleton_crew.github.gateway import CiState, CiStatus, Gateway
 from skeleton_crew.github.write_guard import AuditSink
 from skeleton_crew.models.refine_task import RefineTask
@@ -25,6 +25,7 @@ from skeleton_crew.models.run import Run
 from skeleton_crew.models.worker_task import WorkerTask
 from skeleton_crew.pipeline.deps import PipelineDeps
 from skeleton_crew.pipeline.run_controller import RunController
+from skeleton_crew.runtime.containers import ExecResult
 from skeleton_crew.runtime.workspace import AGENT_PATCH_ARGV
 from skeleton_crew.store import audit_store, runs_store, settings_store
 
@@ -169,6 +170,7 @@ def worker_json(
     pr_title: str = "Add greeting",
     note: str | None = None,
     new_issues: Sequence[dict[str, str]] = (),
+    comment_objections: Sequence[dict[str, object]] = (),
 ) -> str:
     return json.dumps(
         {
@@ -177,7 +179,18 @@ def worker_json(
             "pr_title": pr_title,
             "note": note,
             "new_issues": list(new_issues),
+            "comment_objections": list(comment_objections),
         }
+    )
+
+
+def is_repo_command(argv: Sequence[str]) -> bool:
+    return len(argv) == 3 and argv[:2] == ("sh", "-c") and argv[2].startswith("exec 2>&1\n")
+
+
+def command_result(exit_code: int = 0, output: bytes = b"") -> ExecResult:
+    return ExecResult(
+        exit_code=exit_code, stdout_path=None, stdout=output, stderr=b"", timed_out=False
     )
 
 
@@ -269,6 +282,13 @@ class Harness:
         self.settings = self.settings.model_copy(
             update={
                 "limits": Limits.model_validate({**self.settings.limits.model_dump(), **values})
+            }
+        )
+
+    def repo(self, **values: Any) -> None:
+        self.settings = self.settings.model_copy(
+            update={
+                "repo": RepoPolicy.model_validate({**self.settings.repo.model_dump(), **values})
             }
         )
 

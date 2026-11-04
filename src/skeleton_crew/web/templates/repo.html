@@ -18,6 +18,9 @@
     {{ m.text("repo.base_branch", "Base branch", values, errors) }}
     {{ m.lines("repo.protected_paths", "Protected paths", values, errors, "One glob pattern per line.") }}
     {{ m.text("repo.setup_command", "Setup command", values, errors) }}
+    <p class="hint">Run by the controller in the worker container before the worker starts.</p>
+    {{ m.text("repo.check_command", "Check command", values, errors) }}
+    <p class="hint">Run by the controller after each worker turn, before anything is pushed. A failure goes back to the worker.</p>
     {{ m.checkbox("repo.require_ci", "Require CI", values, errors) }}
     {{ m.checkbox("repo.allow_unprotected_base_branch", "Allow unprotected base branch", values, errors) }}
     <p class="hint">Only for repositories without rulesets (free private repos). GitHub then no longer requires your approval before a merge; the crew still cannot merge. See SECURITY.md.</p>
