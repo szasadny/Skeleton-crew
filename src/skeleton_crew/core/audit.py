@@ -12,6 +12,7 @@ class AuditKind(StrEnum):
     PREFLIGHT_FAILED = "preflight_failed"
     TASK_ESCALATED = "task_escalated"
     PR_UPDATE_SKIPPED = "pr_update_skipped"
+    ISSUE_SKIPPED = "issue_skipped"
     LOGIN = "login"
 
 

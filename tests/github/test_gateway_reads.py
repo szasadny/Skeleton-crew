@@ -142,33 +142,114 @@ async def test_permission_of_returns_role_name_and_caches() -> None:
     assert route.call_count == 1
 
 
-def _pull(number: int, ref: str, *, head_repo: int | None = 1) -> dict[str, object]:
+def _pull(
+    number: int, ref: str, *, head_repo: int | None = 1, **extra: object
+) -> dict[str, object]:
     repo = None if head_repo is None else {"id": head_repo}
     return {
         "number": number,
         "html_url": f"https://github.com/o/r/pull/{number}",
         "head": {"ref": ref, "sha": SHA, "repo": repo},
         "base": {"ref": "main", "repo": {"id": 1}},
+        **extra,
     }
 
 
 @respx.mock
-async def test_open_skeleton_pr_for_ignores_forks_and_other_issues() -> None:
-    _paged(
+async def test_open_skeleton_prs_lists_once_and_ignores_forks_and_other_branches() -> None:
+    route = _paged(
         [
             [_pull(10, "skeleton/5-fix", head_repo=2), _pull(11, "skeleton/6-other")],
             [_pull(12, "skeleton/5-fix", head_repo=None), _pull(13, "skeleton/5-fix")],
+            [_pull(14, "feature/5-fix"), _pull(15, "skeleton/6-again")],
         ],
         f"{API}/repos/o/r/pulls",
     )
-    gateway = make_gateway(AuditLog())
 
-    pr = await gateway.open_skeleton_pr_for(5)
+    prs = await make_gateway(AuditLog()).open_skeleton_prs()
+
+    assert {n: [p.number for p in pulls] for n, pulls in prs.items()} == {5: [13], 6: [11, 15]}
+    assert prs[5][0].head_sha == SHA
+    assert route.call_count == 3
+    assert route.calls[0].request.url.params["state"] == "open"
+
+
+@respx.mock
+async def test_closed_unmerged_pr_ignores_merged_pulls() -> None:
+    route = _paged(
+        [
+            [
+                _pull(2, "skeleton/5-fix", state="open", merged_at=None),
+                _pull(3, "skeleton/5-fix", state="closed", merged_at="2026-01-01T00:00:00Z"),
+            ],
+            [_pull(4, "skeleton/5-fix", state="closed", merged_at=None)],
+        ],
+        f"{API}/repos/o/r/pulls",
+    )
+
+    pr = await make_gateway(AuditLog()).closed_unmerged_pr_for("skeleton/5-fix")
 
     assert pr is not None
-    assert pr.number == 13
-    assert pr.head_sha == SHA
-    assert await gateway.open_skeleton_pr_for(9) is None
+    assert pr.number == 4
+    params = route.calls[0].request.url.params
+    assert (params["state"], params["head"]) == ("all", "o:skeleton/5-fix")
+
+
+@respx.mock
+async def test_only_merged_closed_pulls_mean_no_closed_pr() -> None:
+    _paged(
+        [
+            [
+                _pull(2, "skeleton/5-fix", state="open", merged_at=None),
+                _pull(3, "skeleton/5-fix", state="closed", merged_at="2026-01-01T00:00:00Z"),
+            ]
+        ],
+        f"{API}/repos/o/r/pulls",
+    )
+
+    assert await make_gateway(AuditLog()).closed_unmerged_pr_for("skeleton/5-fix") is None
+
+
+@respx.mock
+async def test_closed_pr_with_another_head_is_ignored() -> None:
+    _paged(
+        [[_pull(3, "skeleton/5-other", state="closed", merged_at=None)]],
+        f"{API}/repos/o/r/pulls",
+    )
+
+    assert await make_gateway(AuditLog()).closed_unmerged_pr_for("skeleton/5-fix") is None
+
+
+@pytest.mark.parametrize("branch", ["main", "feature/x", "skeleton/5-fix:main", "o:skeleton/5-x"])
+@respx.mock
+async def test_closed_pr_lookup_rejects_non_skeleton_branches(branch: str) -> None:
+    route = respx.get(f"{API}/repos/o/r/pulls")
+
+    with pytest.raises(PolicyViolation):
+        await make_gateway(AuditLog()).closed_unmerged_pr_for(branch)
+    assert route.call_count == 0
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [(True, True), (False, False), (None, None), ("true", None), (1, None), (0, None)],
+)
+@respx.mock
+async def test_pr_mergeable_is_strictly_a_bool(value: object, expected: bool | None) -> None:
+    respx.get(f"{API}/repos/o/r/pulls/7").mock(
+        return_value=httpx.Response(200, json=_pull(7, "skeleton/5-fix", mergeable=value))
+    )
+
+    assert await make_gateway(AuditLog()).pr_mergeable(7) is expected
+
+
+@respx.mock
+async def test_pr_mergeable_missing_field_is_unknown() -> None:
+    respx.get(f"{API}/repos/o/r/pulls/7").mock(
+        return_value=httpx.Response(200, json=_pull(7, "skeleton/5-fix"))
+    )
+
+    assert await make_gateway(AuditLog()).pr_mergeable(7) is None
 
 
 def _run(name: str, status: str, conclusion: str | None, slug: str = "github-actions") -> Raw:

@@ -367,6 +367,7 @@ def assert_no_forbidden_writes(harness: Harness) -> None:
 
 
 BRANCH = "skeleton/1-add-greeting"
+PR_NUMBER = 10
 HI = "def main() -> None:\n    print('hi')\n"
 HELLO = "def main() -> None:\n    print('hello')\n"
 BOTH = "def main() -> None:\n    print('hi')\n    print('hello')\n"
@@ -380,28 +381,39 @@ def commit_files(repo: Path, files: Mapping[str, str], message: str) -> str:
     return git(repo, "rev-parse", "HEAD").decode().strip()
 
 
+async def record_push(
+    h: Harness,
+    head: str,
+    *,
+    state: TaskState = TaskState.DONE,
+    dry_run: bool = False,
+) -> None:
+    async with h.sessionmaker() as session:
+        run = await runs_store.create_run(session, "manual", dry_run)
+        task = await runs_store.add_worker_task(session, run.id, 1, "Add greeting")
+        await runs_store.update_worker_task(
+            session, task.id, state=state, head_sha=head, branch=BRANCH
+        )
+        await runs_store.finish_run(session, run.id, RunState.COMPLETED)
+        await session.commit()
+
+
 async def open_pr(
     h: Harness,
     files: Mapping[str, str],
     *,
     state: TaskState = TaskState.DONE,
     recorded_head: str | None = None,
+    mergeable: bool | None = False,
 ) -> str:
     work = h.tmp_path / "branch-work"
     git(h.tmp_path, "clone", "-q", str(h.source), str(work))
     git(work, "checkout", "-q", "-b", BRANCH)
     head = commit_files(work, files, "Add greeting")
     git(work, "push", "-q", str(h.remote), f"HEAD:refs/heads/{BRANCH}")
-    h.gateway.pulls.append(FakePull(10, BRANCH, head))
-    h.gateway.behind[head] = 1
-    async with h.sessionmaker() as session:
-        run = await runs_store.create_run(session, "manual", False)
-        task = await runs_store.add_worker_task(session, run.id, 1, "Add greeting")
-        await runs_store.update_worker_task(
-            session, task.id, state=state, head_sha=recorded_head or head, branch=BRANCH
-        )
-        await runs_store.finish_run(session, run.id, RunState.COMPLETED)
-        await session.commit()
+    h.gateway.pulls.append(FakePull(PR_NUMBER, BRANCH, head))
+    h.gateway.mergeable[PR_NUMBER] = [mergeable]
+    await record_push(h, recorded_head or head, state=state)
     return head
 
 
@@ -437,12 +449,16 @@ async def only_task(h: Harness, run_id: int) -> WorkerTask:
     return task
 
 
-def push_branch_without_pr(h: Harness, files: Mapping[str, str]) -> str:
+async def push_branch_without_pr(
+    h: Harness, files: Mapping[str, str], *, recorded: bool = True
+) -> str:
     work = h.tmp_path / "left-over"
     git(h.tmp_path, "clone", "-q", str(h.source), str(work))
     if files:
         commit_files(work, files, "Earlier work")
     head = git(work, "rev-parse", "HEAD").decode().strip()
     git(work, "push", "-q", str(h.remote), f"{head}:refs/heads/{BRANCH}")
+    if recorded:
+        await record_push(h, head)
     h.backend.script(Role.SELECTOR, selection_json([1]))
     return head

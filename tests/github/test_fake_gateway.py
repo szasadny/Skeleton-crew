@@ -71,14 +71,35 @@ async def test_fake_scripted_ci_advances_and_sticks_on_last() -> None:
     assert (await gw.ci_status("b" * 40)).state == CiState.NONE
 
 
-async def test_fake_open_skeleton_pr_ignores_forks() -> None:
+async def test_fake_open_skeleton_prs_ignore_forks_and_closed_pulls() -> None:
     gw = FakeGitHubGateway()
     gw.pulls.append(FakePull(5, "skeleton/3-x", SHA, same_repo=False))
-    assert await gw.open_skeleton_pr_for(3) is None
+    gw.pulls.append(FakePull(7, "skeleton/3-x", SHA, state="closed"))
+    assert await gw.open_skeleton_prs() == {}
     gw.pulls.append(FakePull(6, "skeleton/3-x", SHA))
-    pr = await gw.open_skeleton_pr_for(3)
+    prs = await gw.open_skeleton_prs()
+    assert [p.number for p in prs[3]] == [6]
+
+
+async def test_fake_closed_unmerged_pr_ignores_merged_and_open_pulls() -> None:
+    gw = FakeGitHubGateway()
+    gw.pulls.append(FakePull(5, "skeleton/3-x", SHA))
+    gw.pulls.append(FakePull(6, "skeleton/3-x", SHA, state="closed", merged=True))
+    assert await gw.closed_unmerged_pr_for("skeleton/3-x") is None
+    gw.pulls.append(FakePull(7, "skeleton/3-x", SHA, state="closed"))
+    pr = await gw.closed_unmerged_pr_for("skeleton/3-x")
     assert pr is not None
-    assert pr.number == 6
+    assert pr.number == 7
+    with pytest.raises(PolicyViolation):
+        await gw.closed_unmerged_pr_for("main")
+
+
+async def test_fake_mergeable_advances_and_sticks_on_last() -> None:
+    gw = FakeGitHubGateway()
+    gw.mergeable[4] = [None, False]
+
+    assert [await gw.pr_mergeable(4) for _ in range(3)] == [None, False, False]
+    assert await gw.pr_mergeable(9) is None
 
 
 async def test_fake_hitl_issue_gets_only_hitl_label() -> None:

@@ -116,7 +116,9 @@ class Gateway(Protocol):
     async def list_open_issues(self, label: str) -> list[IssueRef]: ...
     async def trust_data(self, issue_number: int) -> TrustData: ...
     async def permission_of(self, login: str) -> str: ...
-    async def open_skeleton_pr_for(self, issue_number: int) -> PullRef | None: ...
+    async def open_skeleton_prs(self) -> dict[int, tuple[PullRef, ...]]: ...
+    async def closed_unmerged_pr_for(self, branch: str) -> PullRef | None: ...
+    async def pr_mergeable(self, number: int) -> bool | None: ...
     async def ci_status(self, sha: str, required: Collection[str] = ()) -> CiStatus: ...
     async def failed_job_logs(self, job_ids: Sequence[int], max_chars: int) -> str: ...
     async def branch_rules(self, branch: str) -> list[BranchRule]: ...
@@ -127,7 +129,6 @@ class Gateway(Protocol):
     async def create_hitl_issue(self, title: str, body: str) -> int | None: ...
     async def open_pr(self, *, branch: str, title: str, body: str) -> PullRef | None: ...
     async def set_review_check(self, *, sha: str, success: bool, summary: str) -> None: ...
-    async def commits_behind(self, sha: str) -> int: ...
     async def clone(self, dest: Path) -> str: ...
     async def fetch_branch(self, repo_dir: Path, branch: str) -> str: ...
     async def branch_head(self, branch: str) -> str | None: ...
@@ -174,6 +175,15 @@ def _issue_ref(raw: Mapping[str, Any]) -> IssueRef:
         body=str(raw.get("body") or ""),
         labels=labels,
         author=_login(raw.get("user")),
+        url=str(raw["html_url"]),
+    )
+
+
+def _pull_ref(raw: Mapping[str, Any]) -> PullRef:
+    return PullRef(
+        number=int(raw["number"]),
+        head_ref=str(raw["head"]["ref"]),
+        head_sha=str(raw["head"]["sha"]),
         url=str(raw["html_url"]),
     )
 
@@ -303,7 +313,7 @@ class GitHubGateway:
             self._permissions[key] = str(resp.json().get("role_name") or "")
         return self._permissions[key]
 
-    async def open_skeleton_pr_for(self, issue_number: int) -> PullRef | None:
+    async def open_skeleton_prs(self) -> dict[int, tuple[PullRef, ...]]:
         rest = self._client.rest
         pulls = rest.paginate(
             rest.pulls.async_list,
@@ -313,20 +323,40 @@ class GitHubGateway:
             state="open",
             per_page=_PER_PAGE,
         )
+        found: dict[int, tuple[PullRef, ...]] = {}
         async for pr in pulls:
             head_repo = (pr.get("head") or {}).get("repo") or {}
             base_repo = (pr.get("base") or {}).get("repo") or {}
             same_repo = head_repo.get("id") is not None and head_repo.get("id") == base_repo.get(
                 "id"
             )
-            if same_repo and issue_number_from_branch(pr["head"]["ref"]) == issue_number:
-                return PullRef(
-                    number=int(pr["number"]),
-                    head_ref=str(pr["head"]["ref"]),
-                    head_sha=str(pr["head"]["sha"]),
-                    url=str(pr["html_url"]),
-                )
+            issue_number = issue_number_from_branch(pr["head"]["ref"])
+            if same_repo and issue_number is not None:
+                found[issue_number] = (*found.get(issue_number, ()), _pull_ref(pr))
+        return found
+
+    async def closed_unmerged_pr_for(self, branch: str) -> PullRef | None:
+        check_push_target(branch, self._base_branch)
+        rest = self._client.rest
+        pulls = rest.paginate(
+            rest.pulls.async_list,
+            _json_list,
+            self._owner,
+            self._name,
+            state="all",
+            head=f"{self._owner}:{branch}",
+            per_page=_PER_PAGE,
+        )
+        async for pr in pulls:
+            ended = pr.get("state") != "open" and pr.get("merged_at") is None
+            if ended and pr["head"]["ref"] == branch:
+                return _pull_ref(pr)
         return None
+
+    async def pr_mergeable(self, number: int) -> bool | None:
+        resp = await self._client.rest.pulls.async_get(self._owner, self._name, number)
+        value = resp.json().get("mergeable")
+        return value if isinstance(value, bool) else None
 
     async def ci_status(self, sha: str, required: Collection[str] = ()) -> CiStatus:
         check_sha(sha)
@@ -490,13 +520,7 @@ class GitHubGateway:
                 body=body,
                 draft=False,
             )
-            pr = resp.json()
-            return PullRef(
-                number=int(pr["number"]),
-                head_ref=str(pr["head"]["ref"]),
-                head_sha=str(pr["head"]["sha"]),
-                url=str(pr["html_url"]),
-            )
+            return _pull_ref(resp.json())
 
         return await guarded_write(
             self._audit,
@@ -534,13 +558,6 @@ class GitHubGateway:
             perform=perform,
             dry_result=None,
         )
-
-    async def commits_behind(self, sha: str) -> int:
-        check_sha(sha)
-        resp = await self._client.rest.repos.async_compare_commits(
-            self._owner, self._name, f"{self._base_branch}...{sha}", per_page=1
-        )
-        return int(resp.json()["behind_by"])
 
     async def clone(self, dest: Path) -> str:
         token = await self._token_provider()

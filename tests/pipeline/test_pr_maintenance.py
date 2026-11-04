@@ -2,11 +2,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from fake_gateway import FakePull
 from pipeline_helpers import (
     BOTH,
     BRANCH,
     HELLO,
     HI,
+    PR_NUMBER,
     Harness,
     advance_main,
     assert_no_forbidden_writes,
@@ -27,7 +29,8 @@ from skeleton_crew.core.audit import AuditKind, AuditOutcome
 from skeleton_crew.core.git import GitCommandError
 from skeleton_crew.domain.settings import Role
 from skeleton_crew.domain.task_state import TaskKind, TaskState
-from skeleton_crew.store import runs_store
+from skeleton_crew.pipeline.pr_maintenance import MERGEABLE_POLL_SECONDS, MERGEABLE_POLLS
+from skeleton_crew.store import audit_store, runs_store
 
 
 @pytest.fixture
@@ -37,22 +40,83 @@ def harness(tmp_path: Path, sessionmaker: async_sessionmaker[AsyncSession]) -> H
     return h
 
 
-async def test_clean_update_is_skipped_without_agents_writes_or_quota(harness: Harness) -> None:
-    head = await open_pr(harness, {"app.py": HI})
+async def _skip_summaries(harness: Harness) -> list[str]:
+    async with harness.sessionmaker() as session:
+        events = await audit_store.list_events(session, 500, 0)
+    return [e.summary for e in events if e.kind is AuditKind.PR_UPDATE_SKIPPED]
+
+
+async def test_mergeable_pr_gets_no_task_clone_or_quota(harness: Harness) -> None:
+    head = await open_pr(harness, {"app.py": HI}, mergeable=True)
+    advance_main(harness, {"README.md": "# Demo v2\n"})
+
+    run_id = await harness.run()
+
+    assert await harness.tasks(run_id) == []
+    assert await _skip_summaries(harness) == ["PR #10 merges cleanly"]
+    assert harness.backend.requests == []
+    assert harness.runtime.started == []
+    assert harness.gateway.writes == []
+    assert git(harness.remote, "rev-parse", BRANCH).decode().strip() == head
+    assert not list(harness.config.tasks_dir.glob("worker-*"))
+
+
+async def test_unknown_mergeability_is_polled_then_skipped(harness: Harness) -> None:
+    await open_pr(harness, {"app.py": HI}, mergeable=None)
+    advance_main(harness, {"app.py": HELLO})
+
+    run_id = await harness.run()
+
+    assert await harness.tasks(run_id) == []
+    assert harness.gateway.mergeable_reads == [PR_NUMBER] * MERGEABLE_POLLS
+    assert harness.sleeps == [MERGEABLE_POLL_SECONDS] * (MERGEABLE_POLLS - 1)
+    assert await _skip_summaries(harness) == ["PR #10: mergeability unknown"]
+    assert harness.gateway.writes == []
+    assert harness.backend.requests == []
+
+
+async def test_mergeability_computed_on_a_later_poll_starts_a_fix(harness: Harness) -> None:
+    await open_pr(harness, {"app.py": HI})
+    harness.gateway.mergeable[PR_NUMBER] = [None, False]
+    advance_main(harness, {"app.py": HELLO})
+    workspace_editor(harness, {"app.py": BOTH})
+    harness.backend.script(Role.WORKER, worker_json())
+    harness.backend.script(Role.REVIEWER, review_json())
+
+    run_id = await harness.run()
+
+    task = await only_task(harness, run_id)
+    assert (task.kind, task.state) == (TaskKind.PR_FIX, TaskState.DONE)
+    assert harness.gateway.mergeable_reads == [PR_NUMBER, PR_NUMBER]
+
+
+async def test_failed_mergeability_read_skips_the_pr(harness: Harness) -> None:
+    await open_pr(harness, {"app.py": HI})
+    advance_main(harness, {"app.py": HELLO})
+    harness.gateway.failures["pr_mergeable"] = RuntimeError("boom")
+
+    run_id = await harness.run()
+
+    assert await harness.tasks(run_id) == []
+    assert harness.gateway.writes == []
+
+
+async def test_pr_that_merges_cleanly_after_all_ends_without_writes(harness: Harness) -> None:
+    head = await open_pr(harness, {"app.py": HI}, mergeable=False)
     advance_main(harness, {"README.md": "# Demo v2\n"})
 
     run_id = await harness.run()
 
     task = await only_task(harness, run_id)
-    assert (task.kind, task.state) == (TaskKind.PR_UPDATE, TaskState.ABORTED)
-    assert task.note == "the PR merges cleanly"
+    assert (task.kind, task.state) == (TaskKind.PR_FIX, TaskState.ABORTED)
+    assert task.note == "the PR merges cleanly after all"
     assert harness.backend.requests == []
     assert harness.runtime.started == []
     assert harness.gateway.writes == []
     assert git(harness.remote, "rev-parse", BRANCH).decode().strip() == head
     async with harness.sessionmaker() as session:
         since = datetime(2000, 1, 1, tzinfo=UTC)
-        assert await runs_store.count_worker_tasks_since(session, since, TaskKind.PR_FIX) == 0
+        assert await runs_store.count_worker_tasks_since(session, since, TaskKind.PR_FIX) == 1
     assert not (harness.config.tasks_dir / f"worker-{task.id}" / "controller").exists()
 
 
@@ -228,16 +292,6 @@ async def test_failed_push_keeps_the_old_head_as_ours(harness: Harness) -> None:
     assert last.head_sha == head
 
 
-async def test_up_to_date_pr_is_not_touched(harness: Harness) -> None:
-    head = await open_pr(harness, {"app.py": HI})
-    harness.gateway.behind[head] = 0
-
-    run_id = await harness.run()
-
-    assert await harness.tasks(run_id) == []
-    assert harness.gateway.writes == []
-
-
 async def test_no_fix_budget_means_no_update(harness: Harness) -> None:
     await open_pr(harness, {"app.py": HI})
     advance_main(harness, {"app.py": HELLO})
@@ -246,6 +300,27 @@ async def test_no_fix_budget_means_no_update(harness: Harness) -> None:
     run_id = await harness.run()
 
     assert await harness.tasks(run_id) == []
+    assert harness.gateway.mergeable_reads == []
+    assert harness.gateway.writes == []
+
+
+async def test_fix_quota_counts_only_conflicting_prs(harness: Harness) -> None:
+    harness.add_ready_issue(2, "Add farewell")
+    await open_pr(harness, {"app.py": HI}, mergeable=True)
+    harness.gateway.pulls.append(FakePull(11, "skeleton/2-add-farewell", "c" * 40))
+    harness.gateway.mergeable[11] = [False]
+    async with harness.sessionmaker() as session:
+        run = await runs_store.create_run(session, "manual", False)
+        task = await runs_store.add_worker_task(session, run.id, 2, "Add farewell")
+        await runs_store.update_worker_task(session, task.id, head_sha="c" * 40)
+        await session.commit()
+    harness.limits(conflict_fixes_per_day=1)
+
+    run_id = await harness.run()
+
+    task = await only_task(harness, run_id)
+    assert (task.issue_number, task.kind) == (2, TaskKind.PR_FIX)
+    assert harness.gateway.mergeable_reads == [PR_NUMBER, 11]
 
 
 async def test_fixes_use_their_own_quota(harness: Harness) -> None:

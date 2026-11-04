@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from skeleton_crew.agents.base import AgentBackend
 from skeleton_crew.agents.registry import settings_problems
 from skeleton_crew.agents.rules import compose_rules, default_rules
+from skeleton_crew.core.audit import AuditKind, AuditOutcome
 from skeleton_crew.domain.settings import AppSettings, Role
 from skeleton_crew.domain.task_state import TaskKind
 from skeleton_crew.domain.trust_policy import IssueComment
@@ -21,6 +22,7 @@ from skeleton_crew.github.gateway import (
 )
 from skeleton_crew.github.preflight import check_repository
 from skeleton_crew.github.trust import trusted_issues
+from skeleton_crew.github.write_guard import AuditSink
 from skeleton_crew.pipeline.deps import PipelineDeps
 from skeleton_crew.runtime.egress import apply_allowlist
 from skeleton_crew.store import rules_store, runs_store
@@ -126,25 +128,40 @@ def _has_label(issue: IssueRef, label: str) -> bool:
     return any(name.casefold() == label.casefold() for name in issue.labels)
 
 
-async def find_candidates(deps: PipelineDeps, settings: AppSettings, gw: Gateway) -> Candidates:
+async def find_candidates(
+    deps: PipelineDeps, settings: AppSettings, gw: Gateway, audit: AuditSink
+) -> Candidates:
     labels, trusted = settings.labels, settings.repo.trusted_users
     bot = deps.config.github_bot_login
     ready: list[Candidate] = []
     open_prs: list[OpenPr] = []
+    pulls_by_issue = await gw.open_skeleton_prs()
     for issue, comments in await trusted_issues(gw, labels.ready, trusted, bot):
         if _has_label(issue, labels.hitl) or _has_label(issue, labels.refine):
             continue
-        pull = await gw.open_skeleton_pr_for(issue.number)
-        if pull is None:
-            ready.append(Candidate(issue, comments))
-        else:
-            open_prs.append(OpenPr(issue, comments, pull))
+        match pulls_by_issue.get(issue.number, ()):
+            case ():
+                ready.append(Candidate(issue, comments))
+            case (pull,):
+                open_prs.append(OpenPr(issue, comments, pull))
+            case pulls:
+                await _skip_ambiguous(audit, issue.number, pulls)
     refine = [
         Candidate(issue, comments)
         for issue, comments in await trusted_issues(gw, labels.refine, trusted, bot)
         if not _has_label(issue, labels.hitl)
     ]
     return Candidates(ready, refine, open_prs)
+
+
+async def _skip_ambiguous(audit: AuditSink, issue_number: int, pulls: Sequence[PullRef]) -> None:
+    numbers = sorted(pull.number for pull in pulls)
+    await audit(
+        AuditKind.ISSUE_SKIPPED,
+        AuditOutcome.INFO,
+        f"#{issue_number} has {len(numbers)} open skeleton PRs",
+        {"issue": issue_number, "prs": numbers},
+    )
 
 
 def local_midnight(now: datetime, timezone: str) -> datetime:

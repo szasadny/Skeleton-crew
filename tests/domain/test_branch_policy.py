@@ -4,7 +4,9 @@ from skeleton_crew.domain.branch_policy import (
     BRANCH_PREFIX,
     branch_name,
     check_push_target,
+    continuation_problem,
     issue_number_from_branch,
+    pushed_by_controller,
 )
 from skeleton_crew.domain.errors import PolicyViolation
 
@@ -111,3 +113,39 @@ def test_push_to_base_branch_is_rejected_even_if_it_looks_like_a_skeleton_branch
 
 def test_slug_of_exactly_forty_chars_is_allowed() -> None:
     check_push_target("skeleton/1-" + "a" * 40, "main")
+
+
+OURS = "a" * 40
+
+
+@pytest.mark.parametrize(
+    ("head", "last_pushed", "owned"),
+    [
+        (OURS, OURS, True),
+        (OURS, None, False),
+        (OURS, "b" * 40, False),
+        ("", None, False),
+        (OURS.upper(), OURS, False),
+    ],
+)
+def test_pushed_by_controller(head: str, last_pushed: str | None, owned: bool) -> None:
+    assert pushed_by_controller(head, last_pushed) is owned
+
+
+def test_owned_branch_without_closed_pr_may_be_continued() -> None:
+    assert continuation_problem(OURS, OURS, None) is None
+
+
+def test_foreign_head_is_a_problem_even_without_a_closed_pr() -> None:
+    assert continuation_problem(OURS, "b" * 40, None) == (
+        "the branch has commits Skeleton Crew did not push"
+    )
+
+
+def test_ownership_is_checked_before_the_closed_pr() -> None:
+    problem = continuation_problem(OURS, None, 7)
+    assert problem == "the branch has commits Skeleton Crew did not push"
+
+
+def test_closed_pr_is_never_resurrected() -> None:
+    assert continuation_problem(OURS, OURS, 7) == "PR #7 was closed without merging"

@@ -66,6 +66,8 @@ class FakePull:
     head_ref: str
     head_sha: str
     same_repo: bool = True
+    state: str = "open"
+    merged: bool = False
 
     def ref(self) -> PullRef:
         return PullRef(
@@ -123,7 +125,8 @@ class FakeGitHubGateway:
         self.review_checks: dict[str, tuple[bool, str]] = {}
         self.pushes: list[tuple[str, str]] = []
         self.leases: list[str | None] = []
-        self.behind: dict[str, int] = {}
+        self.mergeable: dict[int, list[bool | None]] = {}
+        self.mergeable_reads: list[int] = []
         self.permission_lookups: list[str] = []
         self._ticks = 0
 
@@ -188,11 +191,31 @@ class FakeGitHubGateway:
         self.permission_lookups.append(login)
         return self.permissions.get(login, "read")
 
-    async def open_skeleton_pr_for(self, issue_number: int) -> PullRef | None:
+    async def open_skeleton_prs(self) -> dict[int, tuple[PullRef, ...]]:
+        self._maybe_fail("open_skeleton_prs")
+        found: dict[int, tuple[PullRef, ...]] = {}
         for pull in self.pulls:
-            if pull.same_repo and issue_number_from_branch(pull.head_ref) == issue_number:
+            number = issue_number_from_branch(pull.head_ref)
+            if pull.state == "open" and pull.same_repo and number is not None:
+                found[number] = (*found.get(number, ()), pull.ref())
+        return found
+
+    async def closed_unmerged_pr_for(self, branch: str) -> PullRef | None:
+        check_push_target(branch, self.base_branch)
+        self._maybe_fail("closed_unmerged_pr_for")
+        for pull in self.pulls:
+            closed = pull.state == "closed" and not pull.merged and pull.same_repo
+            if closed and pull.head_ref == branch:
                 return pull.ref()
         return None
+
+    async def pr_mergeable(self, number: int) -> bool | None:
+        self._maybe_fail("pr_mergeable")
+        self.mergeable_reads.append(number)
+        script = self.mergeable.get(number)
+        if not script:
+            return None
+        return script.pop(0) if len(script) > 1 else script[0]
 
     async def ci_status(self, sha: str, required: Collection[str] = ()) -> CiStatus:
         check_sha(sha)
@@ -316,11 +339,6 @@ class FakeGitHubGateway:
             perform=perform,
             dry_result=None,
         )
-
-    async def commits_behind(self, sha: str) -> int:
-        check_sha(sha)
-        self._maybe_fail("commits_behind")
-        return self.behind.get(sha, 0)
 
     async def clone(self, dest: Path) -> str:
         if self.source_repo is None:

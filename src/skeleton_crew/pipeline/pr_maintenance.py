@@ -1,8 +1,8 @@
 import logging
 from collections.abc import Sequence
-from dataclasses import dataclass
 
 from skeleton_crew.core.audit import AuditKind, AuditOutcome
+from skeleton_crew.domain.branch_policy import pushed_by_controller
 from skeleton_crew.domain.task_keys import worker_key
 from skeleton_crew.domain.task_state import TaskEvent, TaskKind
 from skeleton_crew.pipeline.branch_update import merge_base, resolve_conflicts
@@ -14,48 +14,60 @@ from skeleton_crew.pipeline.worker_job import GitState, WorkerJob
 from skeleton_crew.runtime.workspace import task_paths
 from skeleton_crew.store import runs_store
 
+MERGEABLE_POLLS = 3
+MERGEABLE_POLL_SECONDS = 5.0
+
 log = logging.getLogger(__name__)
 
 
-@dataclass
-class FixBudget:
-    remaining: int
-
-    def take(self) -> bool:
-        if self.remaining <= 0:
-            return False
-        self.remaining -= 1
-        return True
-
-    def refund(self) -> None:
-        self.remaining += 1
-
-
 async def choose_pr_updates(ctx: RunContext, open_prs: Sequence[OpenPr]) -> list[OpenPr]:
-    updates: list[OpenPr] = []
+    owned: list[OpenPr] = []
     for pr in open_prs:
-        pull = pr.pull
         async with ctx.deps.sessionmaker() as session:
             last = await runs_store.last_pushed_task(session, pr.issue.number)
-        if last is None or last.head_sha != pull.head_sha:
-            await ctx.audit(
-                AuditKind.PR_UPDATE_SKIPPED,
-                AuditOutcome.INFO,
-                f"PR #{pull.number} has commits Skeleton Crew did not push",
-                {"pr": pull.number, "issue": pr.issue.number},
-            )
-            continue
-        try:
-            behind = await ctx.gateway.commits_behind(pull.head_sha)
-        except Exception:
-            log.exception("could not compare PR #%d with the base branch", pull.number)
-            continue
-        if behind > 0:
-            updates.append(pr)
-    return updates
+        if pushed_by_controller(pr.pull.head_sha, last.head_sha if last else None):
+            owned.append(pr)
+        else:
+            await _skipped(ctx, pr, f"PR #{pr.pull.number} has commits Skeleton Crew did not push")
+    return owned
 
 
-async def run_pr_update(ctx: RunContext, task_id: int, pr: OpenPr, budget: FixBudget) -> None:
+async def has_conflicts(ctx: RunContext, pr: OpenPr) -> bool:
+    number = pr.pull.number
+    try:
+        mergeable = await _poll_mergeable(ctx, number)
+    except Exception:
+        log.exception("could not read whether PR #%d merges cleanly", number)
+        return False
+    if mergeable is False:
+        return True
+    if mergeable:
+        await _skipped(ctx, pr, f"PR #{number} merges cleanly")
+    else:
+        await _skipped(ctx, pr, f"PR #{number}: mergeability unknown")
+    return False
+
+
+async def _poll_mergeable(ctx: RunContext, number: int) -> bool | None:
+    for attempt in range(MERGEABLE_POLLS):
+        if attempt:
+            await ctx.deps.sleep(MERGEABLE_POLL_SECONDS)
+        mergeable = await ctx.gateway.pr_mergeable(number)
+        if mergeable is not None:
+            return mergeable
+    return None
+
+
+async def _skipped(ctx: RunContext, pr: OpenPr, reason: str) -> None:
+    await ctx.audit(
+        AuditKind.PR_UPDATE_SKIPPED,
+        AuditOutcome.INFO,
+        reason,
+        {"pr": pr.pull.number, "issue": pr.issue.number},
+    )
+
+
+async def run_pr_fix(ctx: RunContext, task_id: int, pr: OpenPr) -> None:
     key = worker_key(task_id)
     job = WorkerJob(
         ctx=ctx,
@@ -65,7 +77,7 @@ async def run_pr_update(ctx: RunContext, task_id: int, pr: OpenPr, budget: FixBu
         key=key,
         paths=task_paths(ctx.deps.config.tasks_dir, key),
         branch=pr.pull.head_ref,
-        kind=TaskKind.PR_UPDATE,
+        kind=TaskKind.PR_FIX,
         pr_requested=True,
         git=GitState(remote_sha=pr.pull.head_sha),
     )
@@ -74,16 +86,7 @@ async def run_pr_update(ctx: RunContext, task_id: int, pr: OpenPr, budget: FixBu
         await job.record.fire(TaskEvent.STARTED, branch=job.branch, pr_number=pr.pull.number)
         merge = await merge_base(job)
         if not merge.conflicts:
-            raise Skip("the PR merges cleanly")
-        await _become_fix(job)
+            raise Skip("the PR merges cleanly after all")
         await resolve_conflicts(job, merge)
 
     await run_job(job, work)
-    if job.kind is TaskKind.PR_UPDATE:
-        budget.refund()
-
-
-async def _become_fix(job: WorkerJob) -> None:
-    # Only a job that needs an agent counts against conflict_fixes_per_day.
-    job.kind = TaskKind.PR_FIX
-    await job.record.update(kind=job.kind)

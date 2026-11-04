@@ -23,7 +23,7 @@ Each row has exactly one correct place. Putting it anywhere else violates the co
 | You are adding / changing… | It goes in… |
 | --- | --- |
 | Which label changes are allowed | `domain/label_policy.py` |
-| Branch naming or the allowed push target | `domain/branch_policy.py` |
+| Branch naming, the allowed push target, whether an existing branch may be continued | `domain/branch_policy.py` |
 | Protected paths, diff size, file-mode rules | `domain/diff_policy.py` |
 | Parsing the added lines of a diff | `domain/diff_lines.py` |
 | Detecting long code comments in a diff | `domain/comment_policy.py` |
@@ -56,7 +56,7 @@ Each row has exactly one correct place. Putting it anywhere else violates the co
 | The worker job loop: coding, repo checks, policy check, push, CI wait, review, escalation | `pipeline/job_engine.py` |
 | Worker job state (git SHAs, rounds, reviewer session, follow-up kinds) | `pipeline/worker_job.py` |
 | Merging the base branch into an existing branch (clean merge or conflict) | `pipeline/branch_update.py` |
-| Choosing and running PR maintenance jobs, fix budget | `pipeline/pr_maintenance.py` |
+| Choosing PR maintenance jobs (ownership, mergeability) and running conflict fixes | `pipeline/pr_maintenance.py` |
 | Refine flow, selector, CI wait | `pipeline/refine_flow.py`, `pipeline/selector.py`, `pipeline/ci_watcher.py` |
 | A bootstrap setting (secret, path, port, repo) | `core/config.py`, read from `.env` |
 | A table / ORM entity | `models/<entity>.py` + Alembic migration in `migrations/versions/` |
@@ -168,17 +168,22 @@ The controller never runs git inside a directory an agent can write to: a plante
 
 Reviewer, refiner and selector sessions get a fresh read-only copy. Within one worker job the reviewer keeps its container and session: a later review round resumes it, with the copy refreshed in place to the new head and the changes since its last review in `/skeleton-in/since-review.diff`.
 
-The first push of a new branch uses a lease that requires the branch not to exist. If `skeleton/<n>-<slug>` already exists when a worker starts (a PR closed without merging, or a crash before the PR was opened), the worker comments on the issue and continues from that branch: the controller merges the base into it as in §4.4 (a clean merge is pushed as a merge commit, a conflict goes to a worker), then CI and a fresh review follow and the PR is opened. A branch without changes of its own is replaced by a normal worker run, with a lease on its old head.
+The first push of a new branch uses a lease that requires the branch not to exist. Each run lists open PRs once (`open_skeleton_prs`); an issue with more than one open skeleton PR is skipped for new work and maintenance, with an audit event. If `skeleton/<n>-<slug>` already exists without an open PR when a worker starts, the controller decides before any write (`domain/branch_policy.continuation_problem`):
+
+- The head is not the last commit the controller pushed in a live run (`runs_store.last_pushed_task`): escalate ("the branch has commits Skeleton Crew did not push"). Foreign content is never adopted, so it never skips the per-push secret scan.
+- The branch has a PR that was closed without merging: escalate. A closed PR is never resurrected.
+- The branch has no changes of its own (its merge with the base equals the base, e.g. after a merged PR whose branch was kept): it is replaced by a normal worker run, with a lease on its old head.
+- Otherwise (a crash before the PR was opened) the worker comments on the issue and continues from that branch: the controller merges the base into it as in §4.4 (a clean merge is pushed as a merge commit, a conflict goes to a worker), then CI and a fresh review follow and the PR is opened.
 
 ### 4.4 PR maintenance
 
 `pipeline/pr_maintenance.py` resolves merge conflicts in open skeleton PRs while their issue still has `skeleton`. The merge itself lives in `pipeline/branch_update.py`, shared with continued branches (§4.3); the job loop after it is `pipeline/job_engine.py`. PR maintenance runs even when the selector fails.
 
-1. A PR qualifies when its head is the last commit the controller pushed in a live run (`runs_store.last_pushed_task`) and it is behind the base branch. Any other head means a human took over; the PR is skipped with an audit event.
-2. The controller merges the base into the branch in its own clone with `git merge-tree`, so history is kept and nothing is rebased.
-3. **Clean merge**: the job stops without writes. A PR that is only behind stays as it is; GitHub merges it fine.
-4. **Conflict**: the conflicted tree becomes a local-only commit for the agent copy. The worker's patch on top of it becomes a merge commit with parents (old head, base). It may only touch conflicted files and must leave no conflict markers. Then CI and a fresh review follow, as for a new PR.
-5. A job with a conflict becomes kind `pr_fix` before the worker starts and counts against `conflict_fixes_per_day`; a clean PR costs no quota. Failure escalates the issue as usual.
+1. A PR qualifies only when its head is the last commit the controller pushed in a live run (`runs_store.last_pushed_task`). Any other head means a human took over; the PR is skipped with an audit event.
+2. While fix quota is left, the controller reads GitHub's `mergeable` flag. `true`: skipped with an audit event, no task and no clone; a PR that is only behind stays as it is. `null` (GitHub still computing): polled a few times, then skipped with an audit event. `false`: a `pr_fix` task is created and takes one `conflict_fixes_per_day`.
+3. The controller merges the base into the branch in its own clone with `git merge-tree`, so history is kept and nothing is rebased.
+4. **Conflict**: the conflicted tree becomes a local-only commit for the agent copy. The worker's patch on top of it becomes a merge commit with parents (old head, base). It may only touch conflicted files and must leave no conflict markers. Then CI and a fresh review follow, as for a new PR. Failure escalates the issue as usual.
+5. If the local merge turns out clean after all (a race with GitHub), the job ends without writes or agent; its quota stays used.
 
 ---
 
@@ -191,7 +196,7 @@ SQLite in the data directory, with Alembic migrations applied at startup.
 | `SettingsRow` | One row holding the UI-editable settings as JSON, validated by `domain/settings.py` |
 | `RuleRevision` | Append-only history of each role's work rules; the newest revision is active |
 | `Run` | One daily or manual run: trigger, `dry_run`, state, timestamps |
-| `WorkerTask` | One issue in one run: kind (`issue`, `pr_update`, `pr_fix`), state, branch, PR, base and head SHA, session id, container id, round counters, cost, `note` (why it escalated, aborted or failed) |
+| `WorkerTask` | One issue in one run: kind (`issue`, `pr_fix`; `pr_update` only on historical rows), state, branch, PR, base and head SHA, session id, container id, round counters, cost, `note` (why it escalated, aborted or failed) |
 | `RefineTask` | One refine in one run: state, session id |
 | `AuditEvent` | Append-only: every GitHub write (allowed, blocked or dry-run), settings or rules change, kill switch |
 

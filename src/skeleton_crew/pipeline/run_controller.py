@@ -19,7 +19,7 @@ from skeleton_crew.github.gateway import IssueRef
 from skeleton_crew.github.write_guard import AuditSink
 from skeleton_crew.pipeline.deps import PipelineDeps, RunContext, audit_sink
 from skeleton_crew.pipeline.escalation import escalate_issue
-from skeleton_crew.pipeline.pr_maintenance import FixBudget, choose_pr_updates, run_pr_update
+from skeleton_crew.pipeline.pr_maintenance import choose_pr_updates, has_conflicts, run_pr_fix
 from skeleton_crew.pipeline.refine_flow import run_refine
 from skeleton_crew.pipeline.run_setup import (
     Candidate,
@@ -180,7 +180,7 @@ class RunController:
             audit=sink,
             required_checks=required,
         )
-        candidates = await find_candidates(deps, settings, gw)
+        candidates = await find_candidates(deps, settings, gw, sink)
         async with asyncio.TaskGroup() as group:
             group.create_task(self._refines(ctx, candidates.refine, quotas.refines))
             workers = group.create_task(self._workers(ctx, candidates, quotas))
@@ -204,7 +204,7 @@ class RunController:
         picks, note = await self._select(ctx, candidates.ready, quotas.issues)
         slots = asyncio.Semaphore(ctx.settings.limits.max_parallel_workers)
         async with asyncio.TaskGroup() as group:
-            await self._start_pr_updates(ctx, group, slots, candidates.open_prs, quotas.fixes)
+            await self._start_pr_fixes(ctx, group, slots, candidates.open_prs, quotas.fixes)
             await self._start_issues(ctx, group, slots, picks)
         return note
 
@@ -227,7 +227,7 @@ class RunController:
         by_number = {c.issue.number: c for c in candidates}
         return [by_number[pick.issue_number] for pick in selection.picks], None
 
-    async def _start_pr_updates(
+    async def _start_pr_fixes(
         self,
         ctx: RunContext,
         group: asyncio.TaskGroup,
@@ -235,16 +235,19 @@ class RunController:
         open_prs: Sequence[OpenPr],
         fix_quota: int,
     ) -> None:
-        budget = FixBudget(fix_quota)
+        remaining = fix_quota
         for pr in await choose_pr_updates(ctx, open_prs):
+            if remaining <= 0 or not self._window_open(ctx):
+                return
+            if not await has_conflicts(ctx, pr):
+                continue
             await slots.acquire()
-            if not self._window_open(ctx) or not budget.take():
+            if not self._window_open(ctx):
                 slots.release()
                 return
-            task_id = await self._add_task(ctx, pr.issue, TaskKind.PR_UPDATE)
-            group.create_task(
-                self._in_slot(slots, partial(run_pr_update, ctx, task_id, pr, budget))
-            )
+            remaining -= 1
+            task_id = await self._add_task(ctx, pr.issue, TaskKind.PR_FIX)
+            group.create_task(self._in_slot(slots, partial(run_pr_fix, ctx, task_id, pr)))
 
     async def _start_issues(
         self,

@@ -1,6 +1,6 @@
 from collections.abc import Sequence
 
-from skeleton_crew.domain.branch_policy import branch_name
+from skeleton_crew.domain.branch_policy import branch_name, continuation_problem
 from skeleton_crew.domain.task_keys import worker_key
 from skeleton_crew.domain.task_state import TaskEvent
 from skeleton_crew.domain.trust_policy import IssueComment
@@ -11,11 +11,13 @@ from skeleton_crew.pipeline.branch_update import (
     resolve_conflicts,
 )
 from skeleton_crew.pipeline.deps import RunContext
+from skeleton_crew.pipeline.escalation import Escalation
 from skeleton_crew.pipeline.job_engine import iterate, run_job, start_worker_sandbox
 from skeleton_crew.pipeline.task_record import WorkerTaskRecord
 from skeleton_crew.pipeline.texts import continued_comment
 from skeleton_crew.pipeline.worker_job import WorkerJob
 from skeleton_crew.runtime.workspace import task_paths, tree_of
+from skeleton_crew.store import runs_store
 
 
 async def run_worker(
@@ -41,7 +43,19 @@ async def _work(job: WorkerJob) -> None:
         job.git.start_at(await job.ctx.gateway.clone(job.paths.controller_repo))
         await _code_from_base(job)
     else:
+        await _check_takeover(job, head)
         await _continue_branch(job, head)
+
+
+async def _check_takeover(job: WorkerJob, head: str) -> None:
+    async with job.ctx.deps.sessionmaker() as session:
+        last = await runs_store.last_pushed_task(session, job.issue.number)
+    closed = await job.ctx.gateway.closed_unmerged_pr_for(job.branch)
+    problem = continuation_problem(
+        head, last.head_sha if last else None, closed.number if closed else None
+    )
+    if problem is not None:
+        raise Escalation(f"`{job.branch}`: {problem}")
 
 
 async def _continue_branch(job: WorkerJob, head: str) -> None:
