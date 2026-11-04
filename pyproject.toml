@@ -1,7 +1,7 @@
 [project]
 name = "skeleton-crew"
 version = "0.1.0"
-description = "Self-hosted orchestrator that lets Claude Code workers resolve labelled GitHub issues under hard guardrails."
+description = "Self-hosted orchestrator that lets coding-agent workers resolve labelled GitHub issues under hard guardrails."
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]

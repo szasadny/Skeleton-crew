@@ -204,6 +204,19 @@ def test_update_prompt_lists_conflicts_and_forbids_merging() -> None:
     assert "still finish the resolution and return `done`" in text
 
 
+def test_conflict_prompt_does_not_promise_the_check_command() -> None:
+    context = {**_CONTEXTS[PromptName.WORKER_UPDATE], "check_command": "make check"}
+    text = render_prompt(PromptName.WORKER_UPDATE, context, json_schema=_SCHEMA)
+    assert "runs no checks on a conflict resolution" in text
+    assert "make check" not in text
+    resolved = render_prompt(
+        PromptName.WORKER_UPDATE,
+        {**context, "conflicts": [], "kind": "ci_failed", "details": "FAILED test_app"},
+        json_schema=_SCHEMA,
+    )
+    assert "the controller runs `make check` when you finish" in resolved
+
+
 def test_update_prompt_after_red_ci_shows_the_logs() -> None:
     context = {
         **_CONTEXTS[PromptName.WORKER_UPDATE],
