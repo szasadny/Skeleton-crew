@@ -1,3 +1,4 @@
+import inspect
 import re
 from pathlib import Path
 
@@ -34,7 +35,14 @@ def _sources() -> list[Path]:
 
 def test_github_package_sources_found() -> None:
     names = {p.name for p in _sources()}
-    assert {"gateway.py", "trust.py", "preflight.py", "write_guard.py"} <= names
+    assert {
+        "gateway.py",
+        "_git.py",
+        "_ci.py",
+        "trust.py",
+        "preflight.py",
+        "write_guard.py",
+    } <= names
 
 
 @pytest.mark.parametrize("pattern", FORBIDDEN)
@@ -79,3 +87,21 @@ def test_gateway_exposes_no_merge_like_method() -> None:
     for cls in (Gateway, GitHubGateway):
         public = {name for name in vars(cls) if not name.startswith("_")}
         assert public <= allowed
+
+
+def test_private_gateway_modules_expose_no_merge_like_function() -> None:
+    from skeleton_crew.github import _ci, _git
+
+    allowed = {
+        _git: {"auth_env", "git_clone", "git_fetch", "git_branch_head", "git_push"},
+        _ci: {"evaluate_ci", "required_checks", "format_job_logs"},
+    }
+    for module, names in allowed.items():
+        functions = {
+            name
+            for name, value in vars(module).items()
+            if inspect.isfunction(value)
+            and value.__module__ == module.__name__
+            and not name.startswith("_")
+        }
+        assert functions == names

@@ -1,8 +1,6 @@
 import asyncio
-import os
 import re
 import shutil
-import subprocess
 import tarfile
 import tempfile
 from collections.abc import Mapping, Sequence
@@ -10,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import IO
 
+from skeleton_crew.core.git import GitCommandError, run_git_sync
 from skeleton_crew.domain.errors import PolicyViolation
 
 MAX_PATCH_BYTES = 20_000_000
@@ -18,14 +17,6 @@ GIT_TIMEOUT_S = 300.0
 _TASK_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 _SHA_RE = re.compile(r"^[0-9a-f]{40}([0-9a-f]{24})?$")
 _AUTHOR_RE = re.compile(r"^(?P<name>[^<>\n\0]*[^<>\s\0])\s*<(?P<email>[^<>\s\0]+)>$")
-_HARDENING = (
-    "-c",
-    "core.hooksPath=/dev/null",
-    "-c",
-    "core.fsmonitor=false",
-    "-c",
-    "protocol.allow=never",
-)
 
 AGENT_PATCH_ARGV: tuple[str, ...] = (
     "sh",
@@ -34,10 +25,6 @@ AGENT_PATCH_ARGV: tuple[str, ...] = (
     " --no-ext-diff --no-textconv --no-color --no-renames --no-relative"
     ' --src-prefix=a/ --dst-prefix=b/ "$0"',
 )
-
-
-class GitCommandError(Exception):
-    pass
 
 
 @dataclass(frozen=True)
@@ -61,21 +48,6 @@ def _check_sha(sha: str) -> str:
     return sha
 
 
-def _git_env(extra: Mapping[str, str] | None) -> dict[str, str]:
-    env = {
-        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-        "HOME": os.devnull,
-        "LC_ALL": "C",
-        "GIT_CONFIG_NOSYSTEM": "1",
-        "GIT_CONFIG_GLOBAL": os.devnull,
-        "GIT_TERMINAL_PROMPT": "0",
-        "GIT_OPTIONAL_LOCKS": "0",
-    }
-    if extra:
-        env.update(extra)
-    return env
-
-
 def _git(
     repo: Path,
     *args: str,
@@ -84,19 +56,15 @@ def _git(
     env: Mapping[str, str] | None = None,
     exit_codes: frozenset[int] = frozenset({0}),
 ) -> bytes:
-    completed = subprocess.run(  # noqa: S603 -- fixed argv, no shell
-        ["git", *_HARDENING, "-C", str(repo), *args],  # noqa: S607 -- git from the controller image
-        input=stdin,
-        stdout=stdout if stdout is not None else subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env=_git_env(env),
-        timeout=GIT_TIMEOUT_S,
-        check=False,
+    return run_git_sync(
+        args,
+        cwd=repo,
+        timeout_s=GIT_TIMEOUT_S,
+        stdin=stdin,
+        stdout=stdout,
+        env=env,
+        exit_codes=exit_codes,
     )
-    if completed.returncode not in exit_codes:
-        message = completed.stderr.decode(errors="replace").strip()[-500:]
-        raise GitCommandError(f"git {args[0]} failed: {message}")
-    return completed.stdout if stdout is None else b""
 
 
 def task_paths(tasks_dir: Path, task_key: str) -> TaskPaths:

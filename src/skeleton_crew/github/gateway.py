@@ -1,11 +1,7 @@
 import asyncio
-import base64
-import os
-import shutil
 from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from enum import StrEnum
 from http import HTTPStatus
 from pathlib import Path
 from typing import Any, Protocol
@@ -15,13 +11,26 @@ from githubkit import AppAuthStrategy, AppInstallationAuthStrategy, GitHub, Resp
 from githubkit.exception import RequestFailed
 from githubkit_schemas.latest.types import AppPermissionsType
 
-from skeleton_crew.core.logging import redact
 from skeleton_crew.domain.branch_policy import check_push_target, issue_number_from_branch
-from skeleton_crew.domain.errors import PolicyViolation
 from skeleton_crew.domain.label_policy import LabelChange, check_label_change
 from skeleton_crew.domain.settings import LabelNames
 from skeleton_crew.domain.text_policy import truncate_text
 from skeleton_crew.domain.trust_policy import ContentEdit, IssueComment, LabelEvent
+from skeleton_crew.github._ci import REVIEW_CHECK_NAME as REVIEW_CHECK_NAME
+from skeleton_crew.github._ci import BranchRule as BranchRule
+from skeleton_crew.github._ci import CiState as CiState
+from skeleton_crew.github._ci import CiStatus as CiStatus
+from skeleton_crew.github._ci import FailedJob as FailedJob
+from skeleton_crew.github._ci import evaluate_ci as evaluate_ci
+from skeleton_crew.github._ci import format_job_logs as format_job_logs
+from skeleton_crew.github._ci import required_checks as required_checks
+from skeleton_crew.github._git import (
+    REMOTE_PROTOCOL,
+    git_branch_head,
+    git_clone,
+    git_fetch,
+    git_push,
+)
 from skeleton_crew.github.write_guard import (
     AuditSink,
     check_issue_number,
@@ -34,13 +43,8 @@ from skeleton_crew.github.write_guard import (
     short,
 )
 
-REVIEW_CHECK_NAME = "skeleton-crew/review"
-GITHUB_ACTIONS_SLUG = "github-actions"
 TOKEN_REFRESH_MARGIN = timedelta(minutes=5)
-GIT_TIMEOUT_S = 900.0
 _PER_PAGE = 100
-_AUTH_HEADER_KEY = "http.https://github.com/.extraheader"
-_GREEN_CONCLUSIONS = frozenset({"success", "neutral", "skipped"})
 LOGS_UNAVAILABLE = "(logs unavailable)"
 _EDITS_QUERY = """
 query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
@@ -79,37 +83,6 @@ class PullRef:
     head_ref: str
     head_sha: str
     url: str
-
-
-class CiState(StrEnum):
-    PENDING = "pending"
-    SUCCESS = "success"
-    FAILURE = "failure"
-    NONE = "none"
-
-
-@dataclass(frozen=True)
-class FailedJob:
-    name: str
-    job_id: int | None
-    details_url: str
-
-
-@dataclass(frozen=True)
-class CiStatus:
-    state: CiState
-    failed_jobs: list[FailedJob]
-
-
-@dataclass(frozen=True)
-class BranchRule:
-    type: str
-    ruleset_id: int | None
-    parameters: Mapping[str, object]
-
-
-class GitCommandError(Exception):
-    pass
 
 
 class RulesUnavailable(Exception):
@@ -163,119 +136,6 @@ class Gateway(Protocol):
     ) -> None: ...
 
 
-def _git_env(token: str | None) -> dict[str, str]:
-    env = {
-        "PATH": os.environ.get("PATH", os.defpath),
-        "HOME": os.devnull,
-        "LC_ALL": "C",
-        "GIT_CONFIG_NOSYSTEM": "1",
-        "GIT_CONFIG_GLOBAL": os.devnull,
-        "GIT_TERMINAL_PROMPT": "0",
-    }
-    if token is not None:
-        basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
-        # Env-only config: never on argv (visible in ps) and never written to .git/config.
-        env |= {
-            "GIT_CONFIG_COUNT": "1",
-            "GIT_CONFIG_KEY_0": _AUTH_HEADER_KEY,
-            "GIT_CONFIG_VALUE_0": f"AUTHORIZATION: basic {basic}",
-        }
-    return env
-
-
-async def run_git(
-    args: Sequence[str], *, cwd: Path | None, token: str | None, timeout_s: float = GIT_TIMEOUT_S
-) -> str:
-    proc = await asyncio.create_subprocess_exec(
-        "git",
-        "-c",
-        "core.hooksPath=/dev/null",
-        "-c",
-        "core.fsmonitor=false",
-        *args,
-        cwd=cwd,
-        env=_git_env(token),
-        stdin=asyncio.subprocess.DEVNULL,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    try:
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout_s)
-    except TimeoutError:
-        proc.kill()
-        await proc.wait()
-        raise GitCommandError(f"git {args[0]} timed out") from None
-    if proc.returncode != 0:
-        detail = redact(stderr.decode(errors="replace"), [token] if token else [])
-        raise GitCommandError(f"git {args[0]} failed: {detail[-500:]}")
-    return stdout.decode(errors="replace")
-
-
-def _check_clone_config(dest: Path, token: str | None) -> None:
-    config = (dest / ".git" / "config").read_text(errors="replace")
-    lowered = config.casefold()
-    if "extraheader" in lowered or "authorization" in lowered or (token and token in config):
-        shutil.rmtree(dest, ignore_errors=True)
-        raise PolicyViolation("clone config contains credentials")
-
-
-async def git_clone(url: str, dest: Path, branch: str, token: str | None) -> str:
-    await run_git(
-        [
-            "clone",
-            "--quiet",
-            "--no-tags",
-            "--single-branch",
-            "--branch",
-            branch,
-            "--",
-            url,
-            str(dest),
-        ],
-        cwd=None,
-        token=token,
-    )
-    _check_clone_config(dest, token)
-    return (await run_git(["rev-parse", "HEAD"], cwd=dest, token=None)).strip()
-
-
-async def git_fetch(repo_dir: Path, url: str, branch: str, token: str | None) -> str:
-    await run_git(
-        ["fetch", "--quiet", "--no-tags", "--", url, f"refs/heads/{branch}"],
-        cwd=repo_dir,
-        token=token,
-    )
-    return (await run_git(["rev-parse", "FETCH_HEAD"], cwd=repo_dir, token=None)).strip()
-
-
-async def git_branch_head(url: str, branch: str, token: str | None) -> str | None:
-    ref = f"refs/heads/{branch}"
-    out = await run_git(["ls-remote", "--heads", "--", url, ref], cwd=None, token=token)
-    for line in out.splitlines():
-        sha, _, name = line.partition("\t")
-        if name == ref:
-            return sha
-    return None
-
-
-async def git_push(
-    repo_dir: Path,
-    url: str,
-    sha: str,
-    branch: str,
-    token: str | None,
-    expected_sha: str | None = None,
-) -> None:
-    ref = f"refs/heads/{branch}"
-    # GitHub refuses the push if the branch moved meanwhile; an empty lease means it must not exist.
-    lease = f"--force-with-lease={ref}:{expected_sha or ''}"
-    await run_git(
-        ["push", "--quiet", lease, "--no-verify", url, f"{sha}:{ref}"],
-        cwd=repo_dir,
-        token=token,
-    )
-
-
 def _json_list(resp: Response[Any, Any]) -> list[Any]:
     data = resp.json()
     if not isinstance(data, list):
@@ -301,21 +161,6 @@ def _login(user: Any) -> str:
 
 def _ts(value: str) -> datetime:
     return datetime.fromisoformat(value)
-
-
-def _tail(text: str, chars: int) -> str:
-    return text[len(text) - chars :] if chars > 0 else ""
-
-
-def format_job_logs(logs: Sequence[tuple[int, str]], max_chars: int) -> str:
-    if not logs or max_chars <= 0:
-        return ""
-    room = max_chars // len(logs) - 1
-    sections = []
-    for job_id, text in logs:
-        header = f"== job {job_id} ==\n"
-        sections.append((header + _tail(text, room - len(header)))[: max(room, 0)])
-    return "\n".join(sections)
 
 
 def _issue_ref(raw: Mapping[str, Any]) -> IssueRef:
@@ -346,6 +191,7 @@ class GitHubGateway:
         max_comment_chars: int,
         token_provider: Callable[[], Awaitable[str]],
         remote_url: Callable[[str], str] = github_remote_url,
+        remote_protocol: str = REMOTE_PROTOCOL,
     ) -> None:
         self._client = client
         self._repo = repo
@@ -357,6 +203,7 @@ class GitHubGateway:
         self._max_comment_chars = max_comment_chars
         self._token_provider = token_provider
         self._remote_url = remote_url
+        self._remote_protocol = remote_protocol
         self._permissions: dict[str, str] = {}
 
     @property
@@ -697,17 +544,27 @@ class GitHubGateway:
 
     async def clone(self, dest: Path) -> str:
         token = await self._token_provider()
-        return await git_clone(self._remote_url(self._repo), dest, self._base_branch, token)
+        return await git_clone(
+            self._remote_url(self._repo),
+            dest,
+            self._base_branch,
+            token,
+            protocol=self._remote_protocol,
+        )
 
     async def fetch_branch(self, repo_dir: Path, branch: str) -> str:
         check_push_target(branch, self._base_branch)
         token = await self._token_provider()
-        return await git_fetch(repo_dir, self._remote_url(self._repo), branch, token)
+        return await git_fetch(
+            repo_dir, self._remote_url(self._repo), branch, token, protocol=self._remote_protocol
+        )
 
     async def branch_head(self, branch: str) -> str | None:
         check_push_target(branch, self._base_branch)
         token = await self._token_provider()
-        return await git_branch_head(self._remote_url(self._repo), branch, token)
+        return await git_branch_head(
+            self._remote_url(self._repo), branch, token, protocol=self._remote_protocol
+        )
 
     async def push_branch(
         self, repo_dir: Path, branch: str, sha: str, expected_sha: str | None = None
@@ -715,7 +572,9 @@ class GitHubGateway:
         async def perform() -> None:
             token = await self._token_provider()
             url = self._remote_url(self._repo)
-            await git_push(repo_dir, url, sha, branch, token, expected_sha)
+            await git_push(
+                repo_dir, url, sha, branch, token, expected_sha, protocol=self._remote_protocol
+            )
 
         def check() -> None:
             check_push(branch, sha, self._base_branch)
@@ -732,79 +591,6 @@ class GitHubGateway:
             perform=perform,
             dry_result=None,
         )
-
-
-def _run_failed(run: Mapping[str, Any]) -> FailedJob:
-    app = run.get("app") or {}
-    is_actions = isinstance(app, Mapping) and app.get("slug") == GITHUB_ACTIONS_SLUG
-    return FailedJob(
-        name=str(run.get("name") or ""),
-        job_id=int(run["id"]) if is_actions and run.get("id") is not None else None,
-        details_url=str(run.get("details_url") or run.get("html_url") or ""),
-    )
-
-
-def required_checks(rules: Sequence[BranchRule]) -> frozenset[str]:
-    names: set[str] = set()
-    for rule in rules:
-        checks = rule.parameters.get("required_status_checks")
-        if rule.type == "required_status_checks" and isinstance(checks, list):
-            names |= {
-                c["context"]
-                for c in checks
-                if isinstance(c, Mapping) and isinstance(c.get("context"), str) and c["context"]
-            }
-    # The controller sets the review check only after CI, so waiting for it would never end.
-    return frozenset(names - {REVIEW_CHECK_NAME})
-
-
-def _workflow_failures(workflow_runs: Sequence[Mapping[str, Any]]) -> list[FailedJob]:
-    return [
-        FailedJob(str(w.get("name") or ""), None, str(w.get("html_url") or ""))
-        for w in workflow_runs
-        if w.get("status") == "completed" and w.get("conclusion") not in _GREEN_CONCLUSIONS
-    ]
-
-
-def evaluate_ci(
-    check_runs: Sequence[Mapping[str, Any]],
-    statuses: Sequence[Mapping[str, Any]],
-    workflow_runs: Sequence[Mapping[str, Any]] = (),
-    required: Collection[str] = (),
-) -> CiStatus:
-    reported = bool(workflow_runs)
-    # A workflow run completes only after all its jobs, including ones that start late.
-    pending = any(w.get("status") != "completed" for w in workflow_runs)
-    failed: list[FailedJob] = []
-    for run in check_runs:
-        if run.get("name") == REVIEW_CHECK_NAME:
-            continue
-        reported = True
-        if run.get("status") != "completed":
-            pending = True
-        elif run.get("conclusion") not in _GREEN_CONCLUSIONS:
-            failed.append(_run_failed(run))
-    for status in statuses:
-        reported = True
-        state = status.get("state")
-        if state == "pending":
-            pending = True
-        elif state != "success":
-            failed.append(
-                FailedJob(
-                    str(status.get("context") or ""), None, str(status.get("target_url") or "")
-                )
-            )
-    # Failed jobs already explain a failed workflow; this covers a workflow that failed to start.
-    failed = failed or _workflow_failures(workflow_runs)
-    seen = {r.get("name") for r in check_runs} | {s.get("context") for s in statuses}
-    if not reported and not required:
-        return CiStatus(CiState.NONE, [])
-    if pending or not set(required) <= seen:
-        return CiStatus(CiState.PENDING, failed)
-    if failed:
-        return CiStatus(CiState.FAILURE, failed)
-    return CiStatus(CiState.SUCCESS, [])
 
 
 class RepoTokenProvider:
