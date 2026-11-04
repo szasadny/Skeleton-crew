@@ -26,25 +26,18 @@ class Role(StrEnum):
 RULE_KEYS: tuple[str, ...] = ("common", *(role.value for role in Role))
 
 
-class AgentBackendName(StrEnum):
-    CLAUDE_CODE = "claude_code"
-
-
-class ClaudeAuthMode(StrEnum):
-    SUBSCRIPTION = "subscription"
-    API_KEY = "api_key"
-
-
-class Effort(StrEnum):
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
-    XHIGH = "xhigh"
-    MAX = "max"
-
+# Neutral data only: agents/registry.py owns what is valid, and a test keeps these in sync.
+DEFAULT_BACKEND = "claude_code"
+DEFAULT_MODEL = "opus"
+DEFAULT_EFFORT = "medium"
+DEFAULT_REVIEWER_EFFORT = "high"
 
 _DOMAIN_RE = re.compile(r"^(\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
 _MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/\[\]-]{0,99}$")
+_IDENTIFIER_RE = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
+_EFFORT_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+_OPTION_VALUE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$")
+_MAX_OPTIONS = 20
 _LOGIN_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(\[bot\])?$")
 
 
@@ -90,11 +83,22 @@ class Limits(_Frozen):
     ci_grace_minutes: int = Field(default=10, ge=1, le=120)
 
 
+def _identifier(value: str, what: str) -> str:
+    if not _IDENTIFIER_RE.fullmatch(value):
+        raise ValueError(f"{what} must be a lowercase identifier")
+    return value
+
+
 class RoleAgent(_Frozen):
-    backend: AgentBackendName = AgentBackendName.CLAUDE_CODE
-    model: str = "opus"
-    effort: Effort = Effort.MEDIUM
+    backend: str = DEFAULT_BACKEND
+    model: str = DEFAULT_MODEL
+    effort: str = DEFAULT_EFFORT
     web_tools: bool = False
+
+    @field_validator("backend")
+    @classmethod
+    def _valid_backend(cls, value: str) -> str:
+        return _identifier(value, "backend")
 
     @field_validator("model")
     @classmethod
@@ -103,12 +107,19 @@ class RoleAgent(_Frozen):
             raise ValueError("model name contains unsupported characters")
         return value
 
+    @field_validator("effort")
+    @classmethod
+    def _valid_effort(cls, value: str) -> str:
+        if not _EFFORT_RE.fullmatch(value):
+            raise ValueError("effort contains unsupported characters")
+        return value
+
 
 def _default_agents() -> dict[Role, RoleAgent]:
     return {
         Role.SELECTOR: RoleAgent(),
         Role.REFINER: RoleAgent(),
-        Role.REVIEWER: RoleAgent(effort=Effort.HIGH),
+        Role.REVIEWER: RoleAgent(effort=DEFAULT_REVIEWER_EFFORT),
         Role.WORKER: RoleAgent(),
     }
 
@@ -180,7 +191,7 @@ class AppSettings(_Frozen):
     schedule: Schedule = Schedule()
     limits: Limits = Limits()
     agents: dict[Role, RoleAgent] = Field(default_factory=_default_agents)
-    claude_auth_mode: ClaudeAuthMode = ClaudeAuthMode.SUBSCRIPTION
+    backend_options: dict[str, dict[str, str]] = Field(default_factory=dict)
     labels: LabelNames = LabelNames()
     repo: RepoPolicy = RepoPolicy()
     runtime: RuntimeLimits = RuntimeLimits()
@@ -193,4 +204,19 @@ class AppSettings(_Frozen):
         missing = set(Role) - set(value)
         if missing:
             raise ValueError(f"missing agent config for: {sorted(missing)}")
+        return value
+
+    @field_validator("backend_options")
+    @classmethod
+    def _valid_options(cls, value: dict[str, dict[str, str]]) -> dict[str, dict[str, str]]:
+        if len(value) > _MAX_OPTIONS:
+            raise ValueError("too many backends in backend_options")
+        for backend, options in value.items():
+            _identifier(backend, "backend")
+            if len(options) > _MAX_OPTIONS:
+                raise ValueError(f"too many options for {backend}")
+            for key, option in options.items():
+                _identifier(key, "option name")
+                if not _OPTION_VALUE_RE.fullmatch(option):
+                    raise ValueError(f"{backend}.{key} contains unsupported characters")
         return value

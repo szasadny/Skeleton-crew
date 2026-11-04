@@ -7,20 +7,22 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _REPO_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,100}$")
 _LOGIN_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(\[bot\])?$")
+_CREDENTIAL_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 _MIN_SESSION_SECRET_CHARS = 32
 _MIN_REDACT_CHARS = 8
 
 
 class BootstrapConfig(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="SC_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_prefix="SC_", env_file=".env", env_nested_delimiter="__", extra="ignore"
+    )
 
     repo: str
     github_app_id: int
     github_app_private_key_path: Path
     github_app_installation_id: int | None = None
     github_bot_login: str | None = None
-    claude_oauth_token: SecretStr | None = None
-    anthropic_api_key: SecretStr | None = None
+    agent_credentials: dict[str, SecretStr] = {}
     ui_password_hash: SecretStr
     session_secret: SecretStr
     data_dir: Path = Path("/var/lib/skeleton-crew")
@@ -47,6 +49,14 @@ class BootstrapConfig(BaseSettings):
         if value is not None and not _LOGIN_RE.fullmatch(value):
             raise ValueError("invalid GitHub login")
         return value
+
+    @field_validator("agent_credentials")
+    @classmethod
+    def _valid_credential_names(cls, value: dict[str, SecretStr]) -> dict[str, SecretStr]:
+        names = {key.lower(): secret for key, secret in value.items()}
+        if len(names) != len(value) or not all(map(_CREDENTIAL_NAME_RE.fullmatch, names)):
+            raise ValueError("agent credential names must be distinct lowercase identifiers")
+        return names
 
     @field_validator("ui_password_hash")
     @classmethod
@@ -83,17 +93,8 @@ class BootstrapConfig(BaseSettings):
         return self.egress_allowlist_file or self.data_dir / "egress" / "allowlist.txt"
 
     def secret_values(self) -> list[str]:
-        secrets = [
-            self.claude_oauth_token,
-            self.anthropic_api_key,
-            self.ui_password_hash,
-            self.session_secret,
-        ]
-        return [
-            value
-            for s in secrets
-            if s is not None and len(value := s.get_secret_value()) >= _MIN_REDACT_CHARS
-        ]
+        secrets = [*self.agent_credentials.values(), self.ui_password_hash, self.session_secret]
+        return [value for s in secrets if len(value := s.get_secret_value()) >= _MIN_REDACT_CHARS]
 
 
 @cache

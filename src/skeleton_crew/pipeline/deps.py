@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from skeleton_crew.agents.base import AgentBackend
 from skeleton_crew.core.audit import AuditKind, AuditOutcome
 from skeleton_crew.core.config import BootstrapConfig
-from skeleton_crew.domain.settings import AgentBackendName, AppSettings, Role
+from skeleton_crew.domain.settings import AppSettings, Role
 from skeleton_crew.github.gateway import Gateway
 from skeleton_crew.github.write_guard import AuditSink
 from skeleton_crew.runtime.containers import ContainerRuntime
@@ -20,7 +20,7 @@ class PipelineDeps:
     sessionmaker: async_sessionmaker[AsyncSession]
     gateway_factory: Callable[[AppSettings, AuditSink], Gateway]
     runtime: ContainerRuntime
-    backend_factory: Callable[[AgentBackendName, AppSettings], AgentBackend]
+    backend_factory: Callable[[str, AppSettings], AgentBackend]
     secret_scanner: Callable[[bytes], Awaitable[list[str]]]
     clock: Callable[[], datetime]
     sleep: Callable[[float], Awaitable[None]]
@@ -32,7 +32,7 @@ class RunContext:
     settings: AppSettings
     run_id: int
     gateway: Gateway
-    backends: Mapping[AgentBackendName, AgentBackend]
+    backends: Mapping[str, AgentBackend]
     rules: Mapping[Role, str]
     deadline: datetime
     audit: AuditSink

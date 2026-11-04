@@ -73,7 +73,7 @@ def merge(current: AppSettings, updates: Mapping[str, object]) -> dict[str, Any]
         *parents, leaf = dotted.split(".")
         target = data
         for part in parents:
-            target = target[part]
+            target = target.setdefault(part, {})
         target[leaf] = value
     return data
 

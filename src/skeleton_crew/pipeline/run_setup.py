@@ -7,8 +7,9 @@ from zoneinfo import ZoneInfo
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from skeleton_crew.agents.base import AgentBackend
+from skeleton_crew.agents.registry import settings_problems
 from skeleton_crew.agents.rules import compose_rules, default_rules
-from skeleton_crew.domain.settings import AgentBackendName, AppSettings, Role
+from skeleton_crew.domain.settings import AppSettings, Role
 from skeleton_crew.domain.task_state import TaskKind
 from skeleton_crew.domain.trust_policy import IssueComment
 from skeleton_crew.github.gateway import (
@@ -46,9 +47,10 @@ class Quotas:
     fixes: int
 
 
-def make_backends(
-    deps: PipelineDeps, settings: AppSettings
-) -> dict[AgentBackendName, AgentBackend]:
+def make_backends(deps: PipelineDeps, settings: AppSettings) -> dict[str, AgentBackend]:
+    # Invalid agent settings get no backends; preflight_problems then fails the run.
+    if settings_problems(settings):
+        return {}
     names = sorted({agent.backend for agent in settings.agents.values()})
     return {name: deps.backend_factory(name, settings) for name in names}
 
@@ -57,16 +59,17 @@ async def preflight_problems(
     deps: PipelineDeps,
     settings: AppSettings,
     gw: Gateway,
-    backends: Mapping[AgentBackendName, AgentBackend],
+    backends: Mapping[str, AgentBackend],
 ) -> list[str]:
     config = deps.config
+    problems = settings_problems(settings)
     try:
         report = await check_repository(
             gw,
             base_branch=settings.repo.base_branch,
             allow_unprotected=settings.repo.allow_unprotected_base_branch,
         )
-        problems = list(report.problems)
+        problems += report.problems
         problems += await deps.runtime.health(
             image=config.agent_image,
             network=config.agent_network,
@@ -74,7 +77,7 @@ async def preflight_problems(
         )
     except Exception as exc:
         log.exception("preflight check failed")
-        return [f"preflight check failed: {type(exc).__name__}"]
+        return [*problems, f"preflight check failed: {type(exc).__name__}"]
     for backend in backends.values():
         problems += backend.credential_problems()
     return problems
@@ -88,7 +91,7 @@ async def load_required_checks(gw: Gateway, base_branch: str) -> frozenset[str]:
 
 
 async def apply_egress(
-    deps: PipelineDeps, settings: AppSettings, backends: Mapping[AgentBackendName, AgentBackend]
+    deps: PipelineDeps, settings: AppSettings, backends: Mapping[str, AgentBackend]
 ) -> None:
     domains = set(settings.runtime.egress_allowlist)
     for backend in backends.values():

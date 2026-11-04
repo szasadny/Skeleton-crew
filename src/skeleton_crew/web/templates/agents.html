@@ -7,20 +7,26 @@
   {{ m.csrf() }}
   {% for role in roles %}
   {% set p = "agents." ~ role.value ~ "." %}
+  {% set spec = specs.get(values.get(p ~ "backend")) %}
   <fieldset>
     <legend>{{ role.value | capitalize }}</legend>
     <div class="grid">
-      {{ m.select(p ~ "backend", "Backend", backends, values, errors) }}
-      {{ m.select(p ~ "model", "Model", models.get(values.get(p ~ "backend"), ()), values, errors) }}
-      {{ m.select(p ~ "effort", "Effort", efforts, values, errors) }}
+      {{ m.select(p ~ "backend", "Backend", specs.keys(), values, errors) }}
+      {{ m.select(p ~ "model", "Model", spec.models if spec else (), values, errors) }}
+      {{ m.select(p ~ "effort", "Effort", spec.efforts if spec else (), values, errors) }}
       {{ m.checkbox(p ~ "web_tools", "Web tools", values, errors) }}
     </div>
   </fieldset>
   {% endfor %}
+  {% for spec in backends if spec.options %}
   <fieldset>
-    <legend>Claude Code</legend>
-    {{ m.select("claude_auth_mode", "Auth mode", auth_modes, values, errors) }}
+    <legend>{{ spec.display_name }}</legend>
+    {% for option_name, option in spec.options.items() %}
+    {% set name = "backend_options." ~ spec.name ~ "." ~ option_name %}
+    {{ m.select(name, option_name | replace("_", " ") | capitalize, option.allowed, {name: values.get(name) or option.default}, errors) }}
+    {% endfor %}
   </fieldset>
+  {% endfor %}
   <button type="submit">Save</button>
 </form>
 {% endblock %}

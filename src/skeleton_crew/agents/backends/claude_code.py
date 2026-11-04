@@ -1,13 +1,28 @@
 import json
 import re
+from collections.abc import Mapping
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 from pydantic import SecretStr
 
-from skeleton_crew.agents.base import SessionOutcome, SessionRequest, failed_outcome, timeout_argv
+from skeleton_crew.agents.base import (
+    BackendSpec,
+    OptionSpec,
+    SessionOutcome,
+    SessionRequest,
+    failed_outcome,
+)
 from skeleton_crew.agents.output import extract_json_text
-from skeleton_crew.domain.settings import AgentBackendName, ClaudeAuthMode
+
+NAME = "claude_code"
+
+
+class AuthMode(StrEnum):
+    SUBSCRIPTION = "subscription"
+    API_KEY = "api_key"
+
 
 INTERACTIVE_TOOLS = (
     "AskUserQuestion",
@@ -38,6 +53,11 @@ MODELS = (
     "claude-haiku-5-5",
     "claude-fable-5-1",
 )
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
+_CREDENTIALS = {
+    AuthMode.SUBSCRIPTION: ("claude_oauth_token", "CLAUDE_CODE_OAUTH_TOKEN"),
+    AuthMode.API_KEY: ("anthropic_api_key", "ANTHROPIC_API_KEY"),
+}
 _BASE_ENV = {"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "DISABLE_AUTOUPDATER": "1"}
 _SUBTYPE_RE = re.compile(r"^[a-z_]{1,40}$")
 # The id is later passed to --resume, so it must never look like an option.
@@ -75,38 +95,25 @@ def _structured_output(result: dict[str, Any]) -> str | None:
 
 
 class ClaudeCodeBackend:
-    name = AgentBackendName.CLAUDE_CODE
+    name = NAME
 
-    def __init__(
-        self,
-        *,
-        auth_mode: ClaudeAuthMode,
-        oauth_token: SecretStr | None,
-        api_key: SecretStr | None,
-    ) -> None:
+    def __init__(self, *, auth_mode: AuthMode, credentials: Mapping[str, SecretStr]) -> None:
         self._auth_mode = auth_mode
-        self._oauth_token = oauth_token
-        self._api_key = api_key
+        self._credentials = dict(credentials)
 
     def egress_domains(self) -> tuple[str, ...]:
         return EGRESS_DOMAINS
 
     def _credential(self) -> tuple[str, str | None]:
-        if self._auth_mode is ClaudeAuthMode.API_KEY:
-            secret = self._api_key
-            var = "ANTHROPIC_API_KEY"
-        else:
-            secret = self._oauth_token
-            var = "CLAUDE_CODE_OAUTH_TOKEN"
+        name, var = _CREDENTIALS[self._auth_mode]
+        secret = self._credentials.get(name)
         value = secret.get_secret_value().strip() if secret is not None else ""
         return var, value or None
 
     def credential_problems(self) -> list[str]:
-        var, value = self._credential()
+        _, value = self._credential()
         if value is None:
-            setting = (
-                "SC_ANTHROPIC_API_KEY" if var == "ANTHROPIC_API_KEY" else "SC_CLAUDE_OAUTH_TOKEN"
-            )
+            setting = f"SC_AGENT_CREDENTIALS__{_CREDENTIALS[self._auth_mode][0].upper()}"
             return [f"Claude Code ({self._auth_mode.value} mode): {setting} is not set"]
         return []
 
@@ -116,7 +123,6 @@ class ClaudeCodeBackend:
 
     def command(self, req: SessionRequest) -> list[str]:
         argv = [
-            *timeout_argv(req.timeout_s),
             "claude",
             "-p",
             req.prompt,
@@ -126,7 +132,7 @@ class ClaudeCodeBackend:
             "--model",
             req.agent.model,
             "--effort",
-            req.agent.effort.value,
+            req.agent.effort,
             "--max-turns",
             str(req.max_turns),
             "--json-schema",
@@ -142,7 +148,7 @@ class ClaudeCodeBackend:
         ]
         if req.resume_session_id is not None:
             argv += ["--resume", req.resume_session_id]
-        if self._auth_mode is ClaudeAuthMode.API_KEY and req.max_budget_usd is not None:
+        if self._auth_mode is AuthMode.API_KEY and req.max_budget_usd is not None:
             argv += ["--max-budget-usd", str(req.max_budget_usd)]
         return argv
 
@@ -186,3 +192,23 @@ class ClaudeCodeBackend:
             timed_out=timed_out,
             stopped_early=stopped_early,
         )
+
+
+def _create(credentials: Mapping[str, SecretStr], options: Mapping[str, str]) -> ClaudeCodeBackend:
+    return ClaudeCodeBackend(auth_mode=AuthMode(options["auth_mode"]), credentials=credentials)
+
+
+SPEC = BackendSpec(
+    name=NAME,
+    display_name="Claude Code",
+    models=MODELS,
+    efforts=EFFORTS,
+    factory=_create,
+    options={
+        "auth_mode": OptionSpec(
+            allowed=tuple(mode.value for mode in AuthMode), default=AuthMode.SUBSCRIPTION.value
+        )
+    },
+    credentials=tuple(name for name, _ in _CREDENTIALS.values()),
+    web_tools=True,
+)

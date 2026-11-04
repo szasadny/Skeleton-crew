@@ -56,7 +56,7 @@ Rulesets need a public repository or a paid plan. On a free private repository, 
 2. Fill in `.env`:
    - `SC_REPO`: the target repository as `owner/name`.
    - `SC_GITHUB_APP_ID`, `SC_GITHUB_APP_PRIVATE_KEY_PATH` and optionally `SC_GITHUB_APP_INSTALLATION_ID`, `SC_GITHUB_BOT_LOGIN`.
-   - `SC_CLAUDE_OAUTH_TOKEN` (from `claude setup-token`) or `SC_ANTHROPIC_API_KEY`. Use a dedicated token.
+   - The agent credential, as `SC_AGENT_CREDENTIALS__<NAME>`. For Claude Code: `SC_AGENT_CREDENTIALS__CLAUDE_OAUTH_TOKEN` (from `claude setup-token`, auth mode `subscription`) or `SC_AGENT_CREDENTIALS__ANTHROPIC_API_KEY` (auth mode `api_key`, chosen on the Agents page). Use a dedicated token.
    - `SC_SESSION_SECRET`: output of `openssl rand -hex 32`.
    - `SC_SITE_ADDRESS`: the VM's LAN IP or hostname (the installer fills in the first IP it finds).
 3. Create the UI password hash and put it in `SC_UI_PASSWORD_HASH`, inside single quotes:
