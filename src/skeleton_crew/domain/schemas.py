@@ -13,6 +13,7 @@ from pydantic import (
     model_validator,
 )
 
+from skeleton_crew.domain.contest_policy import CheckId
 from skeleton_crew.domain.errors import PolicyViolation
 
 MAX_OUTPUT_CHARS = 200_000
@@ -56,7 +57,8 @@ class NewIssue(_AgentOutput):
     body: Text4000
 
 
-class CommentObjection(_AgentOutput):
+class Objection(_AgentOutput):
+    check: CheckId
     path: FindingPath
     line: int = Field(ge=1)
     reason: Text300
@@ -68,7 +70,7 @@ class WorkerResult(_AgentOutput):
     pr_title: PrTitle
     note: Text1500 | None = None
     new_issues: list[NewIssue] = Field(default_factory=list, max_length=10)
-    comment_objections: list[CommentObjection] = Field(default_factory=list, max_length=20)
+    objections: list[Objection] = Field(default_factory=list, max_length=20)
 
     @model_validator(mode="after")
     def _note_explains_non_done(self) -> Self:

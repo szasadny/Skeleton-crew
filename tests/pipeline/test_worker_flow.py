@@ -29,7 +29,12 @@ from skeleton_crew.runtime.containers import ExecResult
 BRANCH = "skeleton/1-add-greeting"
 GREETING = {"app.py": "def main() -> None:\n    print('hi')\n"}
 COMMENTED = {"app.py": "# Licensed under X.\n# See LICENSE.\n# All rights reserved.\nprint('hi')\n"}
-LICENSE_OBJECTION = {"path": "app.py", "line": 1, "reason": "License header the repo requires."}
+LICENSE_OBJECTION = {
+    "check": "comment_block",
+    "path": "app.py",
+    "line": 1,
+    "reason": "License header the repo requires.",
+}
 
 
 @pytest.fixture
@@ -369,16 +374,17 @@ async def test_long_comment_block_goes_back_to_the_worker_before_any_push(
     assert (task.state, task.policy_rounds) == (TaskState.DONE, 1)
     assert harness.actions() == ["push_branch", "open_pr", "set_review_check"]
     follow_up = harness.backend.prompts(Role.WORKER)[1]
-    assert "app.py:1: comment block of 3 lines, limit is 2" in follow_up.prompt
+    assert (
+        "app.py:1: comment block of 3 lines, limit is 2 (contestable as `comment_block`)"
+        in follow_up.prompt
+    )
     [push] = harness.writes("push_branch")
     assert git(harness.remote, "show", f"{push.args['sha']}:app.py").decode() == GREETING["app.py"]
 
 
 async def test_contested_comment_block_is_judged_by_the_reviewer(harness: Harness) -> None:
     harness.patches = [harness.patch(COMMENTED)]
-    harness.backend.script(
-        Role.WORKER, worker_json(), worker_json(comment_objections=[LICENSE_OBJECTION])
-    )
+    harness.backend.script(Role.WORKER, worker_json(), worker_json(objections=[LICENSE_OBJECTION]))
     harness.backend.script(Role.REVIEWER, review_json())
 
     run_id = await harness.run()
@@ -386,13 +392,16 @@ async def test_contested_comment_block_is_judged_by_the_reviewer(harness: Harnes
     [task] = await harness.tasks(run_id)
     assert (task.state, task.policy_rounds) == (TaskState.DONE, 1)
     [review] = harness.backend.prompts(Role.REVIEWER)
-    assert "app.py:1 (3 comment lines), worker reason: License header" in review.prompt
+    assert (
+        "[comment_block] app.py:1: comment block of 3 lines, limit is 2; "
+        "worker reason: License header" in review.prompt
+    )
     assert harness.actions() == ["push_branch", "open_pr", "set_review_check"]
 
 
 async def test_comment_block_contested_up_front_costs_no_policy_round(harness: Harness) -> None:
     harness.patches = [harness.patch(COMMENTED)]
-    harness.backend.script(Role.WORKER, worker_json(comment_objections=[LICENSE_OBJECTION]))
+    harness.backend.script(Role.WORKER, worker_json(objections=[LICENSE_OBJECTION]))
     harness.backend.script(Role.REVIEWER, review_json())
 
     run_id = await harness.run()
@@ -403,9 +412,7 @@ async def test_comment_block_contested_up_front_costs_no_policy_round(harness: H
 
 async def test_rejected_contest_goes_back_through_review(harness: Harness) -> None:
     harness.patches = [harness.patch(COMMENTED), harness.patch(GREETING)]
-    harness.backend.script(
-        Role.WORKER, worker_json(comment_objections=[LICENSE_OBJECTION]), worker_json()
-    )
+    harness.backend.script(Role.WORKER, worker_json(objections=[LICENSE_OBJECTION]), worker_json())
     unjustified = {"severity": "major", "path": "app.py", "line": 1, "message": "Not needed."}
     harness.backend.script(
         Role.REVIEWER, review_json("changes_requested", [unjustified]), review_json()
@@ -424,8 +431,8 @@ async def test_objection_on_another_line_does_not_lift_the_flag(harness: Harness
     wrong_line = {**LICENSE_OBJECTION, "line": 2}
     harness.backend.script(
         Role.WORKER,
-        worker_json(comment_objections=[wrong_line]),
-        worker_json(comment_objections=[wrong_line]),
+        worker_json(objections=[wrong_line]),
+        worker_json(objections=[wrong_line]),
     )
 
     run_id = await harness.run()
@@ -510,3 +517,33 @@ async def test_check_rounds_exhausted_escalates_without_push(harness: Harness) -
     assert task.state is TaskState.ESCALATED
     assert "check command still fails after 0 fix rounds" in str(task.escalation_reason)
     assert harness.actions() == ["comment", "change_labels"]
+
+
+async def test_objection_cannot_lift_a_hard_violation(harness: Harness) -> None:
+    harness.limits(max_review_rounds=1)
+    workflow = {".github/workflows/ci.yml": "on: push\n"}
+    harness.patches = [harness.patch(workflow)]
+    disguised = {**LICENSE_OBJECTION, "path": ".github/workflows/ci.yml"}
+    harness.backend.script(
+        Role.WORKER, worker_json(objections=[disguised]), worker_json(objections=[disguised])
+    )
+
+    run_id = await harness.run()
+
+    [task] = await harness.tasks(run_id)
+    assert task.state is TaskState.ESCALATED
+    assert "push_branch" not in harness.actions()
+    assert harness.backend.prompts(Role.REVIEWER) == []
+
+
+async def test_objection_for_an_unknown_check_is_invalid_output(harness: Harness) -> None:
+    harness.patches = [harness.patch(GREETING)]
+    unknown = {**LICENSE_OBJECTION, "check": "protected_path"}
+    harness.backend.script(Role.WORKER, worker_json(objections=[unknown]))
+
+    run_id = await harness.run()
+
+    [task] = await harness.tasks(run_id)
+    assert task.state is TaskState.ESCALATED
+    assert "invalid WorkerResult output" in str(task.escalation_reason)
+    assert "push_branch" not in harness.actions()

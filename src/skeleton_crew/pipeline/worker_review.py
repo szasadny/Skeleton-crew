@@ -51,7 +51,7 @@ async def review_change(
                 "comments": job.comments,
                 "worker_summary": worker_summary,
                 "diff_stats": diff_stats(check.changes),
-                "comment_flags": check.comment_flags,
+                "contested": check.contested,
                 "ci_state": ci_state,
             },
             output=ReviewResult,

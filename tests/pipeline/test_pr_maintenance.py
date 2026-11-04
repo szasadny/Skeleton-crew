@@ -255,7 +255,10 @@ async def test_comment_blocks_in_a_clean_merge_go_to_the_reviewer(harness: Harne
     task = await _only_task(harness, run_id)
     assert (task.kind, task.state) == (TaskKind.PR_UPDATE, TaskState.DONE)
     [review] = harness.backend.prompts(Role.REVIEWER)
-    assert "app.py:1 (3 comment lines), worker reason: none" in review.prompt
+    assert (
+        "[comment_block] app.py:1: comment block of 3 lines, limit is 2; worker reason: none"
+        in review.prompt
+    )
 
 
 async def test_unresolvable_conflict_escalates_the_issue(harness: Harness) -> None:

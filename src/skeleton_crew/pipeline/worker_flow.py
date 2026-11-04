@@ -5,6 +5,7 @@ from datetime import timedelta
 
 from skeleton_crew.agents.prompting import PromptName
 from skeleton_crew.domain.branch_policy import branch_name
+from skeleton_crew.domain.contestable_checks import describe_checks
 from skeleton_crew.domain.errors import PolicyViolation
 from skeleton_crew.domain.schemas import WorkerResult
 from skeleton_crew.domain.settings import Role
@@ -236,7 +237,7 @@ async def _code(job: WorkerJob, follow_up: FollowUp | None) -> WorkerResult:
     if reply.result is None:
         raise Escalation(f"worker session failed: {reply.error}")
     await _report_new_issues(job, reply.result)
-    job.comment_objections |= {(o.path, o.line): o.reason for o in reply.result.comment_objections}
+    job.objections |= {(o.check, o.path, o.line): o.reason for o in reply.result.objections}
     if reply.result.status != "done":
         raise Escalation(f"worker reported {reply.result.status}: {reply.result.note}")
     return reply.result
@@ -250,7 +251,7 @@ def _initial_context(job: WorkerJob) -> dict[str, object]:
         "branch": job.branch,
         "setup_command": settings.repo.setup_command,
         "check_command": settings.repo.check_command,
-        "max_comment_lines": settings.limits.max_code_comment_lines,
+        "contestable_checks": describe_checks(settings),
         "protected_paths": list(settings.repo.protected_paths),
         "max_new_issues": settings.limits.max_new_issues_per_worker,
     }

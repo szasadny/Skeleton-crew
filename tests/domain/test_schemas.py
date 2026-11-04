@@ -4,6 +4,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel, ValidationError
 
+from skeleton_crew.domain.contest_policy import CheckId
 from skeleton_crew.domain.errors import PolicyViolation
 from skeleton_crew.domain.schemas import (
     MAX_OUTPUT_CHARS,
@@ -71,13 +72,26 @@ def test_strings_are_stripped() -> None:
         worker(new_issues=[{"title": "a\nb", "body": "b"}]),
         worker(new_issues=[{"title": "t", "body": "x" * 4001}]),
         worker(new_issues="not a list"),
-        worker(comment_objections=[{"path": "a.py", "line": 0, "reason": "r"}]),
-        worker(comment_objections=[{"path": "a.py", "line": 1, "reason": ""}]),
-        worker(comment_objections=[{"path": "a.py", "line": 1, "reason": "x" * 301}]),
-        worker(comment_objections=[{"path": "a\nb.py", "line": 1, "reason": "r"}]),
-        worker(comment_objections=[{"path": "a.py", "line": 1}]),
-        worker(comment_objections=[{"path": "a.py", "line": 1, "reason": "r", "skip": True}]),
-        worker(comment_objections=[{"path": "a.py", "line": 1, "reason": "r"}] * 21),
+        worker(objections=[{"check": "comment_block", "path": "a.py", "line": 0, "reason": "r"}]),
+        worker(objections=[{"check": "comment_block", "path": "a.py", "line": 1, "reason": ""}]),
+        worker(
+            objections=[{"check": "comment_block", "path": "a.py", "line": 1, "reason": "x" * 301}]
+        ),
+        worker(
+            objections=[{"check": "comment_block", "path": "a\nb.py", "line": 1, "reason": "r"}]
+        ),
+        worker(objections=[{"check": "comment_block", "path": "a.py", "line": 1}]),
+        worker(objections=[{"path": "a.py", "line": 1, "reason": "r"}]),
+        worker(objections=[{"check": "protected_path", "path": "a.py", "line": 1, "reason": "r"}]),
+        worker(objections=[{"check": "COMMENT_BLOCK", "path": "a.py", "line": 1, "reason": "r"}]),
+        worker(
+            objections=[
+                {"check": "comment_block", "path": "a.py", "line": 1, "reason": "r", "skip": True}
+            ]
+        ),
+        worker(
+            objections=[{"check": "comment_block", "path": "a.py", "line": 1, "reason": "r"}] * 21
+        ),
         worker(summary=5),
         json.dumps({"status": "done", "summary": "s"}),
         "",
@@ -103,10 +117,17 @@ def test_worker_with_new_issues_at_limit_parses() -> None:
     assert len(parse_output(WorkerResult, worker(new_issues=issues)).new_issues) == 10
 
 
-def test_worker_comment_objections_parse() -> None:
-    raw = worker(comment_objections=[{"path": " app.py ", "line": 3, "reason": "License."}])
-    [objection] = parse_output(WorkerResult, raw).comment_objections
-    assert (objection.path, objection.line, objection.reason) == ("app.py", 3, "License.")
+def test_worker_objections_parse() -> None:
+    raw = worker(
+        objections=[{"check": "comment_block", "path": " app.py ", "line": 3, "reason": "License."}]
+    )
+    [objection] = parse_output(WorkerResult, raw).objections
+    assert (objection.check, objection.path, objection.line, objection.reason) == (
+        CheckId.COMMENT_BLOCK,
+        "app.py",
+        3,
+        "License.",
+    )
 
 
 def test_models_are_frozen() -> None:

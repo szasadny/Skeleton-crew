@@ -1,7 +1,7 @@
 import re
 from collections.abc import Collection, Iterable
 
-from skeleton_crew.domain.comment_policy import AddedLine
+from skeleton_crew.domain.diff_lines import AddedLine
 
 _MARKER_RE = re.compile(r"(<{7}|>{7})(?: |$)")
 

@@ -1,13 +1,15 @@
 from dataclasses import dataclass
 
-from skeleton_crew.domain.comment_policy import (
-    CommentFlag,
-    ContestedFlag,
-    added_lines,
-    contest_flags,
-    flag_long_comment_blocks,
+from skeleton_crew.domain.contest_policy import (
+    CheckInput,
+    Contest,
+    Finding,
+    contest,
     uncontested,
+    violation_text,
 )
+from skeleton_crew.domain.contestable_checks import run_checks
+from skeleton_crew.domain.diff_lines import added_lines
 from skeleton_crew.domain.diff_policy import FileChange, check_diff, parse_diff_summary
 from skeleton_crew.domain.errors import PolicyViolation
 from skeleton_crew.domain.merge_policy import check_resolution, conflict_markers
@@ -34,7 +36,7 @@ class PolicyCheck:
     violations: list[str]
     patch: bytes
     changes: list[FileChange]
-    comment_flags: list[ContestedFlag]
+    contested: list[Contest]
 
 
 @dataclass(frozen=True)
@@ -42,7 +44,7 @@ class _Inspection:
     violations: list[str]
     patch: bytes
     changes: list[FileChange]
-    comment_flags: list[CommentFlag]
+    contestable: list[Finding]
 
 
 async def read_agent_patch(job: WorkerJob) -> bytes:
@@ -84,12 +86,8 @@ async def check_change(job: WorkerJob, result: WorkerResult) -> PolicyCheck:
     except PolicyViolation as exc:
         return PolicyCheck(None, [str(exc)], patch, [], [])
     found = await _inspect(job, head, patch)
-    open_flags, contested = contest_flags(found.comment_flags, job.comment_objections)
-    limit = job.ctx.settings.limits.max_code_comment_lines
-    violations = found.violations + [
-        f"{f.path}:{f.start_line}: comment block of {f.length} lines, limit is {limit}"
-        for f in open_flags
-    ]
+    open_findings, contested = contest(found.contestable, job.objections)
+    violations = found.violations + [violation_text(f) for f in open_findings]
     if resolving:
         raw, numstat, _ = await diff_summary(repo, job.patch_base_sha, head)
         try:
@@ -103,7 +101,7 @@ async def check_change(job: WorkerJob, result: WorkerResult) -> PolicyCheck:
 async def inspect_commit(job: WorkerJob, head: str, agent_patch: bytes) -> PolicyCheck:
     found = await _inspect(job, head, agent_patch)
     return PolicyCheck(
-        head, found.violations, found.patch, found.changes, uncontested(found.comment_flags)
+        head, found.violations, found.patch, found.changes, uncontested(found.contestable)
     )
 
 
@@ -129,5 +127,5 @@ async def _inspect(job: WorkerJob, head: str, agent_patch: bytes) -> _Inspection
         ]
     if is_update:
         violations += conflict_markers(lines)
-    flags = flag_long_comment_blocks(lines, settings.limits.max_code_comment_lines)
-    return _Inspection(violations, patch, changes, flags)
+    contestable = run_checks(CheckInput(changes, lines, settings))
+    return _Inspection(violations, patch, changes, contestable)

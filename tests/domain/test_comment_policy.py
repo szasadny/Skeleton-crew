@@ -5,15 +5,15 @@ import pytest
 from gitrepo import GitRepo
 
 from skeleton_crew.domain.comment_policy import (
-    AddedLine,
     CommentFlag,
-    ContestedFlag,
-    added_lines,
-    contest_flags,
+    comment_block_findings,
+    describe_comment_blocks,
     flag_long_comment_blocks,
-    uncontested,
 )
+from skeleton_crew.domain.contest_policy import CheckId, CheckInput, Finding
+from skeleton_crew.domain.diff_lines import AddedLine, added_lines
 from skeleton_crew.domain.errors import PolicyViolation
+from skeleton_crew.domain.settings import AppSettings, Limits
 
 
 @pytest.fixture
@@ -297,26 +297,10 @@ def test_prose_files_are_not_flagged(path: str) -> None:
     assert flag_long_comment_blocks(lines, 2) == []
 
 
-FLAGS = [CommentFlag("app.py", 3, 4), CommentFlag("lib/x.py", 10, 5)]
-
-
-def test_contested_flag_carries_the_reason() -> None:
-    open_flags, contested = contest_flags(FLAGS, {("app.py", 3): "License header."})
-    assert open_flags == [CommentFlag("lib/x.py", 10, 5)]
-    assert contested == [ContestedFlag("app.py", 3, 4, "License header.")]
-
-
-@pytest.mark.parametrize(
-    "key", [("app.py", 4), ("APP.py", 3), ("other.py", 3), ("lib/x.py/../app.py", 3)]
-)
-def test_objection_must_name_the_exact_flag(key: tuple[str, int]) -> None:
-    open_flags, contested = contest_flags(FLAGS, {key: "Needed."})
-    assert (open_flags, contested) == (FLAGS, [])
-
-
-def test_unused_objections_are_ignored() -> None:
-    assert contest_flags([], {("app.py", 3): "Needed."}) == ([], [])
-
-
-def test_uncontested_flags_have_no_reason() -> None:
-    assert uncontested(FLAGS[:1]) == [ContestedFlag("app.py", 3, 4, None)]
+def test_comment_block_findings_use_the_configured_limit() -> None:
+    settings = AppSettings(limits=Limits(max_code_comment_lines=2))
+    added = lines("app.py", "# one", "# two", "# three", "code()")
+    assert comment_block_findings(CheckInput([], added, settings)) == [
+        Finding(CheckId.COMMENT_BLOCK, "app.py", 1, "comment block of 3 lines, limit is 2")
+    ]
+    assert describe_comment_blocks(settings) == "comment blocks longer than 2 lines"

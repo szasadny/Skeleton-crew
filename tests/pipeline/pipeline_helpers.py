@@ -170,7 +170,7 @@ def worker_json(
     pr_title: str = "Add greeting",
     note: str | None = None,
     new_issues: Sequence[dict[str, str]] = (),
-    comment_objections: Sequence[dict[str, object]] = (),
+    objections: Sequence[dict[str, object]] = (),
 ) -> str:
     return json.dumps(
         {
@@ -179,7 +179,7 @@ def worker_json(
             "pr_title": pr_title,
             "note": note,
             "new_issues": list(new_issues),
-            "comment_objections": list(comment_objections),
+            "objections": list(objections),
         }
     )
 

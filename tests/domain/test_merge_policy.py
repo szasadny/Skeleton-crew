@@ -1,4 +1,4 @@
-from skeleton_crew.domain.comment_policy import AddedLine
+from skeleton_crew.domain.diff_lines import AddedLine
 from skeleton_crew.domain.merge_policy import check_resolution, conflict_markers
 
 

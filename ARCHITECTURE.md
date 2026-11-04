@@ -25,7 +25,10 @@ Each row has exactly one correct place. Putting it anywhere else violates the co
 | Which label changes are allowed | `domain/label_policy.py` |
 | Branch naming or the allowed push target | `domain/branch_policy.py` |
 | Protected paths, diff size, file-mode rules | `domain/diff_policy.py` |
+| Parsing the added lines of a diff | `domain/diff_lines.py` |
 | Detecting long code comments in a diff | `domain/comment_policy.py` |
+| Findings, objections and contest matching | `domain/contest_policy.py` |
+| A contestable (grey-area) check | A pure function in its policy module, registered in `domain/contestable_checks.py` |
 | Sanitising agent text before it reaches GitHub (length cap, @mentions, closing keywords) | `domain/text_policy.py` |
 | Deciding whether issue content is trusted (pure rules) | `domain/trust_policy.py` |
 | A task, refine or run state, or a transition | `domain/task_state.py` |
@@ -147,7 +150,7 @@ The controller never runs git inside a directory an agent can write to: a plante
 2. `runtime/workspace` makes a plain local copy at `<data>/tasks/<id>/agent/` and mounts it at `/workspace`. If `setup_command` is set, the controller execs it in the worker container before the first session; failure escalates.
 3. After a session, the controller execs `check_command` in the container if set, except while resolving a merge conflict; a failure goes back to the worker with the output tail. Repo commands run as the agent user with no extra env, so they never see the model credential. Then it execs `git diff --binary <base>` **inside the container** (external diff and textconv disabled) and reads it as plain bytes.
 4. In the controller clone, with hooks and fsmonitor disabled, it applies the patch on `<base>` and creates a commit whose tree is "base + patch" and whose parent is the current branch tip. Commit metadata comes from the controller, not the agent.
-5. `diff_policy`, `comment_policy` and gitleaks run on that commit versus base. A long comment block is a violation unless the worker contested it in `comment_objections` with a reason, matched on path and first line; contested blocks go to the reviewer, who decides. Only then does the gateway push `skeleton/<n>-<slug>` and open or update the PR.
+5. `diff_policy`, gitleaks and the checks in `domain/contestable_checks.py` run on that commit versus base. A contestable finding is a violation unless the worker contested it in `objections` with a reason, matched on check, path and line; contested findings go to the reviewer, who decides. Hard checks are never contestable. Only then does the gateway push `skeleton/<n>-<slug>` and open or update the PR.
 
 Reviewer, refiner and selector sessions get a fresh read-only copy.
 
