@@ -51,7 +51,7 @@ Never break these, not even for debugging.
 ```text
 src/skeleton_crew/
   domain/     pure policy, state machine, schemas, settings model
-  core/       config, db, logging, audit enums, security primitives
+  core/       config, db, logging, audit enums, security primitives, git runner
   models/     ORM entities
   migrations/ Alembic env + versions/
   store/      async data access (settings, rules, runs, audit)

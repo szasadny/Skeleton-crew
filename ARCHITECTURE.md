@@ -35,6 +35,8 @@ Each row has exactly one correct place. Putting it anywhere else violates the co
 | The JSON an agent role must return, and its cross-checks | `domain/schemas.py` (Pydantic, `extra="forbid"`) |
 | A UI-editable setting | `domain/settings.py` |
 | Any GitHub API call, clone, fetch or push | `github/gateway.py`: the only GitHub entry point |
+| Git transport to GitHub (clone, fetch, ls-remote, push) and its auth-header env | `github/_git.py`, used only by the gateway |
+| Pure CI evaluation: check states, required checks, job-log formatting | `github/_ci.py`, re-exported by the gateway |
 | Fetching the data the trust rules need | `github/trust.py` |
 | Ruleset and App-permission checks | `github/preflight.py` |
 | The policy check → audit → dry-run sequence every GitHub write runs | `github/write_guard.py` (shared by the gateway and its test fake) |
@@ -53,6 +55,7 @@ Each row has exactly one correct place. Putting it anywhere else violates the co
 | Audit kinds and outcomes | `core/audit.py` |
 | Writing or listing audit events | `store/audit_store.py` |
 | Password hashing, session and CSRF helpers | `core/security.py` |
+| Running git on the controller: hardening flags, isolated env, error redaction | `core/git.py`, the only git runner |
 | A UI page or partial | `web/routes/<page>.py` + `web/templates/` |
 | A scheduled trigger | `scheduler/` |
 | A CLI command (`serve`, `hash-password`) | `cli.py` |
@@ -93,7 +96,7 @@ All code lives in `src/skeleton_crew/`.
 | Package | Responsibility | Must NOT |
 | --- | --- | --- |
 | `domain/` | Pure policy, state machine, schemas, settings model | Do I/O; import any other internal package |
-| `core/` | Config, DB engine/session, logging with redaction, audit enums, security primitives | Hold domain rules |
+| `core/` | Config, DB engine/session, logging with redaction, audit enums, security primitives, the hardened git runner | Hold domain rules |
 | `models/` | SQLAlchemy ORM entities | Hold logic |
 | `store/` | Async data access for settings, rules, runs, tasks | Hold business rules |
 | `github/` | Gateway (allow-listed operations only, **no merge**), trust data, preflight | Write without the `domain/` policy check and an audit event |
@@ -111,6 +114,8 @@ every package → core (core → domain only)
 ```
 
 `github/`, `runtime/` and `agents/` never import each other. `pipeline/` composes them. import-linter enforces this in CI.
+
+`github/_git.py` and `github/_ci.py` are private to the gateway: only `github/gateway.py` imports them, enforced by import-linter. Other packages import the CI names from `github/gateway.py`.
 
 `web/` reaches the run controller only through the `web/ports.py` `RunControl` protocol and may import `scheduler/` to re-apply the schedule. Its only `agents/` import is `agents.rules.default_rules`, for "reset to default" on the rules page.
 

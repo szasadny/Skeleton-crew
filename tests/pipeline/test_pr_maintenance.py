@@ -18,9 +18,9 @@ from pipeline_helpers import (
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from skeleton_crew.core.audit import AuditKind, AuditOutcome
+from skeleton_crew.core.git import GitCommandError
 from skeleton_crew.domain.settings import Role
 from skeleton_crew.domain.task_state import RunState, TaskKind, TaskState
-from skeleton_crew.github.gateway import GitCommandError
 from skeleton_crew.models.worker_task import WorkerTask
 from skeleton_crew.pipeline.sessions import WORKSPACE
 from skeleton_crew.store import runs_store
