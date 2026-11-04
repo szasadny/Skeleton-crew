@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from skeleton_crew.core.audit import AuditKind, AuditOutcome
 from skeleton_crew.domain.settings import Role
 from skeleton_crew.domain.task_state import RefineState, RunState, TaskState
-from skeleton_crew.github.gateway import CiState, CiStatus
+from skeleton_crew.github.gateway import BranchRule, CiState, CiStatus, RulesUnavailable
 from skeleton_crew.pipeline.run_controller import RunController
 from skeleton_crew.runtime.containers import ContainerHandle
 from skeleton_crew.store import runs_store
@@ -291,3 +291,66 @@ async def test_reconcile_on_startup_aborts_leftovers_and_comments(harness: Harne
     assert (await harness.run_row(dry.id)).state is RunState.ABORTED
     assert [w.args["issue"] for w in harness.writes("comment")] == [1]
     assert_no_forbidden_writes(harness)
+
+
+def _require_tests_check(harness: Harness) -> None:
+    rule = BranchRule(
+        "required_status_checks", 2, {"required_status_checks": [{"context": "tests"}]}
+    )
+    harness.gateway.rules.append(rule)
+
+
+async def test_ci_waits_for_the_checks_the_ruleset_requires(harness: Harness) -> None:
+    _require_tests_check(harness)
+    harness.add_ready_issue(1)
+    harness.patches = [harness.patch(GREETING)]
+    harness.backend.script(Role.SELECTOR, selection_json([1]))
+    harness.backend.script(Role.WORKER, worker_json())
+    harness.backend.script(Role.REVIEWER, review_json())
+
+    run_id = await harness.run()
+
+    [task] = await harness.tasks(run_id)
+    assert task.state is TaskState.DONE
+    assert harness.gateway.ci_required
+    assert set(harness.gateway.ci_required) == {frozenset({"tests"})}
+
+
+async def test_repo_without_rulesets_waits_for_no_required_checks(harness: Harness) -> None:
+    harness.repo(allow_unprotected_base_branch=True)
+    harness.gateway.failures["branch_rules"] = RulesUnavailable()
+    harness.add_ready_issue(1)
+    harness.patches = [harness.patch(GREETING)]
+    harness.backend.script(Role.SELECTOR, selection_json([1]))
+    harness.backend.script(Role.WORKER, worker_json())
+    harness.backend.script(Role.REVIEWER, review_json())
+
+    run_id = await harness.run()
+
+    assert (await harness.run_row(run_id)).state is RunState.COMPLETED
+    assert set(harness.gateway.ci_required) == {frozenset()}
+
+
+async def test_unreadable_required_checks_fail_the_run_closed(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness.add_ready_issue(1)
+    real = harness.gateway.branch_rules
+    calls = 0
+
+    async def flaky(branch: str) -> list[BranchRule]:
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            raise TimeoutError
+        return await real(branch)
+
+    monkeypatch.setattr(harness.gateway, "branch_rules", flaky)
+
+    run_id = await harness.run()
+
+    run = await harness.run_row(run_id)
+    assert run.state is RunState.PREFLIGHT_FAILED
+    assert "required checks could not be read" in str(run.note)
+    assert harness.runtime.started == []
+    assert harness.gateway.writes == []

@@ -32,11 +32,16 @@ class WorkerJob:
     sandbox: Sandbox | None = None
     session_id: str | None = None
     pr_requested: bool = False
+    continues_branch: bool = False
     new_issues: int = 0
     ci_rounds: int = 0
     review_rounds: int = 0
     policy_rounds: int = 0
     objections: dict[ObjectionKey, str] = field(default_factory=dict)
+
+    @property
+    def on_existing_branch(self) -> bool:
+        return self.kind is not TaskKind.ISSUE or self.continues_branch
 
 
 def review_root(paths: TaskPaths) -> Path:

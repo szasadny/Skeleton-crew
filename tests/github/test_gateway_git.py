@@ -85,7 +85,7 @@ async def test_clone_with_planted_credential_is_rejected(
     assert not (tmp_path / "clone").exists()
 
 
-async def test_push_branch_force_pushes_skeleton_branch(tmp_path: Path) -> None:
+async def test_push_branch_rewrites_the_branch_it_leased(tmp_path: Path) -> None:
     bare, _ = make_bare_remote(tmp_path)
     audit = AuditLog()
     gateway = make_gateway(audit, remote_url=lambda _: str(bare))
@@ -96,10 +96,46 @@ async def test_push_branch_force_pushes_skeleton_branch(tmp_path: Path) -> None:
     git(clone, "reset", "-q", "--hard", "HEAD~1")
     rewritten = commit_on_top(clone, "b.txt")
 
-    await gateway.push_branch(clone, "skeleton/4-fix", rewritten)
+    await gateway.push_branch(clone, "skeleton/4-fix", rewritten, expected_sha=first)
 
     assert git(bare, "rev-parse", "refs/heads/skeleton/4-fix") == rewritten
     assert audit.kinds() == [(AuditKind.GITHUB_WRITE, AuditOutcome.ALLOWED)] * 2
+
+
+async def test_push_without_lease_never_overwrites_an_existing_branch(tmp_path: Path) -> None:
+    bare, _ = make_bare_remote(tmp_path)
+    gateway = make_gateway(AuditLog(), remote_url=lambda _: str(bare))
+    clone = tmp_path / "clone"
+    await gateway.clone(clone)
+    human = commit_on_top(clone, "human.txt")
+    git(clone, "push", "-q", str(bare), f"{human}:refs/heads/skeleton/4-fix")
+    git(clone, "reset", "-q", "--hard", "HEAD~1")
+    ours = commit_on_top(clone, "a.txt")
+
+    with pytest.raises(GitCommandError):
+        await gateway.push_branch(clone, "skeleton/4-fix", ours)
+
+    assert git(bare, "rev-parse", "refs/heads/skeleton/4-fix") == human
+
+
+async def test_branch_head_reads_only_the_exact_branch(tmp_path: Path) -> None:
+    bare, _ = make_bare_remote(tmp_path)
+    gateway = make_gateway(AuditLog(), remote_url=lambda _: str(bare))
+    clone = tmp_path / "clone"
+    await gateway.clone(clone)
+    longer = commit_on_top(clone, "a.txt")
+    await gateway.push_branch(clone, "skeleton/4-fix-more", longer)
+
+    assert await gateway.branch_head("skeleton/4-fix-more") == longer
+    assert await gateway.branch_head("skeleton/4-fix") is None
+
+
+@pytest.mark.parametrize("branch", ["main", "--upload-pack=x", "skeleton/4-fix:refs/heads/main"])
+async def test_branch_head_only_accepts_skeleton_branches(tmp_path: Path, branch: str) -> None:
+    gateway = make_gateway(AuditLog(), remote_url=lambda _: str(tmp_path))
+
+    with pytest.raises(PolicyViolation):
+        await gateway.branch_head(branch)
 
 
 @pytest.mark.parametrize("branch", ["main", "develop", "skeleton/0-x", "skeleton/4-Fix", "x"])
@@ -165,7 +201,7 @@ async def test_lease_push_refuses_to_overwrite_someone_elses_commit(tmp_path: Pa
     ours = commit_on_top(clone, "a.txt")
     await gateway.push_branch(clone, "skeleton/4-fix", ours)
     human = commit_on_top(clone, "human.txt")
-    await gateway.push_branch(clone, "skeleton/4-fix", human)
+    await gateway.push_branch(clone, "skeleton/4-fix", human, expected_sha=ours)
     git(clone, "reset", "-q", "--hard", ours)
     update = commit_on_top(clone, "b.txt")
 

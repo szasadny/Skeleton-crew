@@ -17,6 +17,10 @@ INTERRUPTED_COMMENT = (
     "Any open skeleton PR for it may be incomplete."
 )
 MERGE_SUMMARY = "The controller merged the base branch into this PR."
+CONTINUED_SUMMARY = (
+    "Skeleton Crew continued from an existing branch for this issue "
+    "and merged the base branch into it."
+)
 CARRIED_REVIEW = "Merging the base branch left the change unchanged; the earlier review stands."
 REFINE_HEADER = "## Refined spec\n\n"
 REFINE_QUESTIONS_HEADER = "\n\n### Open questions\n\n"
@@ -30,6 +34,12 @@ def _cap(text: str, max_chars: int, reserved: int) -> str:
 def escalation_comment(reason: str, max_chars: int) -> str:
     prefix = f"{ESCALATION_INTRO}\n\nReason: "
     return prefix + _cap(reason, max_chars, len(prefix))
+
+
+def continued_comment(branch: str) -> str:
+    return (
+        f"Skeleton Crew found an existing branch `{branch}` for this issue and continued from it."
+    )
 
 
 def pr_title(agent_title: str) -> str:

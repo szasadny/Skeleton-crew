@@ -14,7 +14,6 @@ from skeleton_crew.domain.diff_policy import FileChange, check_diff, parse_diff_
 from skeleton_crew.domain.errors import PolicyViolation
 from skeleton_crew.domain.merge_policy import check_resolution, conflict_markers
 from skeleton_crew.domain.schemas import WorkerResult
-from skeleton_crew.domain.task_state import TaskKind
 from skeleton_crew.pipeline.escalation import Escalation
 from skeleton_crew.pipeline.sessions import AGENT_USER, WORKSPACE
 from skeleton_crew.pipeline.texts import COMMIT_AUTHOR, commit_message, merge_message
@@ -107,7 +106,7 @@ async def inspect_commit(job: WorkerJob, head: str, agent_patch: bytes) -> Polic
 
 async def _inspect(job: WorkerJob, head: str, agent_patch: bytes) -> _Inspection:
     repo = job.paths.controller_repo
-    is_update = job.kind is not TaskKind.ISSUE
+    is_update = job.on_existing_branch
     # The reviewer of an updated PR needs the whole change, not only the agent's last patch.
     patch = await binary_diff(repo, job.base_sha, head) if is_update else agent_patch
     raw, numstat, unified = await diff_summary(repo, job.base_sha, head)

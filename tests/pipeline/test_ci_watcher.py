@@ -25,6 +25,7 @@ class Watch:
         status = await wait_for_ci(
             self.gateway,
             SHA,
+            required=(),
             poll_s=60,
             timeout_s=600,
             grace_s=180,

@@ -10,10 +10,12 @@ from skeleton_crew.domain.errors import PolicyViolation
 from skeleton_crew.github.gateway import (
     LOGS_UNAVAILABLE,
     REVIEW_CHECK_NAME,
+    BranchRule,
     CiState,
     FailedJob,
     evaluate_ci,
     format_job_logs,
+    required_checks,
 )
 
 ISSUES = f"{API}/repos/o/r/issues"
@@ -211,6 +213,72 @@ def test_evaluate_ci(runs: list[Raw], statuses: list[Raw], expected: CiState) ->
     assert evaluate_ci(runs, statuses).state == expected
 
 
+def _workflow(name: str, status: str, conclusion: str | None) -> Raw:
+    return {"name": name, "status": status, "conclusion": conclusion, "html_url": "https://wf"}
+
+
+GREEN_LINT = [_run("lint", "completed", "success")]
+
+
+@pytest.mark.parametrize(
+    ("workflows", "required", "expected"),
+    [
+        ([], set(), CiState.SUCCESS),
+        ([_workflow("CI", "in_progress", None)], set(), CiState.PENDING),
+        ([_workflow("CI", "queued", None)], set(), CiState.PENDING),
+        ([_workflow("CI", "completed", "success")], set(), CiState.SUCCESS),
+        ([_workflow("CI", "completed", "startup_failure")], set(), CiState.FAILURE),
+        ([], {"lint"}, CiState.SUCCESS),
+        ([], {"lint", "tests"}, CiState.PENDING),
+        ([], {"ext"}, CiState.PENDING),
+    ],
+)
+def test_evaluate_ci_waits_for_workflows_and_required_checks(
+    workflows: list[Raw], required: set[str], expected: CiState
+) -> None:
+    assert evaluate_ci(GREEN_LINT, [], workflows, required).state == expected
+
+
+def test_required_status_counts_as_reported() -> None:
+    status = evaluate_ci([], [{"state": "success", "context": "ext"}], [], {"ext"})
+    assert status.state == CiState.SUCCESS
+
+
+def test_missing_required_check_is_pending_even_when_nothing_reported() -> None:
+    assert evaluate_ci([], [], [], {"tests"}).state == CiState.PENDING
+
+
+def test_failed_workflow_is_reported_only_without_failed_jobs() -> None:
+    failed_wf = [_workflow("CI", "completed", "failure")]
+    alone = evaluate_ci([], [], failed_wf)
+    with_job = evaluate_ci([_run("a", "completed", "failure")], [], failed_wf)
+
+    assert alone.failed_jobs == [FailedJob("CI", None, "https://wf")]
+    assert [j.name for j in with_job.failed_jobs] == ["a"]
+
+
+def test_required_checks_reads_ruleset_contexts_and_skips_the_review_check() -> None:
+    rules = [
+        BranchRule("pull_request", 1, {"required_approving_review_count": 1}),
+        BranchRule(
+            "required_status_checks",
+            2,
+            {
+                "required_status_checks": [
+                    {"context": "tests", "integration_id": 15368},
+                    {"context": REVIEW_CHECK_NAME},
+                    {"context": ""},
+                    {"context": 7},
+                    "lint",
+                ]
+            },
+        ),
+        BranchRule("required_status_checks", 3, {"required_status_checks": "lint"}),
+        BranchRule("required_status_checks", 4, {}),
+    ]
+    assert required_checks(rules) == {"tests"}
+
+
 def test_failed_jobs_carry_job_id_only_for_actions() -> None:
     status = evaluate_ci(
         [_run("a", "completed", "failure"), _run("b", "completed", "failure", slug="circleci")],
@@ -240,11 +308,36 @@ async def test_ci_status_paginates_check_runs_and_statuses() -> None:
     respx.get(f"{API}/repos/o/r/commits/{SHA}/status").mock(
         return_value=httpx.Response(200, json={"state": "pending", "statuses": []})
     )
+    workflows = respx.get(f"{API}/repos/o/r/actions/runs", params={"head_sha": SHA}).mock(
+        return_value=httpx.Response(200, json={"total_count": 0, "workflow_runs": []})
+    )
 
     status = await make_gateway(AuditLog()).ci_status(SHA)
 
     assert status.state == CiState.FAILURE
     assert [j.name for j in status.failed_jobs] == ["b"]
+    assert workflows.called
+
+
+@respx.mock
+async def test_ci_status_waits_for_workflow_runs_and_required_checks() -> None:
+    respx.get(f"{API}/repos/o/r/commits/{SHA}/check-runs").mock(
+        return_value=httpx.Response(
+            200, json={"total_count": 1, "check_runs": [_run("lint", "completed", "success")]}
+        )
+    )
+    respx.get(f"{API}/repos/o/r/commits/{SHA}/status").mock(
+        return_value=httpx.Response(200, json={"state": "success", "statuses": []})
+    )
+    respx.get(f"{API}/repos/o/r/actions/runs", params={"head_sha": SHA}).mock(
+        return_value=httpx.Response(
+            200, json={"total_count": 1, "workflow_runs": [_workflow("CI", "completed", "success")]}
+        )
+    )
+    gateway = make_gateway(AuditLog())
+
+    assert (await gateway.ci_status(SHA)).state == CiState.SUCCESS
+    assert (await gateway.ci_status(SHA, {"lint", "tests"})).state == CiState.PENDING
 
 
 async def test_ci_status_rejects_non_sha_refs() -> None:

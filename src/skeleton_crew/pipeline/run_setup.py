@@ -11,7 +11,13 @@ from skeleton_crew.agents.rules import compose_rules, default_rules
 from skeleton_crew.domain.settings import AgentBackendName, AppSettings, Role
 from skeleton_crew.domain.task_state import TaskKind
 from skeleton_crew.domain.trust_policy import IssueComment
-from skeleton_crew.github.gateway import Gateway, IssueRef, PullRef
+from skeleton_crew.github.gateway import (
+    Gateway,
+    IssueRef,
+    PullRef,
+    RulesUnavailable,
+    required_checks,
+)
 from skeleton_crew.github.preflight import check_repository
 from skeleton_crew.github.trust import trusted_issues
 from skeleton_crew.pipeline.deps import PipelineDeps
@@ -72,6 +78,13 @@ async def preflight_problems(
     for backend in backends.values():
         problems += backend.credential_problems()
     return problems
+
+
+async def load_required_checks(gw: Gateway, base_branch: str) -> frozenset[str]:
+    try:
+        return required_checks(await gw.branch_rules(base_branch))
+    except RulesUnavailable:
+        return frozenset()
 
 
 async def apply_egress(

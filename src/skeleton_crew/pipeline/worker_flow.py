@@ -19,6 +19,12 @@ from skeleton_crew.pipeline.repo_commands import run_repo_command
 from skeleton_crew.pipeline.sessions import remove_sandbox, run_agent, start_sandbox
 from skeleton_crew.pipeline.task_record import WorkerTaskRecord
 from skeleton_crew.pipeline.texts import (
+    CARRIED_REVIEW,
+    COMMIT_AUTHOR,
+    CONTINUED_SUMMARY,
+    MERGE_SUMMARY,
+    continued_comment,
+    merge_message,
     new_issue_text,
     pr_body,
     pr_title,
@@ -26,13 +32,22 @@ from skeleton_crew.pipeline.texts import (
     review_text,
 )
 from skeleton_crew.pipeline.worker_job import WorkerJob, remove_work_dirs
-from skeleton_crew.pipeline.worker_policy import PolicyCheck, check_change
+from skeleton_crew.pipeline.worker_policy import PolicyCheck, check_change, inspect_commit
 from skeleton_crew.pipeline.worker_review import review_change
-from skeleton_crew.runtime.workspace import checkout_commit, make_agent_copy, task_paths
+from skeleton_crew.runtime.workspace import (
+    checkout_commit,
+    commit_tree,
+    make_agent_copy,
+    merge_trees,
+    same_change,
+    task_paths,
+    tree_of,
+)
 
 CI_LOG_CHARS = 20_000
 REASON_CHARS = 1000
 DRY_RUN_CI = "skipped (dry run, nothing was pushed)"
+CONFLICTS_MESSAGE = "Unresolved merge (local only)"
 
 log = logging.getLogger(__name__)
 
@@ -126,7 +141,7 @@ async def _prepare(job: WorkerJob) -> None:
 
 async def _start_worker_sandbox(job: WorkerJob) -> None:
     ctx, paths = job.ctx, job.paths
-    if job.kind is not TaskKind.ISSUE:
+    if job.on_existing_branch:
         await checkout_commit(paths.controller_repo, job.patch_base_sha)
     await asyncio.to_thread(make_agent_copy, paths)
     job.sandbox = await start_sandbox(
@@ -147,8 +162,71 @@ async def _start_worker_sandbox(job: WorkerJob) -> None:
 
 
 async def _work(job: WorkerJob) -> None:
-    await _prepare(job)
-    await iterate(job, None)
+    head = await job.ctx.gateway.branch_head(job.branch)
+    if head is None:
+        await _prepare(job)
+        await iterate(job, None)
+        return
+    job.remote_sha, job.continues_branch = head, True
+    await job.record.fire(TaskEvent.PREPARED, branch=job.branch)
+    await update_branch(job, reviewed=False)
+
+
+async def update_branch(job: WorkerJob, reviewed: bool) -> None:
+    ctx, repo = job.ctx, job.paths.controller_repo
+    base = await ctx.gateway.clone(repo)
+    head = await ctx.gateway.fetch_branch(repo, job.branch)
+    if head != job.remote_sha:
+        raise Skip("the branch changed while the update was prepared")
+    job.base_sha = base
+    attempt = await merge_trees(repo, head, base)
+    if job.continues_branch and attempt.tree == await tree_of(repo, base):
+        job.continues_branch = False
+        job.patch_base_sha = job.tip_sha = base
+        await _start_worker_sandbox(job)
+        await job.record.fire(TaskEvent.PREPARED, base_sha=base)
+        await iterate(job, None)
+        return
+    if job.continues_branch:
+        await ctx.gateway.comment(job.issue.number, continued_comment(job.branch))
+    if attempt.conflicts:
+        job.patch_base_sha = await commit_tree(
+            repo, tree=attempt.tree, parents=[head], message=CONFLICTS_MESSAGE, author=COMMIT_AUTHOR
+        )
+        job.tip_sha, job.merge_parents, job.conflicts = head, (head, base), attempt.conflicts
+        await job.record.fire(TaskEvent.PREPARED, base_sha=base)
+        await iterate(job, None)
+        return
+    if job.continues_branch and attempt.tree == await tree_of(repo, head):
+        merged = head
+    else:
+        merged = await commit_tree(
+            repo,
+            tree=attempt.tree,
+            parents=[head, base],
+            message=merge_message(ctx.settings.repo.base_branch, job.branch),
+            author=COMMIT_AUTHOR,
+        )
+    job.patch_base_sha = job.tip_sha = merged
+    await job.record.fire(TaskEvent.PREPARED, base_sha=base)
+    await job.record.fire(TaskEvent.CODE_DONE)
+    check = await inspect_commit(job, merged, b"")
+    if check.violations:
+        raise Escalation(f"merging the base branch breaks policy: {'; '.join(check.violations)}")
+    await job.record.fire(TaskEvent.POLICY_PASSED)
+    await publish(job, None, merged)
+    ci_state, follow_up = await await_ci(job, merged)
+    if follow_up is None:
+        await job.record.fire(TaskEvent.CI_PASSED)
+        if reviewed and await same_change(repo, old_head=head, base_sha=base, new_head=merged):
+            await ctx.gateway.set_review_check(sha=merged, success=True, summary=CARRIED_REVIEW)
+            await job.record.fire(TaskEvent.REVIEW_APPROVED)
+            return
+        summary = CONTINUED_SUMMARY if job.continues_branch else MERGE_SUMMARY
+        follow_up = await review(job, check, summary, ci_state)
+        if follow_up is None:
+            return
+    await iterate(job, follow_up)
 
 
 async def iterate(job: WorkerJob, follow_up: FollowUp | None) -> None:
@@ -197,7 +275,7 @@ async def _run_checks(job: WorkerJob) -> FollowUp | None:
 def _prompt(job: WorkerJob, follow_up: FollowUp | None) -> tuple[PromptName, dict[str, object]]:
     if follow_up is not None and job.session_id is not None:
         return PromptName.WORKER_FOLLOWUP, {"kind": follow_up[0], "details": follow_up[1]}
-    if job.kind is not TaskKind.ISSUE and job.session_id is None:
+    if job.on_existing_branch and job.session_id is None:
         update: dict[str, object] = {
             "conflicts": list(job.conflicts),
             "kind": None,
@@ -283,13 +361,16 @@ async def publish(job: WorkerJob, result: WorkerResult | None, head_sha: str) ->
     job.remote_sha = head_sha
     # Recorded only after the push: PR maintenance trusts this as the head the controller owns.
     await job.record.update(head_sha=head_sha)
-    if job.pr_requested or result is None:
+    if job.pr_requested:
         return
     job.pr_requested = True
+    title, summary = (
+        (result.pr_title, result.summary) if result else (job.issue.title, CONTINUED_SUMMARY)
+    )
     pull = await gw.open_pr(
         branch=job.branch,
-        title=pr_title(result.pr_title),
-        body=pr_body(job.issue.number, result.summary, max_chars),
+        title=pr_title(title),
+        body=pr_body(job.issue.number, summary, max_chars),
     )
     if pull is not None:
         await job.record.update(pr_number=pull.number)
@@ -303,6 +384,7 @@ async def await_ci(job: WorkerJob, head_sha: str) -> tuple[str, FollowUp | None]
     status = await wait_for_ci(
         ctx.gateway,
         head_sha,
+        required=ctx.required_checks,
         poll_s=limits.ci_poll_seconds,
         timeout_s=limits.ci_timeout_minutes * 60.0,
         grace_s=limits.ci_grace_minutes * 60.0,

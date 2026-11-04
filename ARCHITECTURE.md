@@ -140,7 +140,7 @@ QUEUED → PREPARING → CODING → POLICY_CHECK → AWAITING_CI → REVIEWING �
 any non-terminal state → ESCALATED | FAILED | ABORTED
 ```
 
-While a task is `AWAITING_CI` its container stays alive, but no session runs, so waiting costs no tokens. A CI failure or a review finding resumes the same agent session. A failed `check_command` is a policy-check failure that counts against `max_ci_rounds`.
+While a task is `AWAITING_CI` its container stays alive, but no session runs, so waiting costs no tokens. CI counts as passed only when every GitHub Actions workflow run for the commit has completed and every check the base-branch ruleset requires has reported green; a required check that never appears ends in the CI timeout. A CI failure or a review finding resumes the same agent session. A failed `check_command` is a policy-check failure that counts against `max_ci_rounds`.
 
 ### 4.3 From agent work to PR
 
@@ -153,6 +153,8 @@ The controller never runs git inside a directory an agent can write to: a plante
 5. `diff_policy`, gitleaks and the checks in `domain/contestable_checks.py` run on that commit versus base. A contestable finding is a violation unless the worker contested it in `objections` with a reason, matched on check, path and line; contested findings go to the reviewer, who decides. Hard checks are never contestable. Only then does the gateway push `skeleton/<n>-<slug>` and open or update the PR.
 
 Reviewer, refiner and selector sessions get a fresh read-only copy.
+
+The first push of a new branch uses a lease that requires the branch not to exist. If `skeleton/<n>-<slug>` already exists when a worker starts (a PR closed without merging, or a crash before the PR was opened), the worker comments on the issue and continues from that branch: it goes through the clean-merge or conflict path of §4.4, always with a fresh review, and opens the PR. A branch without changes of its own is replaced by a normal worker run, with a lease on its old head.
 
 ### 4.4 PR maintenance
 

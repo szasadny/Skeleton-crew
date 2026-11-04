@@ -2,7 +2,7 @@ import asyncio
 import base64
 import os
 import shutil
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -144,7 +144,7 @@ class Gateway(Protocol):
     async def trust_data(self, issue_number: int) -> TrustData: ...
     async def permission_of(self, login: str) -> str: ...
     async def open_skeleton_pr_for(self, issue_number: int) -> PullRef | None: ...
-    async def ci_status(self, sha: str) -> CiStatus: ...
+    async def ci_status(self, sha: str, required: Collection[str] = ()) -> CiStatus: ...
     async def failed_job_logs(self, job_ids: Sequence[int], max_chars: int) -> str: ...
     async def branch_rules(self, branch: str) -> list[BranchRule]: ...
     async def ruleset_bypass(self, ruleset_id: int) -> str: ...
@@ -157,6 +157,7 @@ class Gateway(Protocol):
     async def commits_behind(self, sha: str) -> int: ...
     async def clone(self, dest: Path) -> str: ...
     async def fetch_branch(self, repo_dir: Path, branch: str) -> str: ...
+    async def branch_head(self, branch: str) -> str | None: ...
     async def push_branch(
         self, repo_dir: Path, branch: str, sha: str, expected_sha: str | None = None
     ) -> None: ...
@@ -247,6 +248,16 @@ async def git_fetch(repo_dir: Path, url: str, branch: str, token: str | None) ->
     return (await run_git(["rev-parse", "FETCH_HEAD"], cwd=repo_dir, token=None)).strip()
 
 
+async def git_branch_head(url: str, branch: str, token: str | None) -> str | None:
+    ref = f"refs/heads/{branch}"
+    out = await run_git(["ls-remote", "--heads", "--", url, ref], cwd=None, token=token)
+    for line in out.splitlines():
+        sha, _, name = line.partition("\t")
+        if name == ref:
+            return sha
+    return None
+
+
 async def git_push(
     repo_dir: Path,
     url: str,
@@ -256,10 +267,10 @@ async def git_push(
     expected_sha: str | None = None,
 ) -> None:
     ref = f"refs/heads/{branch}"
-    # The lease makes GitHub refuse the push if anyone else moved the branch meanwhile.
-    force = "--force" if expected_sha is None else f"--force-with-lease={ref}:{expected_sha}"
+    # GitHub refuses the push if the branch moved meanwhile; an empty lease means it must not exist.
+    lease = f"--force-with-lease={ref}:{expected_sha or ''}"
     await run_git(
-        ["push", "--quiet", force, "--no-verify", url, f"{sha}:{ref}"],
+        ["push", "--quiet", lease, "--no-verify", url, f"{sha}:{ref}"],
         cwd=repo_dir,
         token=token,
     )
@@ -470,7 +481,7 @@ class GitHubGateway:
                 )
         return None
 
-    async def ci_status(self, sha: str) -> CiStatus:
+    async def ci_status(self, sha: str, required: Collection[str] = ()) -> CiStatus:
         check_sha(sha)
         rest = self._client.rest
         runs = rest.paginate(
@@ -489,7 +500,20 @@ class GitHubGateway:
             sha,
             per_page=_PER_PAGE,
         )
-        return evaluate_ci([r async for r in runs], [s async for s in statuses])
+        workflows = rest.paginate(
+            rest.actions.async_list_workflow_runs_for_repo,
+            _key_list("workflow_runs"),
+            self._owner,
+            self._name,
+            head_sha=sha,
+            per_page=_PER_PAGE,
+        )
+        return evaluate_ci(
+            [r async for r in runs],
+            [s async for s in statuses],
+            [w async for w in workflows],
+            required,
+        )
 
     async def failed_job_logs(self, job_ids: Sequence[int], max_chars: int) -> str:
         logs: list[tuple[int, str]] = []
@@ -680,6 +704,11 @@ class GitHubGateway:
         token = await self._token_provider()
         return await git_fetch(repo_dir, self._remote_url(self._repo), branch, token)
 
+    async def branch_head(self, branch: str) -> str | None:
+        check_push_target(branch, self._base_branch)
+        token = await self._token_provider()
+        return await git_branch_head(self._remote_url(self._repo), branch, token)
+
     async def push_branch(
         self, repo_dir: Path, branch: str, sha: str, expected_sha: str | None = None
     ) -> None:
@@ -715,10 +744,37 @@ def _run_failed(run: Mapping[str, Any]) -> FailedJob:
     )
 
 
+def required_checks(rules: Sequence[BranchRule]) -> frozenset[str]:
+    names: set[str] = set()
+    for rule in rules:
+        checks = rule.parameters.get("required_status_checks")
+        if rule.type == "required_status_checks" and isinstance(checks, list):
+            names |= {
+                c["context"]
+                for c in checks
+                if isinstance(c, Mapping) and isinstance(c.get("context"), str) and c["context"]
+            }
+    # The controller sets the review check only after CI, so waiting for it would never end.
+    return frozenset(names - {REVIEW_CHECK_NAME})
+
+
+def _workflow_failures(workflow_runs: Sequence[Mapping[str, Any]]) -> list[FailedJob]:
+    return [
+        FailedJob(str(w.get("name") or ""), None, str(w.get("html_url") or ""))
+        for w in workflow_runs
+        if w.get("status") == "completed" and w.get("conclusion") not in _GREEN_CONCLUSIONS
+    ]
+
+
 def evaluate_ci(
-    check_runs: Sequence[Mapping[str, Any]], statuses: Sequence[Mapping[str, Any]]
+    check_runs: Sequence[Mapping[str, Any]],
+    statuses: Sequence[Mapping[str, Any]],
+    workflow_runs: Sequence[Mapping[str, Any]] = (),
+    required: Collection[str] = (),
 ) -> CiStatus:
-    reported = pending = False
+    reported = bool(workflow_runs)
+    # A workflow run completes only after all its jobs, including ones that start late.
+    pending = any(w.get("status") != "completed" for w in workflow_runs)
     failed: list[FailedJob] = []
     for run in check_runs:
         if run.get("name") == REVIEW_CHECK_NAME:
@@ -739,9 +795,12 @@ def evaluate_ci(
                     str(status.get("context") or ""), None, str(status.get("target_url") or "")
                 )
             )
-    if not reported:
+    # Failed jobs already explain a failed workflow; this covers a workflow that failed to start.
+    failed = failed or _workflow_failures(workflow_runs)
+    seen = {r.get("name") for r in check_runs} | {s.get("context") for s in statuses}
+    if not reported and not required:
         return CiStatus(CiState.NONE, [])
-    if pending:
+    if pending or not set(required) <= seen:
         return CiStatus(CiState.PENDING, failed)
     if failed:
         return CiStatus(CiState.FAILURE, failed)

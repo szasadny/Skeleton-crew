@@ -36,6 +36,7 @@ class RunContext:
     rules: Mapping[Role, str]
     deadline: datetime
     audit: AuditSink
+    required_checks: frozenset[str]
 
 
 def audit_sink(sessionmaker: async_sessionmaker[AsyncSession], run_id: int | None) -> AuditSink:

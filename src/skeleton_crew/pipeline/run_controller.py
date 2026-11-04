@@ -27,6 +27,7 @@ from skeleton_crew.pipeline.run_setup import (
     OpenPr,
     apply_egress,
     find_candidates,
+    load_required_checks,
     load_rules,
     make_backends,
     preflight_problems,
@@ -146,6 +147,13 @@ class RunController:
         gw = deps.gateway_factory(settings, sink)
         backends = make_backends(deps, settings)
         problems = await preflight_problems(deps, settings, gw, backends)
+        required: frozenset[str] = frozenset()
+        if not problems:
+            try:
+                required = await load_required_checks(gw, settings.repo.base_branch)
+            except Exception as exc:
+                log.exception("required checks could not be read")
+                problems = [f"required checks could not be read: {type(exc).__name__}"]
         if not problems:
             try:
                 await apply_egress(deps, settings, backends)
@@ -172,6 +180,7 @@ class RunController:
             rules=rules,
             deadline=started + timedelta(hours=settings.schedule.window_hours),
             audit=sink,
+            required_checks=required,
         )
         candidates = await find_candidates(deps, settings, gw)
         async with asyncio.TaskGroup() as group:

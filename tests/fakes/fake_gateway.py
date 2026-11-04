@@ -1,4 +1,4 @@
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -17,6 +17,7 @@ from skeleton_crew.github.gateway import (
     PullRef,
     TrustData,
     format_job_logs,
+    git_branch_head,
     git_clone,
     git_fetch,
     git_push,
@@ -110,6 +111,7 @@ class FakeGitHubGateway:
         self.issues: dict[int, FakeIssue] = {}
         self.pulls: list[FakePull] = []
         self.ci: dict[str, list[CiStatus]] = {}
+        self.ci_required: list[frozenset[str]] = []
         self.job_logs: dict[int, str] = {}
         self.permissions: dict[str, str] = {MAINTAINER: "maintain"}
         self.rules: list[BranchRule] = [
@@ -194,9 +196,10 @@ class FakeGitHubGateway:
                 return pull.ref()
         return None
 
-    async def ci_status(self, sha: str) -> CiStatus:
+    async def ci_status(self, sha: str, required: Collection[str] = ()) -> CiStatus:
         check_sha(sha)
         self._maybe_fail("ci_status")
+        self.ci_required.append(frozenset(required))
         script = self.ci.get(sha)
         if not script:
             return CiStatus(CiState.NONE, [])
@@ -331,6 +334,13 @@ class FakeGitHubGateway:
         if self.push_remote is None:
             raise RuntimeError("FakeGitHubGateway.fetch_branch needs push_remote")
         return await git_fetch(repo_dir, str(self.push_remote), branch, None)
+
+    async def branch_head(self, branch: str) -> str | None:
+        check_push_target(branch, self.base_branch)
+        self._maybe_fail("branch_head")
+        if self.push_remote is None:
+            return None
+        return await git_branch_head(str(self.push_remote), branch, None)
 
     async def push_branch(
         self, repo_dir: Path, branch: str, sha: str, expected_sha: str | None = None

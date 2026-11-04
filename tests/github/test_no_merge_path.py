@@ -60,6 +60,7 @@ def test_gateway_exposes_no_merge_like_method() -> None:
         "ci_status",
         "commits_behind",
         "fetch_branch",
+        "branch_head",
         "failed_job_logs",
         "branch_rules",
         "ruleset_bypass",

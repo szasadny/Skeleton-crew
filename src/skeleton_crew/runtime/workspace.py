@@ -157,6 +157,14 @@ def _commit_tree(repo: Path, tree: str, parents: Sequence[str], message: str, au
     return commit.decode().strip()
 
 
+def _tree_of(repo: Path, sha: str) -> str:
+    return _git(repo, "rev-parse", "--verify", f"{sha}^{{tree}}").decode().strip()
+
+
+async def tree_of(controller_repo: Path, sha: str) -> str:
+    return await asyncio.to_thread(_tree_of, controller_repo, _check_sha(sha))
+
+
 def _commit_patch(
     repo: Path, patch: bytes, base_sha: str, parents: Sequence[str], message: str, author: str
 ) -> str:
@@ -171,8 +179,7 @@ def _commit_patch(
             raise PolicyViolation(f"patch does not apply: {exc}") from exc
         _git(repo, *apply, "-", stdin=patch, env=index)
         tree = _git(repo, "write-tree", env=index).decode().strip()
-    parent_tree = _git(repo, "rev-parse", "--verify", f"{parents[0]}^{{tree}}").decode().strip()
-    if tree == parent_tree:
+    if tree == _tree_of(repo, parents[0]):
         raise PolicyViolation("no changes")
     return _commit_tree(repo, tree, parents, message, author)
 

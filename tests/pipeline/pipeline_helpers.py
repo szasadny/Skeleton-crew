@@ -4,7 +4,7 @@ import os
 import shutil
 import subprocess
 from collections import defaultdict, deque
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -134,7 +134,8 @@ class PipelineGateway(FakeGitHubGateway):
         self._external_audit = audit
         return self
 
-    async def ci_status(self, sha: str) -> CiStatus:
+    async def ci_status(self, sha: str, required: Collection[str] = ()) -> CiStatus:
+        self.ci_required.append(frozenset(required))
         return self.ci_queue.pop(0) if len(self.ci_queue) > 1 else self.ci_queue[0]
 
 

@@ -1,4 +1,4 @@
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection
 from datetime import datetime, timedelta
 
 from skeleton_crew.github.gateway import CiState, CiStatus, Gateway
@@ -8,6 +8,7 @@ async def wait_for_ci(
     gw: Gateway,
     sha: str,
     *,
+    required: Collection[str],
     poll_s: float,
     timeout_s: float,
     grace_s: float,
@@ -18,7 +19,7 @@ async def wait_for_ci(
     deadline = started + timedelta(seconds=timeout_s)
     grace_end = started + timedelta(seconds=grace_s)
     while True:
-        status = await gw.ci_status(sha)
+        status = await gw.ci_status(sha, required)
         now = clock()
         if status.state in (CiState.SUCCESS, CiState.FAILURE):
             return status
