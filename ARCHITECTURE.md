@@ -51,7 +51,13 @@ Each row has exactly one correct place. Putting it anywhere else violates the co
 | A role prompt template | `agents/prompts/<role>.md.j2` |
 | A default work rule | `agents/rules/<role>.md` (seed for the UI-editable copy) |
 | Reading or writing settings, rules, runs, tasks | `store/` |
-| Orchestration of a run, worker, refine or CI wait | `pipeline/` |
+| Run orchestration: preflight order, selection, worker slots | `pipeline/run_controller.py`, setup steps in `pipeline/run_setup.py` |
+| Starting the worker for a new issue (fresh or existing branch) | `pipeline/worker_flow.py` |
+| The worker job loop: coding, repo checks, policy check, push, CI wait, review, escalation | `pipeline/job_engine.py` |
+| Worker job state (git SHAs, rounds, reviewer session, follow-up kinds) | `pipeline/worker_job.py` |
+| Merging the base branch into an existing branch (clean merge or conflict) | `pipeline/branch_update.py` |
+| Choosing and running PR maintenance jobs, fix budget | `pipeline/pr_maintenance.py` |
+| Refine flow, selector, CI wait | `pipeline/refine_flow.py`, `pipeline/selector.py`, `pipeline/ci_watcher.py` |
 | A bootstrap setting (secret, path, port, repo) | `core/config.py`, read from `.env` |
 | A table / ORM entity | `models/<entity>.py` + Alembic migration in `migrations/versions/` |
 | Audit kinds and outcomes | `core/audit.py` |
@@ -104,7 +110,7 @@ All code lives in `src/skeleton_crew/`.
 | `github/` | Gateway (allow-listed operations only, **no merge**), trust data, preflight | Write without the `domain/` policy check and an audit event |
 | `runtime/` | Containers, controller-side git work, egress, secret scan | Pass any GitHub credential into a container |
 | `agents/` | Backend interface, backends, session runner, prompts, default rules | Call GitHub; import `runtime/` (it receives an executor) |
-| `pipeline/` | Run controller, worker flow, PR maintenance, refine flow, CI watcher | Define policy of its own |
+| `pipeline/` | Run controller, worker flow, job engine, branch update, PR maintenance, refine flow, CI watcher | Define policy of its own |
 | `scheduler/` | Cron triggers from settings, manual "run now" | Contain run logic |
 | `web/` | FastAPI routes, Jinja2 templates, HTMX partials | Contain business logic |
 
@@ -140,14 +146,15 @@ every package → core (core → domain only)
 Source of truth: `domain/task_state.py`.
 
 ```text
-QUEUED → PREPARING → CODING → POLICY_CHECK → AWAITING_CI → REVIEWING → DONE
-                       ↑            │              │            │
-                       └────────────┴──────────────┴────────────┘
-              policy failed / CI failed / changes requested (until rounds run out)
-any non-terminal state → ESCALATED | FAILED | ABORTED
+        STARTED     PREPARED  CODE_DONE      POLICY_PASSED  CI_PASSED   REVIEW_APPROVED
+QUEUED ───────→ PREPARING ──→ CODING ──→ POLICY_CHECK ──→ AWAITING_CI ──→ REVIEWING ──→ DONE
+                                ↑            │                  │              │
+                                └────────────┴──────────────────┴──────────────┘
+                 POLICY_FAILED / CHECK_FAILED, CI_FAILED, REVIEW_CHANGES (until rounds run out)
+any non-terminal state → ESCALATED (ESCALATE) | FAILED (ERROR) | ABORTED (ABORT)
 ```
 
-While a task is `AWAITING_CI` its container stays alive, but no session runs, so waiting costs no tokens. CI counts as passed only when every GitHub Actions workflow run for the commit has completed and every check the base-branch ruleset requires has reported green; a required check that never appears ends in the CI timeout. A CI failure or a review finding resumes the same agent session. A failed `check_command` is a policy-check failure that counts against `max_ci_rounds`.
+While a task is `AWAITING_CI` its container stays alive, but no session runs, so waiting costs no tokens. CI counts as passed only when every GitHub Actions workflow run for the commit has completed and every check the base-branch ruleset requires has reported green; a required check that never appears ends in the CI timeout. A CI failure or a review finding resumes the same agent session. A failed `check_command` fires `CHECK_FAILED` and counts against `max_ci_rounds`; a policy violation fires `POLICY_FAILED` and counts against `max_review_rounds`. A clean merge of the base into a continued branch has no coding step: it goes from `CODING` straight to `POLICY_CHECK`.
 
 ### 4.3 From agent work to PR
 
@@ -165,13 +172,13 @@ The first push of a new branch uses a lease that requires the branch not to exis
 
 ### 4.4 PR maintenance
 
-`pipeline/pr_maintenance.py` resolves merge conflicts in open skeleton PRs while their issue still has `skeleton`.
+`pipeline/pr_maintenance.py` resolves merge conflicts in open skeleton PRs while their issue still has `skeleton`. The merge itself lives in `pipeline/branch_update.py`, shared with continued branches (§4.3); the job loop after it is `pipeline/job_engine.py`. PR maintenance runs even when the selector fails.
 
 1. A PR qualifies when its head is the last commit the controller pushed in a live run (`runs_store.last_pushed_task`) and it is behind the base branch. Any other head means a human took over; the PR is skipped with an audit event.
 2. The controller merges the base into the branch in its own clone with `git merge-tree`, so history is kept and nothing is rebased.
 3. **Clean merge**: the job stops without writes. A PR that is only behind stays as it is; GitHub merges it fine.
 4. **Conflict**: the conflicted tree becomes a local-only commit for the agent copy. The worker's patch on top of it becomes a merge commit with parents (old head, base). It may only touch conflicted files and must leave no conflict markers. Then CI and a fresh review follow, as for a new PR.
-5. A job that needs an agent becomes kind `pr_fix` and counts against `conflict_fixes_per_day`; a clean PR costs no quota. Failure escalates the issue as usual.
+5. A job with a conflict becomes kind `pr_fix` before the worker starts and counts against `conflict_fixes_per_day`; a clean PR costs no quota. Failure escalates the issue as usual.
 
 ---
 
@@ -184,7 +191,7 @@ SQLite in the data directory, with Alembic migrations applied at startup.
 | `SettingsRow` | One row holding the UI-editable settings as JSON, validated by `domain/settings.py` |
 | `RuleRevision` | Append-only history of each role's work rules; the newest revision is active |
 | `Run` | One daily or manual run: trigger, `dry_run`, state, timestamps |
-| `WorkerTask` | One issue in one run: kind (`issue`, `pr_update`, `pr_fix`), state, branch, PR, base and head SHA, session id, container id, round counters, cost |
+| `WorkerTask` | One issue in one run: kind (`issue`, `pr_update`, `pr_fix`), state, branch, PR, base and head SHA, session id, container id, round counters, cost, `note` (why it escalated, aborted or failed) |
 | `RefineTask` | One refine in one run: state, session id |
 | `AuditEvent` | Append-only: every GitHub write (allowed, blocked or dry-run), settings or rules change, kill switch |
 

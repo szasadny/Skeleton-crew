@@ -1,8 +1,9 @@
 import asyncio
 import logging
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
 from datetime import timedelta
+from functools import partial
 from typing import Literal
 
 from skeleton_crew.core.audit import AuditKind, AuditOutcome
@@ -14,22 +15,22 @@ from skeleton_crew.domain.task_state import (
     TaskKind,
     transition,
 )
-from skeleton_crew.domain.trust_policy import IssueComment
 from skeleton_crew.github.gateway import IssueRef
 from skeleton_crew.github.write_guard import AuditSink
 from skeleton_crew.pipeline.deps import PipelineDeps, RunContext, audit_sink
 from skeleton_crew.pipeline.escalation import escalate_issue
-from skeleton_crew.pipeline.pr_maintenance import FixBudget, PrUpdate, run_pr_update
+from skeleton_crew.pipeline.pr_maintenance import FixBudget, choose_pr_updates, run_pr_update
 from skeleton_crew.pipeline.refine_flow import run_refine
 from skeleton_crew.pipeline.run_setup import (
     Candidate,
+    Candidates,
     OpenPr,
+    Quotas,
     apply_egress,
     find_candidates,
     load_required_checks,
     load_rules,
-    make_backends,
-    preflight_problems,
+    preflight,
     remaining_quotas,
 )
 from skeleton_crew.pipeline.selector import select_issues
@@ -104,9 +105,7 @@ class RunController:
         async with self._deps.sessionmaker() as session:
             for task in await runs_store.non_terminal_worker_tasks(session):
                 state = transition(task.state, TaskEvent.ABORT)
-                await runs_store.update_worker_task(
-                    session, task.id, state=state, escalation_reason=note
-                )
+                await runs_store.update_worker_task(session, task.id, state=state, note=note)
                 run = await runs_store.get_run(session, task.run_id)
                 if run is not None and not run.dry_run:
                     live_issues.append(task.issue_number)
@@ -144,8 +143,8 @@ class RunController:
         deps = self._deps
         started = deps.clock()
         gw = deps.gateway_factory(settings, sink)
-        backends = make_backends(deps, settings)
-        problems = await preflight_problems(deps, settings, gw, backends)
+        checked = await preflight(deps, settings, gw)
+        problems, backends = checked.problems, checked.backends
         required: frozenset[str] = frozenset()
         if not problems:
             try:
@@ -184,11 +183,7 @@ class RunController:
         candidates = await find_candidates(deps, settings, gw)
         async with asyncio.TaskGroup() as group:
             group.create_task(self._refines(ctx, candidates.refine, quotas.refines))
-            workers = group.create_task(
-                self._workers(
-                    ctx, candidates.ready, quotas.issues, candidates.open_prs, quotas.fixes
-                )
-            )
+            workers = group.create_task(self._workers(ctx, candidates, quotas))
         note = workers.result()
         return (RunState.COMPLETED if note is None else RunState.FAILED), note
 
@@ -196,28 +191,31 @@ class RunController:
         return self._deps.clock() < ctx.deadline
 
     async def _refines(self, ctx: RunContext, candidates: Sequence[Candidate], quota: int) -> None:
-        for issue, comments in candidates[:quota]:
+        for candidate in candidates[:quota]:
             if not self._window_open(ctx):
                 return
+            number = candidate.issue.number
             async with self._deps.sessionmaker() as session:
-                task = await runs_store.add_refine_task(session, ctx.run_id, issue.number)
+                task = await runs_store.add_refine_task(session, ctx.run_id, number)
                 await session.commit()
-            await run_refine(ctx, task.id, issue, comments)
+            await run_refine(ctx, task.id, candidate.issue, candidate.comments)
 
-    async def _workers(
-        self,
-        ctx: RunContext,
-        candidates: Sequence[Candidate],
-        quota: int,
-        open_prs: Sequence[OpenPr],
-        fix_quota: int,
-    ) -> str | None:
+    async def _workers(self, ctx: RunContext, candidates: Candidates, quotas: Quotas) -> str | None:
+        picks, note = await self._select(ctx, candidates.ready, quotas.issues)
+        slots = asyncio.Semaphore(ctx.settings.limits.max_parallel_workers)
+        async with asyncio.TaskGroup() as group:
+            await self._start_pr_updates(ctx, group, slots, candidates.open_prs, quotas.fixes)
+            await self._start_issues(ctx, group, slots, picks)
+        return note
+
+    async def _select(
+        self, ctx: RunContext, candidates: Sequence[Candidate], quota: int
+    ) -> tuple[list[Candidate], str | None]:
         try:
             selection = await select_issues(ctx, candidates, quota)
         except Exception as exc:
             log.exception("selection failed")
-            return f"selection failed: {type(exc).__name__}: {exc}"
-        by_number = {issue.number: (issue, comments) for issue, comments in candidates}
+            return [], f"selection failed: {type(exc).__name__}: {exc}"
         for pick in selection.too_large:
             await self._escalate(
                 ctx, pick.issue_number, f"the selector judged the issue too large: {pick.reason}"
@@ -226,85 +224,56 @@ class RunController:
             await self._escalate(
                 ctx, pick.issue_number, f"the selector rejected the issue: {pick.reason}"
             )
-        slots = asyncio.Semaphore(ctx.settings.limits.max_parallel_workers)
+        by_number = {c.issue.number: c for c in candidates}
+        return [by_number[pick.issue_number] for pick in selection.picks], None
+
+    async def _start_pr_updates(
+        self,
+        ctx: RunContext,
+        group: asyncio.TaskGroup,
+        slots: asyncio.Semaphore,
+        open_prs: Sequence[OpenPr],
+        fix_quota: int,
+    ) -> None:
         budget = FixBudget(fix_quota)
-        async with asyncio.TaskGroup() as group:
-            for update in await self._pr_updates(ctx, open_prs):
-                await slots.acquire()
-                if not self._window_open(ctx) or budget.remaining <= 0:
-                    slots.release()
-                    break
-                budget.remaining -= 1
-                async with self._deps.sessionmaker() as session:
-                    task = await runs_store.add_worker_task(
-                        session,
-                        ctx.run_id,
-                        update.issue.number,
-                        update.issue.title[:256],
-                        TaskKind.PR_UPDATE,
-                    )
-                    await session.commit()
-                group.create_task(self._update_slot(slots, ctx, task.id, update, budget))
-            for pick in selection.picks:
-                await slots.acquire()
-                if not self._window_open(ctx):
-                    slots.release()
-                    break
-                issue, comments = by_number[pick.issue_number]
-                async with self._deps.sessionmaker() as session:
-                    task = await runs_store.add_worker_task(
-                        session, ctx.run_id, issue.number, issue.title[:256]
-                    )
-                    await session.commit()
-                group.create_task(self._worker_slot(slots, ctx, task.id, issue, comments))
-        return None
+        for pr in await choose_pr_updates(ctx, open_prs):
+            await slots.acquire()
+            if not self._window_open(ctx) or not budget.take():
+                slots.release()
+                return
+            task_id = await self._add_task(ctx, pr.issue, TaskKind.PR_UPDATE)
+            group.create_task(
+                self._in_slot(slots, partial(run_pr_update, ctx, task_id, pr, budget))
+            )
 
-    async def _worker_slot(
+    async def _start_issues(
         self,
-        slots: asyncio.Semaphore,
         ctx: RunContext,
-        task_id: int,
-        issue: IssueRef,
-        comments: Sequence[IssueComment],
-    ) -> None:
-        try:
-            await run_worker(ctx, task_id, issue, comments)
-        finally:
-            slots.release()
-
-    async def _pr_updates(self, ctx: RunContext, open_prs: Sequence[OpenPr]) -> list[PrUpdate]:
-        updates: list[PrUpdate] = []
-        for issue, comments, pull in open_prs:
-            async with self._deps.sessionmaker() as session:
-                last = await runs_store.last_pushed_task(session, issue.number)
-            if last is None or last.head_sha != pull.head_sha:
-                await ctx.audit(
-                    AuditKind.PR_UPDATE_SKIPPED,
-                    AuditOutcome.INFO,
-                    f"PR #{pull.number} has commits Skeleton Crew did not push",
-                    {"pr": pull.number, "issue": issue.number},
-                )
-                continue
-            try:
-                behind = await ctx.gateway.commits_behind(pull.head_sha)
-            except Exception:
-                log.exception("could not compare PR #%d with the base branch", pull.number)
-                continue
-            if behind > 0:
-                updates.append(PrUpdate(issue, comments, pull))
-        return updates
-
-    async def _update_slot(
-        self,
+        group: asyncio.TaskGroup,
         slots: asyncio.Semaphore,
-        ctx: RunContext,
-        task_id: int,
-        update: PrUpdate,
-        budget: FixBudget,
+        picks: Sequence[Candidate],
     ) -> None:
+        for pick in picks:
+            await slots.acquire()
+            if not self._window_open(ctx):
+                slots.release()
+                return
+            task_id = await self._add_task(ctx, pick.issue, TaskKind.ISSUE)
+            group.create_task(
+                self._in_slot(slots, partial(run_worker, ctx, task_id, pick.issue, pick.comments))
+            )
+
+    async def _add_task(self, ctx: RunContext, issue: IssueRef, kind: TaskKind) -> int:
+        async with self._deps.sessionmaker() as session:
+            task = await runs_store.add_worker_task(
+                session, ctx.run_id, issue.number, issue.title[:256], kind
+            )
+            await session.commit()
+        return task.id
+
+    async def _in_slot(self, slots: asyncio.Semaphore, work: Callable[[], Awaitable[None]]) -> None:
         try:
-            if not await run_pr_update(ctx, task_id, update):
-                budget.remaining += 1
+            await work()
         finally:
             slots.release()
 

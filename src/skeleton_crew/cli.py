@@ -19,7 +19,7 @@ from skeleton_crew.github.gateway import Gateway, GitHubGateway, make_github_cli
 from skeleton_crew.github.write_guard import AuditSink
 from skeleton_crew.pipeline.deps import PipelineDeps, audit_sink
 from skeleton_crew.pipeline.run_controller import RunController
-from skeleton_crew.pipeline.run_setup import make_backends, preflight_problems
+from skeleton_crew.pipeline.run_setup import preflight
 from skeleton_crew.runtime.containers import DockerRuntime
 from skeleton_crew.runtime.secret_scan import scan_patch
 from skeleton_crew.scheduler.scheduler import RunScheduler
@@ -114,7 +114,7 @@ async def _preflight(config: BootstrapConfig) -> list[str]:
         async with sessionmaker() as session:
             settings = await settings_store.load_settings(session)
         gateway = deps.gateway_factory(settings, audit_sink(sessionmaker, None))
-        return await preflight_problems(deps, settings, gateway, make_backends(deps, settings))
+        return (await preflight(deps, settings, gateway)).problems
     finally:
         await engine.dispose()
 

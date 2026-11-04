@@ -58,7 +58,7 @@ src/skeleton_crew/
   github/     gateway, trust gate, preflight
   runtime/    containers, workspace, egress
   agents/     backend interface, backends/ (claude_code, …), prompts/, rules/
-  pipeline/   run controller, worker/refine flows, CI watcher
+  pipeline/   run controller, worker flow, job engine, branch update, PR maintenance, refine, CI watcher
   scheduler/  cron triggers
   web/        routes, templates, static
   cli.py      serve, hash-password, preflight

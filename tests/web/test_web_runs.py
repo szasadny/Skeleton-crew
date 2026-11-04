@@ -31,7 +31,7 @@ async def _run_with_task(web: Web) -> tuple[Run, WorkerTask]:
             pr_number=42,
             ci_rounds=3,
             cost_usd=1.234,
-            escalation_reason="max CI rounds reached",
+            note="max CI rounds reached",
         )
         refine = await runs_store.add_refine_task(session, run.id, 99)
         await runs_store.update_refine_task(session, refine.id, state=RefineState.DONE)

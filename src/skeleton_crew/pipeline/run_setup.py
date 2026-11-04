@@ -29,8 +29,18 @@ COMMON_RULES = "common"
 
 log = logging.getLogger(__name__)
 
-type Candidate = tuple[IssueRef, Sequence[IssueComment]]
-type OpenPr = tuple[IssueRef, Sequence[IssueComment], PullRef]
+
+@dataclass(frozen=True)
+class Candidate:
+    issue: IssueRef
+    comments: Sequence[IssueComment]
+
+
+@dataclass(frozen=True)
+class OpenPr:
+    issue: IssueRef
+    comments: Sequence[IssueComment]
+    pull: PullRef
 
 
 @dataclass(frozen=True)
@@ -47,22 +57,32 @@ class Quotas:
     fixes: int
 
 
+@dataclass(frozen=True)
+class Preflight:
+    problems: list[str]
+    backends: dict[str, AgentBackend]
+
+
 def make_backends(deps: PipelineDeps, settings: AppSettings) -> dict[str, AgentBackend]:
-    # Invalid agent settings get no backends; preflight_problems then fails the run.
-    if settings_problems(settings):
-        return {}
     names = sorted({agent.backend for agent in settings.agents.values()})
     return {name: deps.backend_factory(name, settings) for name in names}
 
 
-async def preflight_problems(
-    deps: PipelineDeps,
-    settings: AppSettings,
-    gw: Gateway,
-    backends: Mapping[str, AgentBackend],
+async def preflight(deps: PipelineDeps, settings: AppSettings, gw: Gateway) -> Preflight:
+    problems = settings_problems(settings)
+    # Backends are built only from settings the registry accepts.
+    backends = {} if problems else make_backends(deps, settings)
+    problems += await _environment_problems(deps, settings, gw)
+    for backend in backends.values():
+        problems += backend.credential_problems()
+    return Preflight(problems, backends)
+
+
+async def _environment_problems(
+    deps: PipelineDeps, settings: AppSettings, gw: Gateway
 ) -> list[str]:
     config = deps.config
-    problems = settings_problems(settings)
+    problems: list[str] = []
     try:
         report = await check_repository(
             gw,
@@ -78,8 +98,6 @@ async def preflight_problems(
     except Exception as exc:
         log.exception("preflight check failed")
         return [*problems, f"preflight check failed: {type(exc).__name__}"]
-    for backend in backends.values():
-        problems += backend.credential_problems()
     return problems
 
 
@@ -118,11 +136,11 @@ async def find_candidates(deps: PipelineDeps, settings: AppSettings, gw: Gateway
             continue
         pull = await gw.open_skeleton_pr_for(issue.number)
         if pull is None:
-            ready.append((issue, comments))
+            ready.append(Candidate(issue, comments))
         else:
-            open_prs.append((issue, comments, pull))
-    refine: list[Candidate] = [
-        (issue, comments)
+            open_prs.append(OpenPr(issue, comments, pull))
+    refine = [
+        Candidate(issue, comments)
         for issue, comments in await trusted_issues(gw, labels.refine, trusted, bot)
         if not _has_label(issue, labels.hitl)
     ]

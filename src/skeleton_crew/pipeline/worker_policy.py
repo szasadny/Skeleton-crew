@@ -51,7 +51,7 @@ async def read_agent_patch(job: WorkerJob) -> bytes:
         raise RuntimeError("worker container is not running")
     result = await job.ctx.deps.runtime.exec(
         job.sandbox.handle,
-        agent_patch_argv(job.patch_base_sha),
+        agent_patch_argv(job.git.patch_base_sha),
         env={},
         cwd=WORKSPACE,
         user=AGENT_USER,
@@ -65,8 +65,8 @@ async def read_agent_patch(job: WorkerJob) -> bytes:
 
 async def check_change(job: WorkerJob, result: WorkerResult) -> PolicyCheck:
     patch = await read_agent_patch(job)
-    repo = job.paths.controller_repo
-    resolving = bool(job.merge_parents)
+    repo, git = job.paths.controller_repo, job.git
+    resolving = git.resolving_merge
     message = (
         merge_message(job.ctx.settings.repo.base_branch, job.branch)
         if resolving
@@ -76,11 +76,11 @@ async def check_change(job: WorkerJob, result: WorkerResult) -> PolicyCheck:
         head = await apply_agent_patch(
             repo,
             patch=patch,
-            base_sha=job.patch_base_sha,
-            parent_sha=job.merge_parents[0] if resolving else job.tip_sha,
+            base_sha=git.patch_base_sha,
+            parent_sha=git.merge_parents[0] if resolving else git.tip_sha,
             message=message,
             author=COMMIT_AUTHOR,
-            extra_parents=job.merge_parents[1:],
+            extra_parents=git.merge_parents[1:],
         )
     except PolicyViolation as exc:
         return PolicyCheck(None, [str(exc)], patch, [], [])
@@ -88,12 +88,12 @@ async def check_change(job: WorkerJob, result: WorkerResult) -> PolicyCheck:
     open_findings, contested = contest(found.contestable, job.objections)
     violations = found.violations + [violation_text(f) for f in open_findings]
     if resolving:
-        raw, numstat, _ = await diff_summary(repo, job.patch_base_sha, head)
+        raw, numstat, _ = await diff_summary(repo, git.patch_base_sha, head)
         try:
             touched = [c.path for c in parse_diff_summary(raw, numstat)]
         except PolicyViolation as exc:
             return PolicyCheck(head, [str(exc)], found.patch, [], [])
-        violations += check_resolution(touched, job.conflicts)
+        violations += check_resolution(touched, git.conflicts)
     return PolicyCheck(head, violations, found.patch, found.changes, contested)
 
 
@@ -105,11 +105,11 @@ async def inspect_commit(job: WorkerJob, head: str, agent_patch: bytes) -> Polic
 
 
 async def _inspect(job: WorkerJob, head: str, agent_patch: bytes) -> _Inspection:
-    repo = job.paths.controller_repo
+    repo, base = job.paths.controller_repo, job.git.base_sha
     is_update = job.on_existing_branch
     # The reviewer of an updated PR needs the whole change, not only the agent's last patch.
-    patch = await binary_diff(repo, job.base_sha, head) if is_update else agent_patch
-    raw, numstat, unified = await diff_summary(repo, job.base_sha, head)
+    patch = await binary_diff(repo, base, head) if is_update else agent_patch
+    raw, numstat, unified = await diff_summary(repo, base, head)
     try:
         changes = parse_diff_summary(raw, numstat)
         lines = added_lines(unified)

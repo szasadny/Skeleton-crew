@@ -23,10 +23,12 @@ class TaskKind(StrEnum):
 
 
 class TaskEvent(StrEnum):
+    STARTED = "started"
     PREPARED = "prepared"
     CODE_DONE = "code_done"
     POLICY_PASSED = "policy_passed"
     POLICY_FAILED = "policy_failed"
+    CHECK_FAILED = "check_failed"
     CI_PASSED = "ci_passed"
     CI_FAILED = "ci_failed"
     REVIEW_APPROVED = "review_approved"
@@ -59,11 +61,12 @@ TERMINAL_TASK_STATES = frozenset(
 TERMINAL_REFINE_STATES = frozenset({RefineState.DONE, RefineState.FAILED, RefineState.ABORTED})
 
 _TRANSITIONS: dict[tuple[TaskState, TaskEvent], TaskState] = {
-    (TaskState.QUEUED, TaskEvent.PREPARED): TaskState.PREPARING,
+    (TaskState.QUEUED, TaskEvent.STARTED): TaskState.PREPARING,
     (TaskState.PREPARING, TaskEvent.PREPARED): TaskState.CODING,
     (TaskState.CODING, TaskEvent.CODE_DONE): TaskState.POLICY_CHECK,
     (TaskState.POLICY_CHECK, TaskEvent.POLICY_PASSED): TaskState.AWAITING_CI,
     (TaskState.POLICY_CHECK, TaskEvent.POLICY_FAILED): TaskState.CODING,
+    (TaskState.POLICY_CHECK, TaskEvent.CHECK_FAILED): TaskState.CODING,
     (TaskState.AWAITING_CI, TaskEvent.CI_PASSED): TaskState.REVIEWING,
     (TaskState.AWAITING_CI, TaskEvent.CI_FAILED): TaskState.CODING,
     (TaskState.REVIEWING, TaskEvent.REVIEW_APPROVED): TaskState.DONE,

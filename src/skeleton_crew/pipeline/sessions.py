@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 import secrets
 import shutil
 from collections.abc import Mapping, Sequence
@@ -128,10 +129,15 @@ def container_executor(ctx: RunContext, handle: ContainerHandle) -> Executor:
     return execute
 
 
+def next_numbered(directory: Path, stem: str, suffix: str) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    pattern = re.compile(rf"{re.escape(stem)}-(\d+){re.escape(suffix)}", re.ASCII)
+    used = (int(m[1]) for path in directory.iterdir() if (m := pattern.fullmatch(path.name)))
+    return directory / f"{stem}-{max(used, default=0) + 1}{suffix}"
+
+
 def next_transcript(transcripts: Path, role: Role) -> Path:
-    transcripts.mkdir(parents=True, exist_ok=True)
-    count = sum(1 for _ in transcripts.glob(f"{role.value}-*.jsonl"))
-    return transcripts / f"{role.value}-{count + 1}.jsonl"
+    return next_numbered(transcripts, role.value, ".jsonl")
 
 
 async def run_agent[T: BaseModel](

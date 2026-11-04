@@ -4,13 +4,13 @@ import os
 import shutil
 import subprocess
 from collections import defaultdict, deque
-from collections.abc import Callable, Collection, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from fake_agent import ok_outcome
-from fake_gateway import FakeGitHubGateway, WriteRecord
+from fake_gateway import FakeGitHubGateway, FakePull, WriteRecord
 from fake_runtime import ExecCall, FakeRuntime, argv_starts_with, ok
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -18,6 +18,7 @@ from skeleton_crew.agents.base import AgentBackend, SessionOutcome, SessionReque
 from skeleton_crew.core.audit import AuditKind, AuditOutcome
 from skeleton_crew.core.config import BootstrapConfig
 from skeleton_crew.domain.settings import AppSettings, Limits, RepoPolicy, Role
+from skeleton_crew.domain.task_state import RunState, TaskState
 from skeleton_crew.github.gateway import CiState, CiStatus, Gateway
 from skeleton_crew.github.write_guard import AuditSink
 from skeleton_crew.models.refine_task import RefineTask
@@ -25,6 +26,7 @@ from skeleton_crew.models.run import Run
 from skeleton_crew.models.worker_task import WorkerTask
 from skeleton_crew.pipeline.deps import PipelineDeps
 from skeleton_crew.pipeline.run_controller import RunController
+from skeleton_crew.pipeline.sessions import WORKSPACE
 from skeleton_crew.runtime.containers import ExecResult
 from skeleton_crew.runtime.workspace import AGENT_PATCH_ARGV
 from skeleton_crew.store import audit_store, runs_store, settings_store
@@ -229,6 +231,7 @@ class Harness:
         self.gateway = PipelineGateway(source_repo=self.source, push_remote=self.remote)
         self.runtime = FakeRuntime()
         self.backend = ScriptedBackend()
+        self.backend_builds: list[str] = []
         self.clock = FakeClock()
         self.secret_findings: list[str] = []
         self.patches: list[bytes] = []
@@ -265,6 +268,7 @@ class Harness:
         await asyncio.sleep(0)
 
     def _backend(self, name: str, settings: AppSettings) -> AgentBackend:
+        self.backend_builds.append(name)
         return self.backend
 
     def deps(self) -> PipelineDeps:
@@ -360,3 +364,85 @@ def assert_no_forbidden_writes(harness: Harness) -> None:
     for call in harness.runtime.execs:
         if call.argv[0] != "fake-agent":
             assert MODEL_TOKEN not in call.env.values()
+
+
+BRANCH = "skeleton/1-add-greeting"
+HI = "def main() -> None:\n    print('hi')\n"
+HELLO = "def main() -> None:\n    print('hello')\n"
+BOTH = "def main() -> None:\n    print('hi')\n    print('hello')\n"
+
+
+def commit_files(repo: Path, files: Mapping[str, str], message: str) -> str:
+    for path, content in files.items():
+        (repo / path).write_text(content)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", message)
+    return git(repo, "rev-parse", "HEAD").decode().strip()
+
+
+async def open_pr(
+    h: Harness,
+    files: Mapping[str, str],
+    *,
+    state: TaskState = TaskState.DONE,
+    recorded_head: str | None = None,
+) -> str:
+    work = h.tmp_path / "branch-work"
+    git(h.tmp_path, "clone", "-q", str(h.source), str(work))
+    git(work, "checkout", "-q", "-b", BRANCH)
+    head = commit_files(work, files, "Add greeting")
+    git(work, "push", "-q", str(h.remote), f"HEAD:refs/heads/{BRANCH}")
+    h.gateway.pulls.append(FakePull(10, BRANCH, head))
+    h.gateway.behind[head] = 1
+    async with h.sessionmaker() as session:
+        run = await runs_store.create_run(session, "manual", False)
+        task = await runs_store.add_worker_task(session, run.id, 1, "Add greeting")
+        await runs_store.update_worker_task(
+            session, task.id, state=state, head_sha=recorded_head or head, branch=BRANCH
+        )
+        await runs_store.finish_run(session, run.id, RunState.COMPLETED)
+        await session.commit()
+    return head
+
+
+def advance_main(h: Harness, files: Mapping[str, str]) -> str:
+    return commit_files(h.source, files, "Change main")
+
+
+def parents_of(h: Harness, sha: str) -> list[str]:
+    return git(h.remote, "rev-list", "--parents", "-n", "1", sha).decode().split()[1:]
+
+
+def remote_file(h: Harness, sha: str, path: str) -> str:
+    return git(h.remote, "show", f"{sha}:{path}").decode()
+
+
+def workspace_editor(h: Harness, *rounds: Mapping[str, str]) -> None:
+    pending = list(rounds)
+
+    def patch(call: ExecCall) -> bytes:
+        spec = next(s for s in h.runtime.started if s.name == call.handle.name)
+        workspace = next(m.host_path for m in spec.mounts if m.container_path == WORKSPACE)
+        files = pending.pop(0) if len(pending) > 1 else pending[0]
+        for path, content in files.items():
+            (workspace / path).write_text(content)
+        git(workspace, "add", "-A")
+        return git(workspace, "diff", "--cached", "--binary", call.argv[-1])
+
+    h.patch_from_workspace = patch
+
+
+async def only_task(h: Harness, run_id: int) -> WorkerTask:
+    [task] = await h.tasks(run_id)
+    return task
+
+
+def push_branch_without_pr(h: Harness, files: Mapping[str, str]) -> str:
+    work = h.tmp_path / "left-over"
+    git(h.tmp_path, "clone", "-q", str(h.source), str(work))
+    if files:
+        commit_files(work, files, "Earlier work")
+    head = git(work, "rev-parse", "HEAD").decode().strip()
+    git(work, "push", "-q", str(h.remote), f"{head}:refs/heads/{BRANCH}")
+    h.backend.script(Role.SELECTOR, selection_json([1]))
+    return head

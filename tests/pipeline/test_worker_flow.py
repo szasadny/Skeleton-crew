@@ -239,7 +239,7 @@ async def test_failed_resumed_review_escalates_and_removes_the_reviewer(harness:
 
     [task] = await harness.tasks(run_id)
     assert task.state is TaskState.ESCALATED
-    assert "review session failed: session crashed" in str(task.escalation_reason)
+    assert "review session failed: session crashed" in str(task.note)
     assert len(harness.backend.prompts(Role.REVIEWER)) == 2
     assert not harness.runtime.running
 
@@ -255,7 +255,7 @@ async def test_review_rounds_exhausted_escalates(harness: Harness) -> None:
 
     [task] = await harness.tasks(run_id)
     assert task.state is TaskState.ESCALATED
-    assert "1 policy or review rounds" in str(task.escalation_reason)
+    assert "1 policy or review rounds" in str(task.note)
     assert harness.actions()[-2:] == ["comment", "change_labels"]
     labels = harness.writes("change_labels")
     assert [("change_labels", dict(w.args)) for w in labels] == escalation_writes()
@@ -353,7 +353,7 @@ async def test_invalid_worker_output_escalates(harness: Harness, output: str) ->
 
     [task] = await harness.tasks(run_id)
     assert task.state is TaskState.ESCALATED
-    assert "invalid WorkerResult" in str(task.escalation_reason)
+    assert "invalid WorkerResult" in str(task.note)
     assert harness.actions() == ["comment", "change_labels"]
 
 
@@ -364,7 +364,7 @@ async def test_failed_session_escalates(harness: Harness) -> None:
 
     [task] = await harness.tasks(run_id)
     assert task.state is TaskState.ESCALATED
-    assert "error_max_turns" in str(task.escalation_reason)
+    assert "error_max_turns" in str(task.note)
     assert len(harness.backend.prompts(Role.WORKER)) == 1
 
 
@@ -397,7 +397,7 @@ async def test_continues_are_capped_then_escalate(harness: Harness) -> None:
 
     [task] = await harness.tasks(run_id)
     assert task.state is TaskState.ESCALATED
-    assert "stopped early: hook_stopped" in str(task.escalation_reason)
+    assert "stopped early: hook_stopped" in str(task.note)
     assert len(harness.backend.prompts(Role.WORKER)) == 3
     assert harness.actions() == ["comment", "change_labels"]
 
@@ -427,7 +427,7 @@ async def test_worker_timeout_escalates(harness: Harness) -> None:
 
     [task] = await harness.tasks(run_id)
     assert task.state is TaskState.ESCALATED
-    assert "timed out" in str(task.escalation_reason)
+    assert "timed out" in str(task.note)
     assert harness.actions() == ["push_branch", "open_pr", "comment", "change_labels"]
     assert not harness.runtime.running
 
@@ -561,7 +561,7 @@ async def test_failed_setup_command_escalates_without_a_worker_session(
 
     [task] = await harness.tasks(run_id)
     assert task.state is TaskState.ESCALATED
-    assert "the setup command failed (exit 2)" in str(task.escalation_reason)
+    assert "the setup command failed (exit 2)" in str(task.note)
     assert harness.backend.prompts(Role.WORKER) == []
     [comment] = harness.writes("comment")
     assert "no such target" not in str(comment.args["body"])
@@ -599,7 +599,7 @@ async def test_check_rounds_exhausted_escalates_without_push(harness: Harness) -
 
     [task] = await harness.tasks(run_id)
     assert task.state is TaskState.ESCALATED
-    assert "check command still fails after 0 fix rounds" in str(task.escalation_reason)
+    assert "check command still fails after 0 fix rounds" in str(task.note)
     assert harness.actions() == ["comment", "change_labels"]
 
 
@@ -629,5 +629,5 @@ async def test_objection_for_an_unknown_check_is_invalid_output(harness: Harness
 
     [task] = await harness.tasks(run_id)
     assert task.state is TaskState.ESCALATED
-    assert "invalid WorkerResult output" in str(task.escalation_reason)
+    assert "invalid WorkerResult output" in str(task.note)
     assert "push_branch" not in harness.actions()

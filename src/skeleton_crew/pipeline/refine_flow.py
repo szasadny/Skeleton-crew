@@ -7,6 +7,7 @@ from skeleton_crew.domain.errors import PolicyViolation
 from skeleton_crew.domain.label_policy import refine_done_change
 from skeleton_crew.domain.schemas import RefineResult
 from skeleton_crew.domain.settings import Role
+from skeleton_crew.domain.task_keys import refine_key
 from skeleton_crew.domain.task_state import RefineState
 from skeleton_crew.domain.trust_policy import IssueComment
 from skeleton_crew.github.gateway import IssueRef
@@ -20,10 +21,6 @@ from skeleton_crew.runtime.workspace import task_paths
 ERROR_CHARS = 1000
 
 log = logging.getLogger(__name__)
-
-
-def refine_key(task_id: int) -> str:
-    return f"refine-{task_id}"
 
 
 async def run_refine(

@@ -29,11 +29,11 @@ def _prepare(job: WorkerJob, head_sha: str) -> None:
 
 
 async def _start(job: WorkerJob, check: PolicyCheck, head_sha: str) -> Sandbox:
-    root = review_root(job.paths)
-    await remove_sandbox(job.ctx, job.review_sandbox)
-    job.review_sandbox = None
+    root, reviewer = review_root(job.paths), job.reviewer
+    await remove_sandbox(job.ctx, reviewer.sandbox)
+    reviewer.sandbox = None
     await asyncio.to_thread(_prepare, job, head_sha)
-    job.review_sandbox = await start_sandbox(
+    reviewer.sandbox = await start_sandbox(
         job.ctx,
         task_key=job.key,
         role=Role.REVIEWER,
@@ -43,7 +43,7 @@ async def _start(job: WorkerJob, check: PolicyCheck, head_sha: str) -> Sandbox:
         transcripts=job.paths.transcripts,
         files={CHANGES_FILE: check.patch},
     )
-    return job.review_sandbox
+    return reviewer.sandbox
 
 
 async def _refresh(job: WorkerJob, check: PolicyCheck, head_sha: str, reviewed_sha: str) -> None:
@@ -66,9 +66,10 @@ async def review_change(
         "contested": check.contested,
         "ci_state": ci_state,
     }
-    sandbox, resume_id = job.review_sandbox, job.review_session_id
-    if sandbox is not None and resume_id is not None and job.reviewed_sha is not None:
-        await _refresh(job, check, head_sha, job.reviewed_sha)
+    reviewer = job.reviewer
+    sandbox, resume_id = reviewer.sandbox, reviewer.session_id
+    if sandbox is not None and resume_id is not None and reviewer.reviewed_sha is not None:
+        await _refresh(job, check, head_sha, reviewer.reviewed_sha)
         prompt = PromptName.REVIEWER_FOLLOWUP
     else:
         sandbox, resume_id = await _start(job, check, head_sha), None
@@ -86,6 +87,6 @@ async def review_change(
     await job.record.add_cost(reply.outcome.cost_usd)
     if reply.result is None:
         raise Escalation(f"review session failed: {reply.error}")
-    job.review_session_id = reply.outcome.session_id
-    job.reviewed_sha = head_sha
+    reviewer.session_id = reply.outcome.session_id
+    reviewer.reviewed_sha = head_sha
     return reply.result

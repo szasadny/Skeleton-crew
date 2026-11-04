@@ -1,9 +1,4 @@
-{% set intros = {
-  "ci_failed": "After the merge, CI fails. Fix the cause. Failing job logs:",
-  "review_changes": "After the merge, the reviewer requested changes. Address every finding:",
-  "policy_failed": "After the merge, your change violates repository policy and was rejected. Fix every violation:",
-  "check_failed": "After the merge, the repository checks fail. Fix the cause. Check output:",
-} %}
+{% set after_merge = true %}
 # Task: update a pull request
 
 Branch `{{ branch }}` implements the issue below. The controller merged `{{ base_branch }}` into it. Work on the current checkout in `/workspace`.
@@ -17,7 +12,7 @@ Resolve every conflict so that both the issue's change and the changes from `{{ 
 
 If other files must change too, for example tests that `{{ base_branch }}` changed, still finish the resolution and return `done`. CI runs next, and you get its results to fix the rest.
 {% else %}
-{{ intros[kind] }}
+{% include "_followup_intro.md.j2" %}
 
 {{ details | untrusted(kind ~ " details") }}
 {% endif %}

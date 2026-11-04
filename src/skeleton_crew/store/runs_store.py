@@ -35,7 +35,7 @@ _WORKER_TASK_FIELDS = frozenset(
         "review_rounds",
         "policy_rounds",
         "cost_usd",
-        "escalation_reason",
+        "note",
     }
 )
 _REFINE_TASK_FIELDS = frozenset({"state", "session_id", "cost_usd", "error"})

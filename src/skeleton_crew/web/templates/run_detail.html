@@ -14,7 +14,7 @@
 <h2>Worker tasks</h2>
 {% if tasks %}
 <table>
-  <thead><tr><th>Issue</th><th>Kind</th><th>State</th><th>PR</th><th>Rounds (CI / review / policy)</th><th>Cost</th><th>Escalation</th><th></th></tr></thead>
+  <thead><tr><th>Issue</th><th>Kind</th><th>State</th><th>PR</th><th>Rounds (CI / review / policy)</th><th>Cost</th><th>Note</th><th></th></tr></thead>
   <tbody>
   {% for task in tasks %}
   <tr>
@@ -24,7 +24,7 @@
     <td>{% if task.pr_number %}<a href="https://github.com/{{ repo }}/pull/{{ task.pr_number }}">#{{ task.pr_number }}</a>{% endif %}</td>
     <td>{{ task.ci_rounds }} / {{ task.review_rounds }} / {{ task.policy_rounds }}</td>
     <td>${{ "%.2f" | format(task.cost_usd) }}</td>
-    <td>{{ task.escalation_reason or "" }}</td>
+    <td>{{ task.note or "" }}</td>
     <td><a href="/runs/{{ run.id }}/transcripts/worker-{{ task.id }}">Transcripts</a></td>
   </tr>
   {% endfor %}
