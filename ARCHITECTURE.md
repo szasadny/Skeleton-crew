@@ -26,6 +26,7 @@ Each row has exactly one correct place. Putting it anywhere else violates the co
 | Branch naming, the allowed push target, whether an existing branch may be continued | `domain/branch_policy.py` |
 | Protected paths, diff size, file-mode rules | `domain/diff_policy.py` |
 | Parsing the added lines of a diff | `domain/diff_lines.py` |
+| Conflict-resolution rules (only conflicted files, no conflict markers) | `domain/merge_policy.py` |
 | Detecting long code comments in a diff | `domain/comment_policy.py` |
 | Task directory key formats (`worker-<id>`, `refine-<id>`, `run-<id>-selector`) | `domain/task_keys.py` |
 | Findings, objections and contest matching | `domain/contest_policy.py` |
@@ -48,14 +49,21 @@ Each row has exactly one correct place. Putting it anywhere else violates the co
 | Secret scanning of a patch (gitleaks) | `runtime/secret_scan.py` |
 | The agent backend interface and the session runner | `agents/base.py`, `agents/session.py` |
 | A specific agent CLI (argv, env, output parsing, its `BackendSpec`) | `agents/backends/<name>.py`, registered in `agents/registry.py` |
-| Checking agent settings against the backends (model, effort, options) | `agents/registry.py` (`settings_problems`) |
-| A role prompt template | `agents/prompts/<role>.md.j2` |
+| Checking agent settings against the backends (model, effort, options) | `agents/registry.py` (`field_problems`, `settings_problems`) |
+| A role prompt template | `agents/prompts/<role>.md.j2`, rendered by `agents/prompting.py` |
 | A default work rule | `agents/rules/<role>.md` (seed for the UI-editable copy) |
 | Reading or writing settings, rules, runs, tasks | `store/` |
+| Validating a work-rules revision (known key, non-empty, size cap) | `store/rules_store.py` |
 | Run orchestration: preflight order, selection, worker slots | `pipeline/run_controller.py`, setup steps in `pipeline/run_setup.py` |
 | Starting the worker for a new issue (fresh or existing branch) | `pipeline/worker_flow.py` |
-| The worker job loop: coding, repo checks, policy check, push, CI wait, review, escalation | `pipeline/job_engine.py` |
+| The worker job loop: coding, repo checks, push, CI wait, review rounds, job outcome | `pipeline/job_engine.py` |
 | Worker job state (git SHAs, rounds, reviewer session, follow-up kinds) | `pipeline/worker_job.py` |
+| Turning the worker's patch into a commit and running the policy checks on it | `pipeline/worker_policy.py` |
+| The reviewer session of a worker job | `pipeline/worker_review.py` |
+| Running `setup_command` and `check_command` in the worker container | `pipeline/repo_commands.py` |
+| Starting agent containers and running sessions, including continues | `pipeline/sessions.py` |
+| Escalating an issue (audit, comment, label swap) | `pipeline/escalation.py` |
+| Text the controller writes to GitHub (commit messages, PR body, comments) | `pipeline/texts.py` |
 | Merging the base branch into an existing branch (clean merge or conflict) | `pipeline/branch_update.py` |
 | Choosing PR maintenance jobs (ownership, mergeability) and running conflict fixes | `pipeline/pr_maintenance.py` |
 | Refine flow, selector, CI wait | `pipeline/refine_flow.py`, `pipeline/selector.py`, `pipeline/ci_watcher.py` |
@@ -86,7 +94,7 @@ Each row has exactly one correct place. Putting it anywhere else violates the co
 ## 2. Topology
 
 ```text
-VM (Ubuntu 24.04, Docker + Sysbox)
+VM (Ubuntu 24.04 or Debian 12, Docker + Sysbox)
 └─ docker compose
    ├─ caddy         TLS → web UI on the LAN IP
    ├─ controller    FastAPI + APScheduler + SQLite; only holder of the GitHub App key; docker.sock
@@ -107,11 +115,11 @@ All code lives in `src/skeleton_crew/`.
 | `domain/` | Pure policy, state machine, schemas, settings model | Do I/O; import any other internal package |
 | `core/` | Config, DB engine/session, logging with redaction, audit enums, security primitives, the hardened git runner | Hold domain rules |
 | `models/` | SQLAlchemy ORM entities | Hold logic |
-| `store/` | Async data access for settings, rules, runs, tasks | Hold business rules |
-| `github/` | Gateway (allow-listed operations only, **no merge**), trust data, preflight | Write without the `domain/` policy check and an audit event |
+| `store/` | Async data access for settings, rules, runs, tasks, audit | Hold business rules |
+| `github/` | Gateway (allow-listed operations only, **no merge**), its private git transport and CI evaluation, write guard, trust data, preflight | Write without the `domain/` policy check and an audit event |
 | `runtime/` | Containers, controller-side git work, egress, secret scan | Pass any GitHub credential into a container |
-| `agents/` | Backend interface, backends, session runner, prompts, default rules | Call GitHub; import `runtime/` (it receives an executor) |
-| `pipeline/` | Run controller, worker flow, job engine, branch update, PR maintenance, refine flow, CI watcher | Define policy of its own |
+| `agents/` | Backend interface, backend registry, backends, session runner, prompts, default rules | Call GitHub; import `runtime/` (it receives an executor) |
+| `pipeline/` | Run controller, worker flow, job engine, branch update, PR maintenance, refine flow, CI watcher, retention | Define policy of its own |
 | `scheduler/` | Cron triggers from settings, manual "run now" | Contain run logic |
 | `web/` | FastAPI routes, Jinja2 templates, HTMX partials | Contain business logic |
 
@@ -122,7 +130,7 @@ cli → web, scheduler → pipeline → github, runtime, agents, store → model
 every package → core (core → domain only)
 ```
 
-`github/`, `runtime/` and `agents/` never import each other. `pipeline/` composes them. import-linter enforces this in CI.
+`github/`, `runtime/`, `agents/` and `store/` never import each other. `pipeline/` composes them. import-linter enforces this in CI.
 
 `github/_git.py` and `github/_ci.py` are private to the gateway: only `github/gateway.py` imports them, enforced by import-linter. Other packages import the CI names from `github/gateway.py`.
 
@@ -134,8 +142,8 @@ every package → core (core → domain only)
 
 ### 4.1 Run flow
 
-1. **Preflight**: ruleset on `main` requires a PR plus ≥1 approval, and the App cannot bypass it (without any ruleset only when `allow_unprotected_base_branch` is on); the App lacks `workflows` and `administration` write; Docker, Sysbox, the agent image and the proxy are healthy; each configured backend has its credential; the kill switch is off. Any failure ends the run as `preflight_failed`.
-2. **Candidates**: open issues with the labels that pass the trust rules (`docs/labels.md` § Trust). Issues with an open skeleton PR go to PR maintenance instead.
+1. **Preflight**: a ruleset on the base branch requires a PR plus ≥1 approval, and the App cannot bypass it (without any ruleset only when `allow_unprotected_base_branch` is on); the App has the required permissions, no `workflows` permission and no `administration` write; the agent settings pass `agents/registry.py`; Docker, Sysbox, the agent image and the proxy are healthy; each configured backend has its credential; the required checks can be read and the egress allowlist applied. Any failure ends the run as `preflight_failed`. While the kill switch is on, no run starts.
+2. **Candidates**: open issues with the labels that pass the trust rules (`docs/labels.md` § Trust), except issues that also carry `skeleton HITL` (or, for `skeleton`, `skeleton refine`). Issues with an open skeleton PR go to PR maintenance instead. Expired task directories are pruned before this step (§5).
 3. **Selector**: orders candidates up to the daily quota. Every candidate it does not pick is escalated as too large or rejected, with a reason.
 4. **Worker pool** (≤ `max_parallel_workers`), and in parallel the **refine flow**. PR maintenance jobs (§4.4) take slots before new issues.
 5. **Stop** when candidates or quota run out, the window ends, or the kill switch fires.
@@ -155,14 +163,14 @@ QUEUED ───────→ PREPARING ──→ CODING ──→ POLICY_CHEC
 any non-terminal state → ESCALATED (ESCALATE) | FAILED (ERROR) | ABORTED (ABORT)
 ```
 
-While a task is `AWAITING_CI` its container stays alive, but no session runs, so waiting costs no tokens. CI counts as passed only when every GitHub Actions workflow run for the commit has completed and every check the base-branch ruleset requires has reported green; a required check that never appears ends in the CI timeout. A CI failure or a review finding resumes the same agent session. A failed `check_command` fires `CHECK_FAILED` and counts against `max_ci_rounds`; a policy violation fires `POLICY_FAILED` and counts against `max_review_rounds`. A clean merge of the base into a continued branch has no coding step: it goes from `CODING` straight to `POLICY_CHECK`.
+While a task is `AWAITING_CI` its container stays alive, but no session runs, so waiting costs no tokens. CI counts as passed only when every GitHub Actions workflow run for the commit has completed and every check the base-branch ruleset requires has reported green; a required check that never appears ends in the CI timeout. If nothing reports within `ci_grace_minutes`, the task escalates when `require_ci` is on and goes to review otherwise. A CI failure or a review finding resumes the same agent session. A failed `check_command` fires `CHECK_FAILED` and counts against `max_ci_rounds`; a policy violation fires `POLICY_FAILED` and counts against `max_review_rounds`. A clean merge of the base into a continued branch has no coding step: it goes from `CODING` straight to `POLICY_CHECK`.
 
 ### 4.3 From agent work to PR
 
 The controller never runs git inside a directory an agent can write to: a planted `.git/config` or hook would execute on the controller.
 
-1. The gateway clones the repo into `<data>/tasks/<id>/controller/` (credentials via a one-shot header, never stored). This clone is never mounted into a container.
-2. `runtime/workspace` makes a plain local copy at `<data>/tasks/<id>/agent/` and mounts it at `/workspace`. If `setup_command` is set, the controller execs it in the worker container before the first session; failure escalates.
+1. The gateway clones the repo into `<data>/tasks/<key>/controller/` (credentials via a one-shot header, never stored). This clone is never mounted into a container.
+2. `runtime/workspace` makes a plain local copy at `<data>/tasks/<key>/agent/` and mounts it at `/workspace`. If `setup_command` is set, the controller execs it in the worker container before the first session; failure escalates.
 3. After a session, the controller execs `check_command` in the container if set, except while resolving a merge conflict; a failure goes back to the worker with the output tail. Repo commands run as the agent user with no extra env, so they never see the model credential. Then it execs `git diff --binary <base>` **inside the container** (external diff and textconv disabled) and reads it as plain bytes.
 4. In the controller clone, with hooks and fsmonitor disabled, it applies the patch on `<base>` and creates a commit whose tree is "base + patch" and whose parent is the current branch tip. Commit metadata comes from the controller, not the agent.
 5. `diff_policy`, gitleaks and the checks in `domain/contestable_checks.py` run on that commit versus base. A contestable finding is a violation unless the worker contested it in `objections` with a reason, matched on check, path and line; contested findings go to the reviewer, who decides. Hard checks are never contestable. Only then does the gateway push `skeleton/<n>-<slug>` and open or update the PR.
@@ -184,7 +192,7 @@ The first push of a new branch uses a lease that requires the branch not to exis
 2. While fix quota is left, the controller reads GitHub's `mergeable` flag. `true`: skipped with an audit event, no task and no clone; a PR that is only behind stays as it is. `null` (GitHub still computing): polled a few times, then skipped with an audit event. `false`: a `pr_fix` task is created and takes one `conflict_fixes_per_day`.
 3. The controller merges the base into the branch in its own clone with `git merge-tree`, so history is kept and nothing is rebased.
 4. **Conflict**: the conflicted tree becomes a local-only commit for the agent copy. The worker's patch on top of it becomes a merge commit with parents (old head, base). It may only touch conflicted files and must leave no conflict markers. Then CI and a fresh review follow, as for a new PR. Failure escalates the issue as usual.
-5. If the local merge turns out clean after all (a race with GitHub), the job ends without writes or agent; its quota stays used.
+5. If the local merge turns out clean after all (a race with GitHub), the task ends `aborted` without writes or agent; its quota stays used.
 
 ---
 
@@ -196,12 +204,12 @@ SQLite in the data directory, with Alembic migrations applied at startup.
 | --- | --- |
 | `SettingsRow` | One row holding the UI-editable settings as JSON, validated by `domain/settings.py` |
 | `RuleRevision` | Append-only history of each role's work rules; the newest revision is active |
-| `Run` | One daily or manual run: trigger, `dry_run`, state, timestamps |
+| `Run` | One daily or manual run: trigger, `dry_run`, state, timestamps, note |
 | `WorkerTask` | One issue in one run: kind (`issue`, `pr_fix`; `pr_update` only on historical rows), state, branch, PR, base and head SHA, session id, container id, round counters, cost, `note` (why it escalated, aborted or failed) |
-| `RefineTask` | One refine in one run: state, session id |
-| `AuditEvent` | Append-only: every GitHub write (allowed, blocked or dry-run), settings or rules change, kill switch |
+| `RefineTask` | One refine in one run: state, session id, cost, error |
+| `AuditEvent` | Append-only: kind and outcome from `core/audit.py`, summary, payload, run |
 
-Task directories (`<data>/tasks/<key>/`, transcripts and command logs) of terminal tasks and finished runs are pruned at the start of each run once older than `task_retention_days`; their rows and the audit log are never pruned.
+Task directories (`<data>/tasks/<key>/`, transcripts and command logs) of terminal tasks and finished runs are pruned after each passed preflight once older than `task_retention_days`; their rows and the audit log are never pruned.
 
 ---
 
@@ -209,12 +217,12 @@ Task directories (`<data>/tasks/<key>/`, transcripts and command logs) of termin
 
 ### 6.1 Configuration
 
-- **Bootstrap** (`.env`, `core/config.py`, prefix `SC_`): target repo `owner/name`, GitHub App id and key path, agent credentials (`SC_AGENT_CREDENTIALS__<NAME>`, read into `agent_credentials` with lowercase names), UI password hash, session secret, data directory, image and network names. Never editable in the UI and never logged.
-- **Runtime** (`domain/settings.py`, edited in the UI): schedule, limits, per-role agent (backend, model, effort, web tools), per-backend options (`backend_options.<backend>.<option>`), label names, protected paths, `setup_command`, `check_command`, egress allowlist, resource limits, `dry_run`, kill switch. The domain only checks the shape of agent fields; `agents/registry.py` checks them against the backends on save and in preflight. The domain's default agent strings must match a registry backend, which a test enforces.
+- **Bootstrap** (`.env`, `core/config.py`, prefix `SC_`): target repo `owner/name`, GitHub App id and key path, optional installation id and bot login, agent credentials (`SC_AGENT_CREDENTIALS__<NAME>`, read into `agent_credentials` with lowercase names), UI password hash, session secret, data directory, image, network and egress-proxy names, listen address. Never editable in the UI and never logged.
+- **Runtime** (`domain/settings.py`, edited in the UI): schedule, limits, per-role agent (backend, model, effort, web tools), per-backend options (`backend_options.<backend>.<option>`), label names, base branch, protected paths, `setup_command`, `check_command`, `require_ci`, `allow_unprotected_base_branch`, trusted users, egress allowlist, resource limits, `dry_run`, kill switch. The domain only checks the shape of agent fields; `agents/registry.py` checks them against the backends on save and in preflight. The domain's default agent strings must match a registry backend, which a test enforces.
 
 ### 6.2 Agent backends
 
-`agents/base.py` defines `AgentBackend`. A backend turns a `SessionRequest` (role, prompt, model, effort, limits, schema, rules file, resume id) into an argv plus environment, and turns the CLI output into a `SessionOutcome` (session id, raw structured output, cost, turns, error flags, early-stop reason). It also declares the egress domains and credentials it needs. Each backend module exports a `BackendSpec` (name, display name, models, efforts, options with allowed values and defaults, credential names, web-tools support, factory). `agents/registry.py` holds the specs: it builds a backend with only its declared credentials and its options, and `settings_problems` rejects an unknown backend, model, effort or option, both on UI save and in preflight (a run then ends `preflight_failed`). `agents/session.py` runs any backend through an injected executor with transcript capture; the executor (`runtime/containers.py`) enforces the wall-clock timeout with SIGINT and a hard kill, so backends add no timeout wrapper of their own. Output is always validated by `domain/schemas.py`, whether or not the backend enforces a schema itself. The target repo's own agent hooks run as configured. When a session ends cleanly without a result, for example because a hook stopped the turn, the backend reports it as `stopped_early` and `pipeline/sessions.py` resumes the same session with a continue prompt, up to `max_continues` times, then fails closed.
+`agents/base.py` defines `AgentBackend`. A backend turns a `SessionRequest` (role, prompt, model, effort, limits, schema, rules file, resume id) into an argv plus environment, and turns the CLI output into a `SessionOutcome` (session id, raw structured output, cost, turns, error flags, early-stop reason). It also declares the egress domains and credentials it needs. Each backend module exports a `BackendSpec` (name, display name, models, efforts, options with allowed values and defaults, credential names, web-tools support, factory). `agents/registry.py` holds the specs: it builds a backend with only its declared credentials and its options, and rejects an unknown backend, model, effort, option or unsupported web tools, on UI save (`field_problems`) and in preflight (`settings_problems`; a run then ends `preflight_failed`). `agents/session.py` runs any backend through an injected executor with transcript capture; the executor (`runtime/containers.py`) enforces the wall-clock timeout with SIGINT and a hard kill, so backends add no timeout wrapper of their own. Output is always validated by `domain/schemas.py`, whether or not the backend enforces a schema itself. The target repo's own agent hooks run as configured. When a session ends cleanly without a result, for example because a hook stopped the turn, the backend reports it as `stopped_early` and `pipeline/sessions.py` resumes the same session with a continue prompt, up to `max_continues` times, then fails closed.
 
 MVP backend: **Claude Code** (`agents/backends/claude_code.py`): `claude -p` with `--output-format stream-json`, `--json-schema`, `--resume`, `--max-turns`, `--disallowedTools` for every interactive tool, and `--max-budget-usd` in API-key mode. Option `auth_mode` is `subscription` (`SC_AGENT_CREDENTIALS__CLAUDE_OAUTH_TOKEN` from `claude setup-token`, passed as `CLAUDE_CODE_OAUTH_TOKEN`) or `api_key` (`SC_AGENT_CREDENTIALS__ANTHROPIC_API_KEY`, passed as `ANTHROPIC_API_KEY`), always with the unmodified CLI. Codex and OpenCode come after the MVP as extra backends.
 
@@ -239,7 +247,7 @@ Untrusted text (issue bodies, comments, CI logs) is rendered into prompts only i
 
 ### 6.4 Audit
 
-Every GitHub write attempt is recorded via `store/audit_store.py`, whether it is allowed, blocked or dry-run. Agents cannot read or write the audit log.
+Every GitHub write attempt is recorded via `store/audit_store.py`, whether it is allowed, blocked or dry-run. So are logins, settings and rules changes, the kill switch, run start and end, preflight failures, escalations and skipped issues or PRs; the kinds live in `core/audit.py`. Agents cannot read or write the audit log.
 
 ---
 

@@ -30,7 +30,7 @@ The caps are limits, not reservations: a container only uses what it needs, up t
    | Commit statuses | Read-only |
    | Metadata | Read-only |
 
-   Do not grant Workflows or Administration. Preflight refuses to run if the App has either.
+   Do not grant Workflows or Administration. Preflight refuses to run if the App has Workflows or Administration write.
 3. Disable the webhook and keep the App private.
 4. Install the App on the one target repository only. Note the App ID and, optionally, the installation ID.
 5. Generate a private key and copy it to the VM:
@@ -77,7 +77,7 @@ Rulesets need a public repository or a paid plan. On a free private repository, 
 
 1. Open `https://<vm-ip>`. Caddy uses its own internal CA, so accept the certificate warning or trust Caddy's root certificate.
 2. Log in with the password from step 4.3.
-3. Check the setup. This reports problems with the ruleset, App permissions, Sysbox, images and the egress proxy:
+3. Check the setup. This reports problems with the ruleset, App permissions, agent settings and credentials, Sysbox, images and the egress proxy:
 
    ```sh
    sudo docker compose exec controller skeleton-crew preflight

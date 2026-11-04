@@ -34,9 +34,11 @@ While the issue still has `skeleton`, each run asks GitHub whether its open skel
 
 The controller comments on the issue, removes `skeleton` and adds `skeleton HITL` when:
 
-- the worker or selector judges the scope larger than the issue describes;
+- the selector, worker or reviewer judges the scope larger than the issue describes;
 - the selector rejects the issue as unsafe or not real work on this repository;
-- the maximum number of CI or review rounds is reached;
+- the worker reports it is blocked, or a worker or reviewer session fails;
+- the setup command fails;
+- the maximum number of check, CI, policy or review rounds is reached, or CI does not report or finish in time;
 - an existing branch has commits Skeleton Crew did not push, or its PR was closed without merging;
 - the worker times out or the run window ends.
 

@@ -11,7 +11,7 @@ The skeleton crew never merges and never adds the labels `skeleton` or `skeleton
 
 ## Security
 
-Skeleton crew agents never hold a GitHub token. They only return commits and schema-validated JSON. A deterministic controller checks both against policy, and only then performs the few GitHub actions it is allowed to. Threat model and guardrails are in [SECURITY.md](SECURITY.md).
+Skeleton crew agents never hold a GitHub token. They only return changes in their workspace and schema-validated JSON. A deterministic controller checks both against policy, and only then performs the few GitHub actions it is allowed to. Threat model and guardrails are in [SECURITY.md](SECURITY.md).
 
 ## Requirements
 
