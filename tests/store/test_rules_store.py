@@ -4,7 +4,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from skeleton_crew.core.audit import AuditKind
 from skeleton_crew.domain.settings import RULE_KEYS
 from skeleton_crew.store import audit_store
-from skeleton_crew.store.rules_store import active_rules, rule_history, save_rules
+from skeleton_crew.store.rules_store import (
+    MAX_RULES_CHARS,
+    InvalidRules,
+    active_rules,
+    get_revision,
+    rule_history,
+    save_rules,
+)
 
 
 def test_rule_keys_cover_common_and_every_role() -> None:
@@ -37,3 +44,42 @@ async def test_unknown_key_is_rejected(session: AsyncSession, key: str) -> None:
         await save_rules(session, key, "x")
     with pytest.raises(ValueError, match="unknown rules key"):
         await rule_history(session, key, limit=1)
+    with pytest.raises(ValueError, match="unknown rules key"):
+        await get_revision(session, key, 1)
+
+
+@pytest.mark.parametrize(
+    ("content", "message"),
+    [
+        ("", "cannot be empty"),
+        (" \n\t\n", "cannot be empty"),
+        ("\u3000", "cannot be empty"),
+        ("x" * (MAX_RULES_CHARS + 1), f"limited to {MAX_RULES_CHARS} characters"),
+    ],
+)
+async def test_invalid_rules_are_rejected_and_not_stored(
+    session: AsyncSession, content: str, message: str
+) -> None:
+    with pytest.raises(InvalidRules, match=message):
+        await save_rules(session, "worker", content)
+    assert await active_rules(session, "worker") is None
+    assert await audit_store.list_events(session, limit=10, offset=0) == []
+
+
+async def test_rules_at_the_limit_are_saved(session: AsyncSession) -> None:
+    await save_rules(session, "worker", "x" * MAX_RULES_CHARS)
+    assert await active_rules(session, "worker") == "x" * MAX_RULES_CHARS
+
+
+async def test_get_revision_finds_old_revisions_of_the_same_key_only(
+    session: AsyncSession,
+) -> None:
+    await save_rules(session, "worker", "first")
+    first = (await rule_history(session, "worker", limit=1))[0]
+    for n in range(30):
+        await save_rules(session, "worker", f"v{n}")
+    found = await get_revision(session, "worker", first.id)
+    assert found is not None
+    assert found.content == "first"
+    assert await get_revision(session, "common", first.id) is None
+    assert await get_revision(session, "worker", 99_999) is None

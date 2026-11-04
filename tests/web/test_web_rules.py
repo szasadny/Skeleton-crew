@@ -65,6 +65,19 @@ async def test_view_one_revision(web: Web) -> None:
     assert other.status_code == 404
 
 
+async def test_revision_older_than_the_history_page_opens(web: Web) -> None:
+    await web.post("/rules/worker", {"content": "Oldest rules"})
+    for n in range(25):
+        await web.post("/rules/worker", {"content": f"Version {n}"})
+    async with web.sessionmaker() as session:
+        oldest = (await rules_store.rule_history(session, "worker", 100))[-1]
+    html = (await web.client.get("/rules/worker")).text
+    assert f'/rules/worker/revisions/{oldest.id}"' not in html
+    view = await web.client.get(f"/rules/worker/revisions/{oldest.id}")
+    assert view.status_code == 200
+    assert "Oldest rules" in view.text
+
+
 async def test_too_long_rules_are_rejected(web: Web) -> None:
     response = await web.post("/rules/common", {"content": "x" * 20_001})
     assert response.status_code == 422
@@ -73,7 +86,9 @@ async def test_too_long_rules_are_rejected(web: Web) -> None:
 
 
 async def test_empty_rules_are_rejected(web: Web) -> None:
-    assert (await web.post("/rules/common", {"content": "  \r\n"})).status_code == 422
+    response = await web.post("/rules/common", {"content": "  \r\n"})
+    assert response.status_code == 422
+    assert "Rules cannot be empty." in response.text
     assert await _active(web, "common") is None
 
 

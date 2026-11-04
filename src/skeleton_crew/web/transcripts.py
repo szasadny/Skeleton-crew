@@ -2,14 +2,14 @@ import re
 from pathlib import Path
 
 from skeleton_crew.core.logging import redact
+from skeleton_crew.domain.task_keys import is_task_key
 
 MAX_TRANSCRIPT_BYTES = 500 * 1024
-_NAME_RE = re.compile(r"^[a-z]+-\d+\.jsonl$")
-_KEY_RE = re.compile(r"^(worker-\d+|refine-\d+|run-\d+-selector)$")
+_NAME_RE = re.compile(r"[a-z]+-\d+\.jsonl|(setup|check)-\d+\.log", re.ASCII)
 
 
 def _transcripts_dir(tasks_dir: Path, key: str) -> Path | None:
-    if not _KEY_RE.fullmatch(key):
+    if not is_task_key(key):
         return None
     directory = tasks_dir / key / "transcripts"
     return directory if directory.is_dir() and not directory.is_symlink() else None

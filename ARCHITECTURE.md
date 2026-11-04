@@ -27,6 +27,7 @@ Each row has exactly one correct place. Putting it anywhere else violates the co
 | Protected paths, diff size, file-mode rules | `domain/diff_policy.py` |
 | Parsing the added lines of a diff | `domain/diff_lines.py` |
 | Detecting long code comments in a diff | `domain/comment_policy.py` |
+| Task directory key formats (`worker-<id>`, `refine-<id>`, `run-<id>-selector`) | `domain/task_keys.py` |
 | Findings, objections and contest matching | `domain/contest_policy.py` |
 | A contestable (grey-area) check | A pure function in its policy module, registered in `domain/contestable_checks.py` |
 | Sanitising agent text before it reaches GitHub (length cap, @mentions, closing keywords) | `domain/text_policy.py` |
@@ -55,7 +56,7 @@ Each row has exactly one correct place. Putting it anywhere else violates the co
 | Password hashing, session and CSRF helpers | `core/security.py` |
 | A UI page or partial | `web/routes/<page>.py` + `web/templates/` |
 | A scheduled trigger | `scheduler/` |
-| A CLI command (`serve`, `hash-password`) | `cli.py` |
+| A CLI command (`serve`, `hash-password`, `preflight`) | `cli.py` |
 | A test fake for an external system | `tests/fakes/` |
 
 ---

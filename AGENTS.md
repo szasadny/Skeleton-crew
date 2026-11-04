@@ -61,7 +61,7 @@ src/skeleton_crew/
   pipeline/   run controller, worker/refine flows, CI watcher
   scheduler/  cron triggers
   web/        routes, templates, static
-  cli.py      serve, hash-password
+  cli.py      serve, hash-password, preflight
 tests/        pytest; tests/fakes/ for GitHub, Docker, agent backends
 docs/         user docs
 docker/       controller Dockerfile

@@ -171,30 +171,78 @@ def test_no_newline_marker_is_ignored() -> None:
 
 
 @pytest.mark.parametrize(
-    "text",
+    ("path", "text"),
     [
-        "# python",
-        "  # indented",
-        "// c",
-        "-- sql",
-        "; lisp",
-        "/* c block */",
-        "* javadoc",
-        "*/",
-        "<!-- html -->",
-        '"""doc"""',
-        "'''doc'''",
-        "% tex",
-        "rem batch",
-        "REM batch",
-        "Rem batch",
-        "#endif",
-        "# include not a directive",
+        ("f", "# python"),
+        ("f", "  # indented"),
+        ("f", "// c"),
+        ("q.sql", "-- sql"),
+        ("x.lua", "-- lua"),
+        ("x.lisp", "; lisp"),
+        ("x.ini", "; ini"),
+        ("f", "/* c block */"),
+        ("x.html", "<!-- html -->"),
+        ("x.py", '"""doc"""'),
+        ("x.py", "'''doc'''"),
+        ("x.tex", "% tex"),
+        ("x.bat", "rem batch"),
+        ("x.bat", "REM batch"),
+        ("x.cmd", "Rem batch"),
+        ("f", "#endif"),
+        ("f", "# include not a directive"),
+        ("Dockerfile", "# docker"),
+        ("sub/Makefile", "# make"),
+        ("x.php", "# php"),
+        ("x.vue", "// vue"),
     ],
 )
-def test_comment_lines_are_flagged_above_limit(text: str) -> None:
-    flags = flag_long_comment_blocks(lines("f", text, text, text, start=5), 2)
-    assert flags == [CommentFlag("f", 5, 3)]
+def test_comment_lines_are_flagged_above_limit(path: str, text: str) -> None:
+    flags = flag_long_comment_blocks(lines(path, text, text, text, start=5), 2)
+    assert flags == [CommentFlag(path, 5, 3)]
+
+
+@pytest.mark.parametrize(
+    ("path", "texts"),
+    [
+        ("run.sh", ("docker run \\", "  --rm \\", "  --network none \\", "  --read-only \\")),
+        ("f", ("  --rm \\", "  --network none \\", "  --read-only \\")),
+        ("swap.c", ("*out = a;", "*in = b;", "*tmp = c;")),
+        ("f", ("*out = a;", "*in = b;", "*tmp = c;")),
+        ("x.py", ("-- not sql", "; not lisp", "% not tex")),
+        ("x.sql", ("# not sql", "// not sql", "; not sql")),
+        ("x.c", ("# not c", "-- not c", "% not c")),
+        ("x.py", ("rem = 1", "rem = 2", "rem = 3")),
+        ("x.py", ("<!-- not python", "still not", "-->")),
+        ("x.html", ("/* not html", "still not", "*/")),
+    ],
+)
+def test_prefixes_of_other_languages_are_not_comments(path: str, texts: tuple[str, ...]) -> None:
+    assert flag_long_comment_blocks(lines(path, *texts), 2) == []
+
+
+@pytest.mark.parametrize(
+    ("path", "texts"),
+    [
+        ("app.py", ("# one", "# two", "# three")),
+        ("app.ts", ("// one", "// two", "// three")),
+        ("q.sql", ("-- one", "-- two", "-- three")),
+        ("APP.PY", ("# one", "# two", "# three")),
+        ("x.Ts", ("// one", "// two", "// three")),
+        ("notes.weird", ("# one", "# two", "# three")),
+        ("archive.tar.zz", ("// one", "// two", "// three")),
+        (".bashrc", ("# one", "# two", "# three")),
+        ("x.", ("# one", "# two", "# three")),
+        ("lib.c", ("/**", " * one", " * two", " */")),
+        ("lib.ts", ("/*", "* one", "* two", "*/")),
+        ("q.sql", ("/* one", "two", "three */")),
+    ],
+)
+def test_real_comment_blocks_still_flag(path: str, texts: tuple[str, ...]) -> None:
+    assert flag_long_comment_blocks(lines(path, *texts), 2) == [CommentFlag(path, 1, len(texts))]
+
+
+def test_star_lines_without_open_block_are_code() -> None:
+    assert flag_long_comment_blocks(lines("x.c", " * a", " * b", " * c"), 2) == []
 
 
 @pytest.mark.parametrize(

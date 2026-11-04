@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response
 
+from skeleton_crew.domain.task_keys import refine_key, selector_key, worker_key
 from skeleton_crew.models.refine_task import RefineTask
 from skeleton_crew.models.run import Run
 from skeleton_crew.models.worker_task import WorkerTask
@@ -26,9 +27,9 @@ class _RunView:
     @property
     def transcript_keys(self) -> set[str]:
         return {
-            f"run-{self.run.id}-selector",
-            *(f"worker-{task.id}" for task in self.tasks),
-            *(f"refine-{task.id}" for task in self.refines),
+            selector_key(self.run.id),
+            *(worker_key(task.id) for task in self.tasks),
+            *(refine_key(task.id) for task in self.refines),
         }
 
     def context(self, request: Request) -> dict[str, object]:
