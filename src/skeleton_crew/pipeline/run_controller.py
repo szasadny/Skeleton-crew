@@ -12,7 +12,6 @@ from skeleton_crew.domain.task_state import (
     RunState,
     TaskEvent,
     TaskKind,
-    TaskState,
     transition,
 )
 from skeleton_crew.domain.trust_policy import IssueComment
@@ -292,7 +291,7 @@ class RunController:
                 log.exception("could not compare PR #%d with the base branch", pull.number)
                 continue
             if behind > 0:
-                updates.append(PrUpdate(issue, comments, pull, last.state is TaskState.DONE))
+                updates.append(PrUpdate(issue, comments, pull))
         return updates
 
     async def _update_slot(

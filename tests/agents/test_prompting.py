@@ -67,6 +67,9 @@ _CONTEXTS: dict[PromptName, dict[str, object]] = {
         "ci_state": "success",
     },
 }
+_CONTEXTS[PromptName.REVIEWER_FOLLOWUP] = {
+    k: v for k, v in _CONTEXTS[PromptName.REVIEWER].items() if k not in {"issue", "comments"}
+}
 
 
 @pytest.mark.parametrize("name", [n for n in PromptName if n is not PromptName.CONTINUE])
@@ -189,6 +192,15 @@ def test_reviewer_prompt_without_contested_findings() -> None:
     text = render_prompt(PromptName.REVIEWER, context, json_schema=_SCHEMA)
     assert "/skeleton-in/changes.diff" in text
     assert "None." in text
+
+
+def test_reviewer_followup_points_at_the_changes_since_the_last_review() -> None:
+    context = _CONTEXTS[PromptName.REVIEWER_FOLLOWUP]
+    text = render_prompt(PromptName.REVIEWER_FOLLOWUP, context, json_schema=_SCHEMA)
+    assert "/skeleton-in/since-review.diff" in text
+    assert "/skeleton-in/changes.diff" in text
+    assert "every earlier finding is resolved" in text
+    assert "worker reason: none" in text
 
 
 def test_missing_context_value_fails_closed() -> None:

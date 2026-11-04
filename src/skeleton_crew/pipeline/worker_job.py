@@ -31,6 +31,9 @@ class WorkerJob:
     conflicts: tuple[str, ...] = ()
     sandbox: Sandbox | None = None
     session_id: str | None = None
+    review_sandbox: Sandbox | None = None
+    review_session_id: str | None = None
+    reviewed_sha: str | None = None
     pr_requested: bool = False
     continues_branch: bool = False
     new_issues: int = 0

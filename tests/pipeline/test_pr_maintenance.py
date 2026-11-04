@@ -20,10 +20,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from skeleton_crew.core.audit import AuditKind, AuditOutcome
 from skeleton_crew.domain.settings import Role
 from skeleton_crew.domain.task_state import RunState, TaskKind, TaskState
-from skeleton_crew.github.gateway import CiState, CiStatus, FailedJob, GitCommandError
+from skeleton_crew.github.gateway import GitCommandError
 from skeleton_crew.models.worker_task import WorkerTask
 from skeleton_crew.pipeline.sessions import WORKSPACE
-from skeleton_crew.pipeline.texts import CARRIED_REVIEW
 from skeleton_crew.store import runs_store
 
 BRANCH = "skeleton/1-add-greeting"
@@ -104,69 +103,23 @@ async def _only_task(h: Harness, run_id: int) -> WorkerTask:
     return task
 
 
-async def test_clean_update_merges_main_and_keeps_the_review_without_an_agent(
-    harness: Harness,
-) -> None:
+async def test_clean_update_is_skipped_without_agents_writes_or_quota(harness: Harness) -> None:
     head = await _open_pr(harness, {"app.py": HI})
-    main = _advance_main(harness, {"README.md": "# Demo v2\n"})
+    _advance_main(harness, {"README.md": "# Demo v2\n"})
 
     run_id = await harness.run()
 
     task = await _only_task(harness, run_id)
-    assert (task.kind, task.state) == (TaskKind.PR_UPDATE, TaskState.DONE)
+    assert (task.kind, task.state) == (TaskKind.PR_UPDATE, TaskState.ABORTED)
+    assert task.escalation_reason == "the PR merges cleanly"
     assert harness.backend.requests == []
     assert harness.runtime.started == []
-    assert harness.actions() == ["push_branch", "set_review_check"]
-    merged = str(task.head_sha)
-    assert _parents(harness, merged) == [head, main]
-    assert harness.gateway.leases == [head]
-    assert _remote_file(harness, merged, "README.md") == "# Demo v2\n"
-    assert _remote_file(harness, merged, "app.py") == HI
-    assert harness.gateway.review_checks[merged] == (True, CARRIED_REVIEW)
-    assert git(harness.source, "rev-parse", "main").decode().strip() == main
-    assert_no_forbidden_writes(harness)
-
-
-async def test_clean_update_of_an_unreviewed_pr_runs_the_reviewer(harness: Harness) -> None:
-    await _open_pr(harness, {"app.py": HI}, state=TaskState.FAILED)
-    _advance_main(harness, {"README.md": "# Demo v2\n"})
-    harness.backend.script(Role.REVIEWER, review_json())
-
-    run_id = await harness.run()
-
-    task = await _only_task(harness, run_id)
-    assert (task.kind, task.state) == (TaskKind.PR_UPDATE, TaskState.DONE)
-    assert [r.role for r in harness.backend.requests] == [Role.REVIEWER]
-    reviewed = harness.runtime.started[0].mounts
-    assert all(m.read_only for m in reviewed if m.container_path == WORKSPACE)
-    assert harness.gateway.review_checks[str(task.head_sha)][0] is True
-
-
-async def test_red_ci_after_a_clean_merge_is_fixed_by_a_worker(harness: Harness) -> None:
-    head = await _open_pr(harness, {"app.py": HI})
-    _advance_main(harness, {"README.md": "# Demo v2\n"})
-    harness.gateway.ci_queue = [
-        CiStatus(CiState.FAILURE, [FailedJob("tests", 7, "https://ci/7")]),
-        CiStatus(CiState.SUCCESS, []),
-    ]
-    harness.gateway.job_logs[7] = "FAILED test_app"
-    _workspace_editor(harness, {"app.py": BOTH})
-    harness.backend.script(Role.WORKER, worker_json(pr_title="Fix greeting after merge"))
-    harness.backend.script(Role.REVIEWER, review_json())
-
-    run_id = await harness.run()
-
-    task = await _only_task(harness, run_id)
-    assert (task.kind, task.state, task.ci_rounds) == (TaskKind.PR_FIX, TaskState.DONE, 1)
-    [worker] = harness.backend.prompts(Role.WORKER)
-    assert "After the merge, CI fails" in worker.prompt
-    assert "FAILED test_app" in worker.prompt
-    assert worker.resume_session_id is None
-    merged, fixed = (sha for _, sha in harness.gateway.pushes)
-    assert harness.gateway.leases == [head, merged]
-    assert _parents(harness, fixed) == [merged]
-    assert _remote_file(harness, fixed, "app.py") == BOTH
-    assert_no_forbidden_writes(harness)
+    assert harness.gateway.writes == []
+    assert git(harness.remote, "rev-parse", BRANCH).decode().strip() == head
+    async with harness.sessionmaker() as session:
+        since = datetime(2000, 1, 1, tzinfo=UTC)
+        assert await runs_store.count_worker_tasks_since(session, since, TaskKind.PR_FIX) == 0
+    assert not (harness.config.tasks_dir / f"worker-{task.id}" / "controller").exists()
 
 
 async def test_conflict_is_resolved_by_a_worker_into_a_merge_commit(harness: Harness) -> None:
@@ -245,22 +198,6 @@ async def test_check_command_waits_until_the_conflict_is_resolved(harness: Harne
     task = await _only_task(harness, run_id)
     assert (task.kind, task.state) == (TaskKind.PR_FIX, TaskState.DONE)
     assert not any(is_repo_command(call.argv) for call in harness.runtime.execs)
-
-
-async def test_comment_blocks_in_a_clean_merge_go_to_the_reviewer(harness: Harness) -> None:
-    await _open_pr(harness, {"app.py": "# one\n# two\n# three\n" + HI}, state=TaskState.FAILED)
-    _advance_main(harness, {"README.md": "# Demo v2\n"})
-    harness.backend.script(Role.REVIEWER, review_json())
-
-    run_id = await harness.run()
-
-    task = await _only_task(harness, run_id)
-    assert (task.kind, task.state) == (TaskKind.PR_UPDATE, TaskState.DONE)
-    [review] = harness.backend.prompts(Role.REVIEWER)
-    assert (
-        "[comment_block] app.py:1: comment block of 3 lines, limit is 2; worker reason: none"
-        in review.prompt
-    )
 
 
 async def test_unresolvable_conflict_escalates_the_issue(harness: Harness) -> None:
@@ -342,7 +279,9 @@ async def test_branch_moved_after_listing_aborts_without_writes(harness: Harness
 
 async def test_failed_push_keeps_the_old_head_as_ours(harness: Harness) -> None:
     head = await _open_pr(harness, {"app.py": HI})
-    _advance_main(harness, {"README.md": "# Demo v2\n"})
+    _advance_main(harness, {"app.py": HELLO})
+    _workspace_editor(harness, {"app.py": BOTH})
+    harness.backend.script(Role.WORKER, worker_json())
     harness.gateway.failures["push_branch"] = GitCommandError("stale info")
 
     run_id = await harness.run()
@@ -394,7 +333,10 @@ async def test_fixes_use_their_own_quota(harness: Harness) -> None:
 
 async def test_dry_run_update_writes_nothing(harness: Harness) -> None:
     head = await _open_pr(harness, {"app.py": HI})
-    _advance_main(harness, {"README.md": "# Demo v2\n"})
+    _advance_main(harness, {"app.py": HELLO})
+    _workspace_editor(harness, {"app.py": BOTH})
+    harness.backend.script(Role.WORKER, worker_json())
+    harness.backend.script(Role.REVIEWER, review_json())
     harness.settings = harness.settings.model_copy(update={"dry_run": True})
 
     run_id = await harness.run()

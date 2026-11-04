@@ -27,7 +27,7 @@ Skeleton Crew uses three labels, which are configurable in the UI. Only a human 
 
 ### Keeping PRs up to date
 
-While the issue still has `skeleton`, each run merges the base branch into its open skeleton PR when the PR is behind. Conflicts or red CI after that merge go to a worker, then CI and review run again, all within `conflict_fixes_per_day`. Remove `skeleton` (or push a commit to the branch yourself) and Skeleton Crew leaves the PR alone.
+While the issue still has `skeleton`, each run checks whether its open skeleton PR conflicts with the base branch. A conflict goes to a worker, then CI and review run again, all within `conflict_fixes_per_day`. A PR that is only behind is left as it is. Remove `skeleton` (or push a commit to the branch yourself) and Skeleton Crew leaves the PR alone.
 
 ### Escalation
 

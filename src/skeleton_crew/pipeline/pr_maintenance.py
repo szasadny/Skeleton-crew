@@ -24,7 +24,6 @@ class PrUpdate:
     issue: IssueRef
     comments: Sequence[IssueComment]
     pull: PullRef
-    reviewed: bool
 
 
 async def run_pr_update(ctx: RunContext, task_id: int, update: PrUpdate) -> bool:
@@ -44,7 +43,7 @@ async def run_pr_update(ctx: RunContext, task_id: int, update: PrUpdate) -> bool
 
     async def work(job: WorkerJob) -> None:
         await job.record.fire(TaskEvent.PREPARED, branch=job.branch, pr_number=update.pull.number)
-        await update_branch(job, update.reviewed)
+        await update_branch(job)
 
     await run_job(job, work)
     return job.kind is TaskKind.PR_FIX

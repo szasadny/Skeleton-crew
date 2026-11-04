@@ -152,19 +152,19 @@ The controller never runs git inside a directory an agent can write to: a plante
 4. In the controller clone, with hooks and fsmonitor disabled, it applies the patch on `<base>` and creates a commit whose tree is "base + patch" and whose parent is the current branch tip. Commit metadata comes from the controller, not the agent.
 5. `diff_policy`, gitleaks and the checks in `domain/contestable_checks.py` run on that commit versus base. A contestable finding is a violation unless the worker contested it in `objections` with a reason, matched on check, path and line; contested findings go to the reviewer, who decides. Hard checks are never contestable. Only then does the gateway push `skeleton/<n>-<slug>` and open or update the PR.
 
-Reviewer, refiner and selector sessions get a fresh read-only copy.
+Reviewer, refiner and selector sessions get a fresh read-only copy. Within one worker job the reviewer keeps its container and session: a later review round resumes it, with the copy refreshed in place to the new head and the changes since its last review in `/skeleton-in/since-review.diff`.
 
-The first push of a new branch uses a lease that requires the branch not to exist. If `skeleton/<n>-<slug>` already exists when a worker starts (a PR closed without merging, or a crash before the PR was opened), the worker comments on the issue and continues from that branch: it goes through the clean-merge or conflict path of §4.4, always with a fresh review, and opens the PR. A branch without changes of its own is replaced by a normal worker run, with a lease on its old head.
+The first push of a new branch uses a lease that requires the branch not to exist. If `skeleton/<n>-<slug>` already exists when a worker starts (a PR closed without merging, or a crash before the PR was opened), the worker comments on the issue and continues from that branch: the controller merges the base into it as in §4.4 (a clean merge is pushed as a merge commit, a conflict goes to a worker), then CI and a fresh review follow and the PR is opened. A branch without changes of its own is replaced by a normal worker run, with a lease on its old head.
 
 ### 4.4 PR maintenance
 
-`pipeline/pr_maintenance.py` keeps open skeleton PRs mergeable while their issue still has `skeleton`.
+`pipeline/pr_maintenance.py` resolves merge conflicts in open skeleton PRs while their issue still has `skeleton`.
 
 1. A PR qualifies when its head is the last commit the controller pushed in a live run (`runs_store.last_pushed_task`) and it is behind the base branch. Any other head means a human took over; the PR is skipped with an audit event.
 2. The controller merges the base into the branch in its own clone with `git merge-tree`, so history is kept and nothing is rebased.
-3. **Clean merge**: a merge commit is pushed with `--force-with-lease` on the old head. If CI stays green and the PR diff is unchanged (same patch-id), the earlier review check is carried over; otherwise the reviewer runs again. Red CI goes to a worker.
+3. **Clean merge**: the job stops without writes. A PR that is only behind stays as it is; GitHub merges it fine.
 4. **Conflict**: the conflicted tree becomes a local-only commit for the agent copy. The worker's patch on top of it becomes a merge commit with parents (old head, base). It may only touch conflicted files and must leave no conflict markers. Then CI and a fresh review follow, as for a new PR.
-5. A job that needs an agent becomes kind `pr_fix` and counts against `conflict_fixes_per_day`; a clean update costs no quota. Failure escalates the issue as usual.
+5. A job that needs an agent becomes kind `pr_fix` and counts against `conflict_fixes_per_day`; a clean PR costs no quota. Failure escalates the issue as usual.
 
 ---
 

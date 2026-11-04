@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 
 import pytest
-from fake_agent import stopped_outcome
+from fake_agent import ok_outcome, stopped_outcome
 from fake_runtime import ExecCall
 from pipeline_helpers import (
     BLOCKER,
@@ -18,12 +18,12 @@ from pipeline_helpers import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from skeleton_crew.agents.base import failed_outcome
+from skeleton_crew.agents.base import SessionOutcome, failed_outcome
 from skeleton_crew.core.audit import AuditKind, AuditOutcome
 from skeleton_crew.domain.settings import Role
 from skeleton_crew.domain.task_state import TaskState
 from skeleton_crew.github.gateway import CiState, CiStatus, FailedJob
-from skeleton_crew.pipeline.sessions import AGENT_USER, INBOX, WORKSPACE
+from skeleton_crew.pipeline.sessions import AGENT_USER, INBOX, ROLE_LABEL, WORKSPACE
 from skeleton_crew.runtime.containers import ExecResult
 
 BRANCH = "skeleton/1-add-greeting"
@@ -158,6 +158,90 @@ async def test_review_changes_then_approve(harness: Harness) -> None:
     follow_up = harness.backend.prompts(Role.WORKER)[1]
     assert "Handle empty input." in follow_up.prompt
     assert follow_up.resume_session_id == "worker-session"
+
+
+def _snapshot_reviewer_mounts(harness: Harness) -> list[dict[str, str]]:
+    seen: list[dict[str, str]] = []
+    parse = harness.backend.parse
+
+    def snapshot(stdout_path: Path, exit_code: int, timed_out: bool) -> SessionOutcome:
+        if stdout_path.read_text() == Role.REVIEWER.value:
+            [spec] = [s for s in harness.runtime.started if s.labels[ROLE_LABEL] == "reviewer"]
+            workspace, inbox = (m.host_path for m in spec.mounts)
+            since = inbox / "since-review.diff"
+            seen.append(
+                {
+                    "app.py": (workspace / "app.py").read_text(),
+                    "inbox": " ".join(sorted(p.name for p in inbox.iterdir())),
+                    "since": since.read_text() if since.exists() else "",
+                }
+            )
+        return parse(stdout_path, exit_code, timed_out)
+
+    harness.backend.parse = snapshot  # type: ignore[method-assign]
+    return seen
+
+
+async def test_second_review_resumes_the_reviewer_in_the_same_container(harness: Harness) -> None:
+    harness.patches = [harness.patch(GREETING), harness.patch({"app.py": "print(1)\n"})]
+    harness.backend.script(Role.WORKER, worker_json(), worker_json())
+    changes = ok_outcome(review_json("changes_requested", [BLOCKER]), session_id="review-session")
+    harness.backend.script(Role.REVIEWER, changes, review_json())
+    seen = _snapshot_reviewer_mounts(harness)
+
+    run_id = await harness.run()
+
+    [task] = await harness.tasks(run_id)
+    assert (task.state, task.review_rounds) == (TaskState.DONE, 1)
+    roles = [spec.labels[ROLE_LABEL] for spec in harness.runtime.started]
+    assert roles == ["selector", "worker", "reviewer"]
+    first, second = harness.backend.prompts(Role.REVIEWER)
+    assert first.resume_session_id is None
+    assert first.prompt.startswith("# Task: review a change")
+    assert second.resume_session_id == "review-session"
+    assert second.prompt.startswith("# Task: review the updated change")
+    assert [(snap["app.py"], snap["inbox"]) for snap in seen] == [
+        (GREETING["app.py"], "changes.diff rules.md"),
+        ("print(1)\n", "changes.diff rules.md since-review.diff"),
+    ]
+    assert not harness.runtime.running
+
+
+async def test_since_review_diff_holds_only_the_new_changes(harness: Harness) -> None:
+    harness.patches = [
+        harness.patch(GREETING),
+        harness.patch({**GREETING, "notes.txt": "second round\n"}),
+    ]
+    harness.backend.script(Role.WORKER, worker_json(), worker_json())
+    harness.backend.script(
+        Role.REVIEWER, review_json("changes_requested", [BLOCKER]), review_json()
+    )
+    seen = _snapshot_reviewer_mounts(harness)
+
+    await harness.run()
+
+    first, second = (snap["since"] for snap in seen)
+    assert first == ""
+    assert "notes.txt" in second
+    assert "app.py" not in second
+
+
+async def test_failed_resumed_review_escalates_and_removes_the_reviewer(harness: Harness) -> None:
+    harness.patches = [harness.patch(GREETING), harness.patch({"app.py": "print(1)\n"})]
+    harness.backend.script(Role.WORKER, worker_json(), worker_json())
+    harness.backend.script(
+        Role.REVIEWER,
+        review_json("changes_requested", [BLOCKER]),
+        failed_outcome("session crashed"),
+    )
+
+    run_id = await harness.run()
+
+    [task] = await harness.tasks(run_id)
+    assert task.state is TaskState.ESCALATED
+    assert "review session failed: session crashed" in str(task.escalation_reason)
+    assert len(harness.backend.prompts(Role.REVIEWER)) == 2
+    assert not harness.runtime.running
 
 
 async def test_review_rounds_exhausted_escalates(harness: Harness) -> None:

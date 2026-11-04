@@ -16,12 +16,10 @@ INTERRUPTED_COMMENT = (
     "Skeleton Crew was interrupted while working on this issue. "
     "Any open skeleton PR for it may be incomplete."
 )
-MERGE_SUMMARY = "The controller merged the base branch into this PR."
 CONTINUED_SUMMARY = (
     "Skeleton Crew continued from an existing branch for this issue "
     "and merged the base branch into it."
 )
-CARRIED_REVIEW = "Merging the base branch left the change unchanged; the earlier review stands."
 REFINE_HEADER = "## Refined spec\n\n"
 REFINE_QUESTIONS_HEADER = "\n\n### Open questions\n\n"
 REFINE_RESERVED_CHARS = len(REFINE_HEADER) + len(REFINE_QUESTIONS_HEADER)

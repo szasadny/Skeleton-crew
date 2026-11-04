@@ -14,25 +14,6 @@ Check: correctness against the issue, the repository's architecture and conventi
 
 {% include "_issue.md.j2" %}
 
-## Worker summary
-
-{{ worker_summary | untrusted("worker summary") }}
-
-## Diff stats
-
-{{ diff_stats | untrusted("diff stats") }}
-
-## Contested findings
-
-{% if contested %}
-{% set findings %}
-{% for item in contested %}
-- [{{ item.finding.check }}] {{ item.finding.path }}:{{ item.finding.line }}: {{ item.finding.message }}; worker reason: {{ item.reason if item.reason else "none" }}
-{% endfor %}
-{% endset %}
-{{ findings.strip() | untrusted("contested findings") }}
-{% else %}
-None.
-{% endif %}
+{% include "_review_inputs.md.j2" %}
 
 {% include "_output.md.j2" %}

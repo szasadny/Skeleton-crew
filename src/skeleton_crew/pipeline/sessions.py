@@ -78,6 +78,10 @@ def write_inbox(inbox: Path, rules: str, files: Mapping[str, bytes]) -> None:
         shutil.rmtree(inbox)
     inbox.mkdir(parents=True)
     (inbox / RULES_FILE).write_text(rules, encoding="utf-8")
+    update_inbox(inbox, files)
+
+
+def update_inbox(inbox: Path, files: Mapping[str, bytes]) -> None:
     for name, content in files.items():
         (inbox / name).write_bytes(content)
 

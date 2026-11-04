@@ -19,10 +19,8 @@ from skeleton_crew.pipeline.repo_commands import run_repo_command
 from skeleton_crew.pipeline.sessions import remove_sandbox, run_agent, start_sandbox
 from skeleton_crew.pipeline.task_record import WorkerTaskRecord
 from skeleton_crew.pipeline.texts import (
-    CARRIED_REVIEW,
     COMMIT_AUTHOR,
     CONTINUED_SUMMARY,
-    MERGE_SUMMARY,
     continued_comment,
     merge_message,
     new_issue_text,
@@ -39,7 +37,6 @@ from skeleton_crew.runtime.workspace import (
     commit_tree,
     make_agent_copy,
     merge_trees,
-    same_change,
     task_paths,
     tree_of,
 )
@@ -98,6 +95,7 @@ async def run_job(job: WorkerJob, work: Work) -> None:
         outcome = exc
     finally:
         await remove_sandbox(ctx, job.sandbox)
+        await remove_sandbox(ctx, job.review_sandbox)
         await asyncio.to_thread(remove_work_dirs, job.paths)
     if outcome is not None:
         await _finish_unsuccessful(job, outcome)
@@ -169,10 +167,10 @@ async def _work(job: WorkerJob) -> None:
         return
     job.remote_sha, job.continues_branch = head, True
     await job.record.fire(TaskEvent.PREPARED, branch=job.branch)
-    await update_branch(job, reviewed=False)
+    await update_branch(job)
 
 
-async def update_branch(job: WorkerJob, reviewed: bool) -> None:
+async def update_branch(job: WorkerJob) -> None:
     ctx, repo = job.ctx, job.paths.controller_repo
     base = await ctx.gateway.clone(repo)
     head = await ctx.gateway.fetch_branch(repo, job.branch)
@@ -197,7 +195,9 @@ async def update_branch(job: WorkerJob, reviewed: bool) -> None:
         await job.record.fire(TaskEvent.PREPARED, base_sha=base)
         await iterate(job, None)
         return
-    if job.continues_branch and attempt.tree == await tree_of(repo, head):
+    if not job.continues_branch:
+        raise Skip("the PR merges cleanly")
+    if attempt.tree == await tree_of(repo, head):
         merged = head
     else:
         merged = await commit_tree(
@@ -218,12 +218,7 @@ async def update_branch(job: WorkerJob, reviewed: bool) -> None:
     ci_state, follow_up = await await_ci(job, merged)
     if follow_up is None:
         await job.record.fire(TaskEvent.CI_PASSED)
-        if reviewed and await same_change(repo, old_head=head, base_sha=base, new_head=merged):
-            await ctx.gateway.set_review_check(sha=merged, success=True, summary=CARRIED_REVIEW)
-            await job.record.fire(TaskEvent.REVIEW_APPROVED)
-            return
-        summary = CONTINUED_SUMMARY if job.continues_branch else MERGE_SUMMARY
-        follow_up = await review(job, check, summary, ci_state)
+        follow_up = await review(job, check, CONTINUED_SUMMARY, ci_state)
         if follow_up is None:
             return
     await iterate(job, follow_up)

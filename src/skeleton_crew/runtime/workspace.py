@@ -127,14 +127,34 @@ def _skip_escaping_links(member: tarfile.TarInfo, dest: str) -> tarfile.TarInfo 
         return None
 
 
-def make_readonly_copy(src_repo: Path, dest: Path, sha: str) -> None:
-    _check_sha(sha)
-    dest.mkdir(parents=True, exist_ok=False)
+def _extract_commit(src_repo: Path, dest: Path, sha: str, *, clear: bool) -> None:
     with tempfile.TemporaryFile() as archive:
         _git(src_repo, "archive", "--format=tar", "--end-of-options", sha, stdout=archive)
         archive.seek(0)
+        if clear:
+            _clear_dir(dest)
         with tarfile.open(fileobj=archive, mode="r:") as tar:
             tar.extractall(dest, filter=_skip_escaping_links)  # noqa: S202 -- wraps data_filter
+
+
+def _clear_dir(path: Path) -> None:
+    for child in path.iterdir():
+        if child.is_dir() and not child.is_symlink():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+
+
+def make_readonly_copy(src_repo: Path, dest: Path, sha: str) -> None:
+    _check_sha(sha)
+    dest.mkdir(parents=True, exist_ok=False)
+    _extract_commit(src_repo, dest, sha, clear=False)
+
+
+def refresh_readonly_copy(src_repo: Path, dest: Path, sha: str) -> None:
+    # Replaces the contents in place: a running container bind-mounts this directory.
+    _check_sha(sha)
+    _extract_commit(src_repo, dest, sha, clear=True)
 
 
 def _parse_author(author: str) -> tuple[str, str]:
@@ -236,26 +256,6 @@ def _checkout(repo: Path, sha: str) -> None:
 
 async def checkout_commit(controller_repo: Path, sha: str) -> None:
     await asyncio.to_thread(_checkout, controller_repo, _check_sha(sha))
-
-
-def _patch_id(repo: Path, base_sha: str, sha: str) -> str:
-    diff = _git(repo, "diff", "--no-renames", "--no-ext-diff", "--no-textconv", base_sha, sha)
-    out = _git(repo, "patch-id", "--stable", stdin=diff).decode().split()
-    return out[0] if out else ""
-
-
-def _same_change(repo: Path, old_head: str, base_sha: str, new_head: str) -> bool:
-    old_base = _git(repo, "merge-base", old_head, base_sha).decode().strip()
-    before = _patch_id(repo, old_base, old_head)
-    return bool(before) and before == _patch_id(repo, base_sha, new_head)
-
-
-async def same_change(
-    controller_repo: Path, *, old_head: str, base_sha: str, new_head: str
-) -> bool:
-    for sha in (old_head, base_sha, new_head):
-        _check_sha(sha)
-    return await asyncio.to_thread(_same_change, controller_repo, old_head, base_sha, new_head)
 
 
 def _binary_diff(repo: Path, base_sha: str, sha: str) -> bytes:

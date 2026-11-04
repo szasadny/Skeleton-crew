@@ -16,6 +16,7 @@ class PromptName(StrEnum):
     WORKER_FOLLOWUP = "worker_followup"
     WORKER_UPDATE = "worker_update"
     REVIEWER = "reviewer"
+    REVIEWER_FOLLOWUP = "reviewer_followup"
     CONTINUE = "continue"
 
 

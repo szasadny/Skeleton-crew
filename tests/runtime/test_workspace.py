@@ -18,7 +18,7 @@ from skeleton_crew.runtime.workspace import (
     make_agent_copy,
     make_readonly_copy,
     merge_trees,
-    same_change,
+    refresh_readonly_copy,
     task_paths,
 )
 
@@ -119,6 +119,46 @@ def test_readonly_copy_refuses_existing_dest(
     (tmp_path / "ro").mkdir()
     with pytest.raises(FileExistsError):
         make_readonly_copy(paths.controller_repo, tmp_path / "ro", controller.head())
+
+
+def test_refresh_replaces_contents_in_place(
+    tmp_path: Path, paths: TaskPaths, controller: Repo
+) -> None:
+    first = controller.head()
+    (paths.controller_repo / "src" / "app.py").unlink()
+    controller.write("src/new.py", "print('b')\n")
+    controller.write("README.md", "later\n")
+    second = controller.commit()
+    dest = tmp_path / "ro"
+    make_readonly_copy(paths.controller_repo, dest, first)
+    (dest / "stray").mkdir()
+    (dest / "stray-link").symlink_to(tmp_path)
+    inode = dest.stat().st_ino
+    refresh_readonly_copy(paths.controller_repo, dest, second)
+    assert dest.stat().st_ino == inode
+    assert sorted(p.name for p in dest.rglob("*")) == ["README.md", "new.py", "src"]
+    assert (dest / "README.md").read_text() == "later\n"
+    assert tmp_path.is_dir()
+
+
+def test_refresh_drops_links_escaping_dest(
+    tmp_path: Path, paths: TaskPaths, controller: Repo
+) -> None:
+    dest = tmp_path / "ro"
+    make_readonly_copy(paths.controller_repo, dest, controller.head())
+    (paths.controller_repo / "absolute").symlink_to("/etc/passwd")
+    refresh_readonly_copy(paths.controller_repo, dest, controller.commit())
+    assert not (dest / "absolute").is_symlink()
+
+
+def test_refresh_rejects_option_like_sha_and_keeps_contents(
+    tmp_path: Path, paths: TaskPaths, controller: Repo
+) -> None:
+    dest = tmp_path / "ro"
+    make_readonly_copy(paths.controller_repo, dest, controller.head())
+    with pytest.raises(ValueError, match="sha"):
+        refresh_readonly_copy(paths.controller_repo, dest, "--output=/tmp/x")
+    assert (dest / "README.md").exists()
 
 
 async def test_apply_patch_commits_on_parent_with_controller_identity(
@@ -482,29 +522,6 @@ async def test_merge_parents_reach_the_agent_commit(paths: TaskPaths, controller
     parents = controller.git("rev-list", "--parents", "-n", "1", merged).decode().split()[1:]
     assert parents == [branch, main]
     assert controller.show(merged, "src/app.py") == b"print('b')\nprint('m')\n"
-
-
-async def test_same_change_detects_an_unchanged_pr_diff(controller: Repo) -> None:
-    branch, main = _branch_and_main(controller, "src/app.py=print('b')\n", "README.md=main\n")
-    attempt = await merge_trees(controller.root, branch, main)
-    merged = await commit_tree(
-        controller.root, tree=attempt.tree, parents=[branch, main], message="m", author=AUTHOR
-    )
-    root = controller.root
-
-    assert await same_change(root, old_head=branch, base_sha=main, new_head=merged)
-    assert not await same_change(root, old_head=branch, base_sha=main, new_head=main)
-
-
-async def test_same_change_rejects_a_changed_resolution(controller: Repo) -> None:
-    branch, main = _branch_and_main(
-        controller, "src/app.py=print('b')\n", "src/app.py=print('m')\n"
-    )
-    controller.git("checkout", "-q", "--detach", main)
-    controller.write("src/app.py", "print('b')\nprint('m')\n")
-    resolved = controller.commit("resolved")
-
-    assert not await same_change(controller.root, old_head=branch, base_sha=main, new_head=resolved)
 
 
 async def test_binary_diff_holds_the_whole_change(controller: Repo) -> None:
