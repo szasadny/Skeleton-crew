@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from skeleton_crew.agents.base import AgentBackend, SessionOutcome, SessionRequest, failed_outcome
 from skeleton_crew.core.audit import AuditKind, AuditOutcome
 from skeleton_crew.core.config import BootstrapConfig
-from skeleton_crew.domain.settings import AgentBackendName, AppSettings, Limits, RepoPolicy, Role
+from skeleton_crew.domain.settings import AppSettings, Limits, RepoPolicy, Role
 from skeleton_crew.github.gateway import CiState, CiStatus, Gateway
 from skeleton_crew.github.write_guard import AuditSink
 from skeleton_crew.models.refine_task import RefineTask
@@ -89,7 +89,7 @@ class PatchMaker:
 
 
 class ScriptedBackend:
-    name = AgentBackendName.CLAUDE_CODE
+    name = "scripted"
 
     def __init__(self) -> None:
         self.requests: list[SessionRequest] = []
@@ -264,7 +264,7 @@ class Harness:
             await self.sleep_hook.wait()
         await asyncio.sleep(0)
 
-    def _backend(self, name: AgentBackendName, settings: AppSettings) -> AgentBackend:
+    def _backend(self, name: str, settings: AppSettings) -> AgentBackend:
         return self.backend
 
     def deps(self) -> PipelineDeps:

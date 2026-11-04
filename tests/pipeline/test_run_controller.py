@@ -163,6 +163,38 @@ async def test_preflight_failure_stops_the_run(harness: Harness) -> None:
     assert (AuditKind.PREFLIGHT_FAILED, AuditOutcome.BLOCKED) in await harness.audit_kinds()
 
 
+@pytest.mark.parametrize(
+    "update",
+    [
+        {"agents": {"model": "model-removed-in-a-release"}},
+        {"agents": {"effort": "ultra"}},
+        {"agents": {"backend": "gone_backend"}},
+        {"backend_options": {"claude_code": {"auth_mode": "root"}}},
+        {"backend_options": {"claude_code": {"unknown_option": "x"}}},
+    ],
+)
+async def test_invalid_agent_settings_fail_preflight(
+    harness: Harness, update: dict[str, dict[str, object]]
+) -> None:
+    harness.add_ready_issue(1)
+    settings = harness.settings
+    if "agents" in update:
+        worker = settings.agents[Role.WORKER].model_copy(update=update["agents"])
+        settings = settings.model_copy(update={"agents": {**settings.agents, Role.WORKER: worker}})
+    else:
+        settings = settings.model_copy(update=update)
+    harness.settings = settings
+
+    run_id = await harness.run()
+
+    run = await harness.run_row(run_id)
+    assert run.state is RunState.PREFLIGHT_FAILED
+    assert "agents.worker" in str(run.note) or "backend_options.claude_code" in str(run.note)
+    assert harness.backend.requests == []
+    assert harness.runtime.started == []
+    assert harness.gateway.writes == []
+
+
 async def test_egress_allowlist_includes_backend_domains(harness: Harness) -> None:
     await harness.run()
 

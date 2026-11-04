@@ -1,13 +1,11 @@
-import math
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from skeleton_crew.domain.settings import AgentBackendName, Role, RoleAgent
+from pydantic import SecretStr
 
-TIMEOUT_EXIT_CODE = 124
-KILL_AFTER_S = 30
+from skeleton_crew.domain.settings import Role, RoleAgent
 
 
 @dataclass(frozen=True)
@@ -18,6 +16,7 @@ class ExecOutcome:
 
 
 class Executor(Protocol):
+    # Enforces timeout_s itself (SIGINT, then a hard kill) and reports it as timed_out.
     async def __call__(
         self,
         argv: Sequence[str],
@@ -57,7 +56,7 @@ class SessionOutcome:
 
 
 class AgentBackend(Protocol):
-    name: AgentBackendName
+    name: str
 
     def egress_domains(self) -> tuple[str, ...]: ...
 
@@ -70,10 +69,25 @@ class AgentBackend(Protocol):
     def parse(self, stdout_path: Path, exit_code: int, timed_out: bool) -> SessionOutcome: ...
 
 
-def timeout_argv(timeout_s: float) -> list[str]:
-    # SIGINT lets the CLI end its turn cleanly; the hard kill follows after KILL_AFTER_S.
-    seconds = max(1, math.ceil(timeout_s))
-    return ["timeout", "--signal=INT", f"--kill-after={KILL_AFTER_S}", str(seconds)]
+@dataclass(frozen=True)
+class OptionSpec:
+    allowed: tuple[str, ...]
+    default: str
+
+
+type BackendFactory = Callable[[Mapping[str, SecretStr], Mapping[str, str]], AgentBackend]
+
+
+@dataclass(frozen=True)
+class BackendSpec:
+    name: str
+    display_name: str
+    models: tuple[str, ...]
+    efforts: tuple[str, ...]
+    factory: BackendFactory
+    options: Mapping[str, OptionSpec] = field(default_factory=dict)
+    credentials: tuple[str, ...] = ()
+    web_tools: bool = False
 
 
 def failed_outcome(error: str, *, timed_out: bool = False) -> SessionOutcome:

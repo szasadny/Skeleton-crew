@@ -43,7 +43,8 @@ Each row has exactly one correct place. Putting it anywhere else violates the co
 | Egress allowlist rendering and reload | `runtime/egress.py` |
 | Secret scanning of a patch (gitleaks) | `runtime/secret_scan.py` |
 | The agent backend interface and the session runner | `agents/base.py`, `agents/session.py` |
-| A specific agent CLI (argv, env, output parsing) | `agents/backends/<name>.py`, registered in `agents/registry.py` |
+| A specific agent CLI (argv, env, output parsing, its `BackendSpec`) | `agents/backends/<name>.py`, registered in `agents/registry.py` |
+| Checking agent settings against the backends (model, effort, options) | `agents/registry.py` (`settings_problems`) |
 | A role prompt template | `agents/prompts/<role>.md.j2` |
 | A default work rule | `agents/rules/<role>.md` (seed for the UI-editable copy) |
 | Reading or writing settings, rules, runs, tasks | `store/` |
@@ -112,7 +113,7 @@ every package → core (core → domain only)
 
 `github/`, `runtime/` and `agents/` never import each other. `pipeline/` composes them. import-linter enforces this in CI.
 
-`web/` reaches the run controller only through the `web/ports.py` `RunControl` protocol and may import `scheduler/` to re-apply the schedule. Its only `agents/` import is `agents.rules.default_rules`, for "reset to default" on the rules page.
+`web/` reaches the run controller only through the `web/ports.py` `RunControl` protocol and may import `scheduler/` to re-apply the schedule. Its only `agents/` imports are `agents.rules.default_rules`, for "reset to default" on the rules page, and `agents.registry`, to render and check the agents page.
 
 ---
 
@@ -187,14 +188,23 @@ SQLite in the data directory, with Alembic migrations applied at startup.
 
 ### 6.1 Configuration
 
-- **Bootstrap** (`.env`, `core/config.py`, prefix `SC_`): target repo `owner/name`, GitHub App id and key path, agent credentials, UI password hash, session secret, data directory, image and network names. Never editable in the UI and never logged.
-- **Runtime** (`domain/settings.py`, edited in the UI): schedule, limits, per-role agent (backend, model, effort, web tools), label names, protected paths, `setup_command`, `check_command`, egress allowlist, resource limits, `dry_run`, kill switch.
+- **Bootstrap** (`.env`, `core/config.py`, prefix `SC_`): target repo `owner/name`, GitHub App id and key path, agent credentials (`SC_AGENT_CREDENTIALS__<NAME>`, read into `agent_credentials` with lowercase names), UI password hash, session secret, data directory, image and network names. Never editable in the UI and never logged.
+- **Runtime** (`domain/settings.py`, edited in the UI): schedule, limits, per-role agent (backend, model, effort, web tools), per-backend options (`backend_options.<backend>.<option>`), label names, protected paths, `setup_command`, `check_command`, egress allowlist, resource limits, `dry_run`, kill switch. The domain only checks the shape of agent fields; `agents/registry.py` checks them against the backends on save and in preflight. The domain's default agent strings must match a registry backend, which a test enforces.
 
 ### 6.2 Agent backends
 
-`agents/base.py` defines `AgentBackend`. A backend turns a `SessionRequest` (role, prompt, model, effort, limits, schema, rules file, resume id) into an argv plus environment, and turns the CLI output into a `SessionOutcome` (session id, raw structured output, cost, turns, error flags, early-stop reason). It also declares the egress domains and credentials it needs. `agents/registry.py` lists the models each backend accepts; the UI offers and saves only those. `agents/session.py` runs any backend through an injected executor, with a wall-clock timeout and transcript capture. Output is always validated by `domain/schemas.py`, whether or not the backend enforces a schema itself. The target repo's own agent hooks run as configured. When a session ends cleanly without a result, for example because a hook stopped the turn, the backend reports it as `stopped_early` and `pipeline/sessions.py` resumes the same session with a continue prompt, up to `max_continues` times, then fails closed.
+`agents/base.py` defines `AgentBackend`. A backend turns a `SessionRequest` (role, prompt, model, effort, limits, schema, rules file, resume id) into an argv plus environment, and turns the CLI output into a `SessionOutcome` (session id, raw structured output, cost, turns, error flags, early-stop reason). It also declares the egress domains and credentials it needs. Each backend module exports a `BackendSpec` (name, display name, models, efforts, options with allowed values and defaults, credential names, web-tools support, factory). `agents/registry.py` holds the specs: it builds a backend with only its declared credentials and its options, and `settings_problems` rejects an unknown backend, model, effort or option, both on UI save and in preflight (a run then ends `preflight_failed`). `agents/session.py` runs any backend through an injected executor with transcript capture; the executor (`runtime/containers.py`) enforces the wall-clock timeout with SIGINT and a hard kill, so backends add no timeout wrapper of their own. Output is always validated by `domain/schemas.py`, whether or not the backend enforces a schema itself. The target repo's own agent hooks run as configured. When a session ends cleanly without a result, for example because a hook stopped the turn, the backend reports it as `stopped_early` and `pipeline/sessions.py` resumes the same session with a continue prompt, up to `max_continues` times, then fails closed.
 
-MVP backend: **Claude Code** (`agents/backends/claude_code.py`): `claude -p` with `--output-format stream-json`, `--json-schema`, `--resume`, `--max-turns`, `--disallowedTools` for every interactive tool, and `--max-budget-usd` in API-key mode. Auth is `subscription` (`CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`) or `api_key` (`ANTHROPIC_API_KEY`), always with the unmodified CLI. Codex and OpenCode come after the MVP as extra backends. No other package changes.
+MVP backend: **Claude Code** (`agents/backends/claude_code.py`): `claude -p` with `--output-format stream-json`, `--json-schema`, `--resume`, `--max-turns`, `--disallowedTools` for every interactive tool, and `--max-budget-usd` in API-key mode. Option `auth_mode` is `subscription` (`SC_AGENT_CREDENTIALS__CLAUDE_OAUTH_TOKEN` from `claude setup-token`, passed as `CLAUDE_CODE_OAUTH_TOKEN`) or `api_key` (`SC_AGENT_CREDENTIALS__ANTHROPIC_API_KEY`, passed as `ANTHROPIC_API_KEY`), always with the unmodified CLI. Codex and OpenCode come after the MVP as extra backends.
+
+Adding a backend:
+
+1. A module `agents/backends/<name>.py` implementing `AgentBackend` and exporting its `BackendSpec`.
+2. One entry for that spec in `agents/registry.py`.
+3. The CLI install in `runtime/images/agent/Dockerfile`.
+4. Its credentials as `SC_AGENT_CREDENTIALS__<NAME>` in `.env`, documented in `.env.example` and `docs/install.md`.
+
+No other package changes: the UI, preflight and pipeline read everything from the registry.
 
 ### 6.3 Work rules and precedence
 

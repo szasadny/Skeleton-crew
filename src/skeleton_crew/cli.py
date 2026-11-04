@@ -14,7 +14,7 @@ from skeleton_crew.core.config import BootstrapConfig, get_config
 from skeleton_crew.core.db import make_engine, make_sessionmaker, run_migrations
 from skeleton_crew.core.logging import configure_logging
 from skeleton_crew.core.security import hash_password
-from skeleton_crew.domain.settings import AgentBackendName, AppSettings
+from skeleton_crew.domain.settings import AppSettings
 from skeleton_crew.github.gateway import Gateway, GitHubGateway, make_github_client
 from skeleton_crew.github.write_guard import AuditSink
 from skeleton_crew.pipeline.deps import PipelineDeps, audit_sink
@@ -59,8 +59,9 @@ async def _build_deps(
             token_provider=token_provider,
         )
 
-    def backend_factory(name: AgentBackendName, settings: AppSettings) -> AgentBackend:
-        return backend_for(name, config=config, auth_mode=settings.claude_auth_mode)
+    def backend_factory(name: str, settings: AppSettings) -> AgentBackend:
+        options = settings.backend_options.get(name, {})
+        return backend_for(name, credentials=config.agent_credentials, options=options)
 
     return PipelineDeps(
         config=config,

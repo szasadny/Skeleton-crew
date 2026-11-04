@@ -100,6 +100,41 @@ def test_invalid_model_names_are_rejected(model: str) -> None:
         RoleAgent(model=model)
 
 
+@pytest.mark.parametrize("backend", ["", "Claude", "a-b", "1x", "x" * 41, "x\ny", "--flag"])
+def test_invalid_backend_names_are_rejected(backend: str) -> None:
+    with pytest.raises(ValidationError):
+        RoleAgent(backend=backend)
+
+
+@pytest.mark.parametrize("effort", ["", "--max", "hi gh", "x\n", "x" * 33])
+def test_invalid_efforts_are_rejected(effort: str) -> None:
+    with pytest.raises(ValidationError):
+        RoleAgent(effort=effort)
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"Bad": {"mode": "x"}},
+        {"backend": {"bad-key": "x"}},
+        {"backend": {"mode": "--flag"}},
+        {"backend": {"mode": "a\nb"}},
+        {"backend": {"mode": "a b"}},
+        {"backend": {"mode": ""}},
+        {"backend": {"mode": "x" * 101}},
+        {"backend": {f"o{i}": "x" for i in range(21)}},
+    ],
+)
+def test_invalid_backend_options_are_rejected(options: dict[str, dict[str, str]]) -> None:
+    with pytest.raises(ValidationError):
+        AppSettings(backend_options=options)
+
+
+def test_valid_backend_options_are_accepted() -> None:
+    options = {"backend": {"mode": "api_key", "region": "eu-west-1"}}
+    assert AppSettings(backend_options=options).backend_options == options
+
+
 @pytest.mark.parametrize("tz", ["Mars/Base", "", "../etc/passwd"])
 def test_invalid_timezone_is_rejected(tz: str) -> None:
     with pytest.raises(ValidationError):

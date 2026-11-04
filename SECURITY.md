@@ -36,7 +36,7 @@ Every guardrail below is enforced in deterministic code or by GitHub itself. Non
 
 ## Residual risks
 
-- **The agent's model credential is inside the container.** The agent needs it to run. The egress allowlist limits where it can be sent, but any allowed domain is a possible channel. Use a dedicated subscription token or API key and rotate it if in doubt.
+- **The agent's model credential is inside the container.** The agent needs it to run. The egress allowlist limits where it can be sent, but any allowed domain is a possible channel. A backend only receives the `SC_AGENT_CREDENTIALS__*` entries its spec declares, and only the one for its auth mode enters the container. Use a dedicated subscription token or API key and rotate it if in doubt.
 - **Target repo hooks run in agent containers.** They run with the agent's rights, never on the controller, and the agent can change them in its own copy. Changes to them show up in the PR diff like any other file.
 - **The reviewer remembers earlier rounds within a job.** Injected text in an earlier diff can carry over to later reviews. Its verdict is only a check on the PR and never merges.
 - **The controller has the Docker socket.** That makes it root-equivalent on its host. Run Skeleton Crew on a dedicated VM that holds nothing else.
