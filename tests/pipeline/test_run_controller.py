@@ -4,19 +4,27 @@ from pathlib import Path
 import pytest
 from fake_gateway import MAINTAINER, FakePull
 from pipeline_helpers import (
+    BOTH,
+    HELLO,
+    HI,
     Harness,
+    advance_main,
     assert_no_forbidden_writes,
     git,
+    only_task,
+    open_pr,
+    parents_of,
     refine_json,
     review_json,
     selection_json,
     worker_json,
+    workspace_editor,
 )
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from skeleton_crew.core.audit import AuditKind, AuditOutcome
 from skeleton_crew.domain.settings import Role
-from skeleton_crew.domain.task_state import RefineState, RunState, TaskState
+from skeleton_crew.domain.task_state import RefineState, RunState, TaskKind, TaskState
 from skeleton_crew.github.gateway import BranchRule, CiState, CiStatus, RulesUnavailable
 from skeleton_crew.pipeline.run_controller import RunController
 from skeleton_crew.runtime.containers import ContainerHandle
@@ -161,6 +169,67 @@ async def test_preflight_failure_stops_the_run(harness: Harness) -> None:
     assert harness.runtime.started == []
     assert harness.gateway.writes == []
     assert (AuditKind.PREFLIGHT_FAILED, AuditOutcome.BLOCKED) in await harness.audit_kinds()
+
+
+@pytest.mark.parametrize(
+    "update",
+    [
+        {"agents": {"model": "model-removed-in-a-release"}},
+        {"agents": {"effort": "ultra"}},
+        {"agents": {"backend": "gone_backend"}},
+        {"backend_options": {"claude_code": {"auth_mode": "root"}}},
+        {"backend_options": {"claude_code": {"unknown_option": "x"}}},
+    ],
+)
+async def test_invalid_agent_settings_fail_preflight(
+    harness: Harness, update: dict[str, dict[str, object]]
+) -> None:
+    harness.add_ready_issue(1)
+    settings = harness.settings
+    if "agents" in update:
+        worker = settings.agents[Role.WORKER].model_copy(update=update["agents"])
+        settings = settings.model_copy(update={"agents": {**settings.agents, Role.WORKER: worker}})
+    else:
+        settings = settings.model_copy(update=update)
+    harness.settings = settings
+
+    run_id = await harness.run()
+
+    run = await harness.run_row(run_id)
+    assert run.state is RunState.PREFLIGHT_FAILED
+    assert "agents.worker" in str(run.note) or "backend_options.claude_code" in str(run.note)
+    assert harness.backend.requests == []
+    assert harness.backend_builds == []
+    assert harness.runtime.started == []
+    assert harness.gateway.writes == []
+
+
+async def test_valid_settings_build_each_configured_backend_once(harness: Harness) -> None:
+    await harness.run()
+
+    assert harness.backend_builds == ["claude_code"]
+
+
+async def test_failed_selection_still_runs_pr_maintenance(harness: Harness) -> None:
+    harness.add_ready_issue(1)
+    harness.add_ready_issue(2, "Add farewell")
+    head = await open_pr(harness, {"app.py": HI})
+    advance_main(harness, {"app.py": HELLO})
+    workspace_editor(harness, {"app.py": BOTH})
+    harness.backend.script(Role.SELECTOR, selection_json([2, 99]))
+    harness.backend.script(Role.WORKER, worker_json())
+    harness.backend.script(Role.REVIEWER, review_json())
+
+    run_id = await harness.run()
+
+    run = await harness.run_row(run_id)
+    assert run.state is RunState.FAILED
+    assert "selection failed" in str(run.note)
+    task = await only_task(harness, run_id)
+    assert (task.issue_number, task.kind, task.state) == (1, TaskKind.PR_FIX, TaskState.DONE)
+    [(_, merged)] = harness.gateway.pushes
+    assert parents_of(harness, merged)[0] == head
+    assert_no_forbidden_writes(harness)
 
 
 async def test_egress_allowlist_includes_backend_domains(harness: Harness) -> None:

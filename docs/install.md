@@ -5,9 +5,15 @@ Skeleton Crew runs on one dedicated Ubuntu 24.04 or Debian 12 VM. The controller
 ## 1. Create the VM (Proxmox)
 
 1. Download the Ubuntu 24.04 cloud image (`noble-server-cloudimg-amd64.img`) or the Debian 12 netinst ISO and create a new VM from it.
-2. Give it 4 vCPU, 8 GB RAM and a 60 GB disk. Nested virtualisation is not needed: Sysbox runs inside the guest.
+2. Give it 10 vCPU, 24 GB RAM and a 60 GB disk (see Sizing below for a smaller VM). Nested virtualisation is not needed: Sysbox runs inside the guest.
 3. Add a cloud-init drive with your user, SSH key and a static LAN IP, then boot.
 4. Clone this repository on the VM, for example to `/opt/skeleton-crew`.
+
+### Sizing
+
+A worker keeps its reviewer container alive between review rounds, and the refiner runs alongside the workers; the selector finishes before any worker starts. The peak is `2 × max_parallel_workers + 1` agent containers, each capped at `cpus` and `memory_gb` (Repo page), plus the controller and the egress proxy.
+
+The caps are limits, not reservations: a container only uses what it needs, up to its cap. With the defaults (2 workers, 2 CPUs, 4 GB) the peak is 5 containers with caps of 10 CPUs and 20 GB, so 10 vCPU and 24 GB RAM run the defaults at full load. For a smaller VM, lower `max_parallel_workers` (Limits page) or `cpus` and `memory_gb` (Repo page) until the peak fits; 1 worker with 1 CPU and 2 GB fits 4 vCPU and 8 GB.
 
 ## 2. Create the GitHub App
 
@@ -24,7 +30,7 @@ Skeleton Crew runs on one dedicated Ubuntu 24.04 or Debian 12 VM. The controller
    | Commit statuses | Read-only |
    | Metadata | Read-only |
 
-   Do not grant Workflows or Administration. Preflight refuses to run if the App has either.
+   Do not grant Workflows or Administration. Preflight refuses to run if the App has Workflows or Administration write.
 3. Disable the webhook and keep the App private.
 4. Install the App on the one target repository only. Note the App ID and, optionally, the installation ID.
 5. Generate a private key and copy it to the VM:
@@ -56,7 +62,7 @@ Rulesets need a public repository or a paid plan. On a free private repository, 
 2. Fill in `.env`:
    - `SC_REPO`: the target repository as `owner/name`.
    - `SC_GITHUB_APP_ID`, `SC_GITHUB_APP_PRIVATE_KEY_PATH` and optionally `SC_GITHUB_APP_INSTALLATION_ID`, `SC_GITHUB_BOT_LOGIN`.
-   - `SC_CLAUDE_OAUTH_TOKEN` (from `claude setup-token`) or `SC_ANTHROPIC_API_KEY`. Use a dedicated token.
+   - The agent credential, as `SC_AGENT_CREDENTIALS__<NAME>`. For Claude Code: `SC_AGENT_CREDENTIALS__CLAUDE_OAUTH_TOKEN` (from `claude setup-token`, auth mode `subscription`) or `SC_AGENT_CREDENTIALS__ANTHROPIC_API_KEY` (auth mode `api_key`, chosen on the Agents page). Use a dedicated token.
    - `SC_SESSION_SECRET`: output of `openssl rand -hex 32`.
    - `SC_SITE_ADDRESS`: the VM's LAN IP or hostname (the installer fills in the first IP it finds).
 3. Create the UI password hash and put it in `SC_UI_PASSWORD_HASH`, inside single quotes:
@@ -71,7 +77,7 @@ Rulesets need a public repository or a paid plan. On a free private repository, 
 
 1. Open `https://<vm-ip>`. Caddy uses its own internal CA, so accept the certificate warning or trust Caddy's root certificate.
 2. Log in with the password from step 4.3.
-3. Check the setup. This reports problems with the ruleset, App permissions, Sysbox, images and the egress proxy:
+3. Check the setup. This reports problems with the ruleset, App permissions, agent settings and credentials, Sysbox, images and the egress proxy:
 
    ```sh
    sudo docker compose exec controller skeleton-crew preflight

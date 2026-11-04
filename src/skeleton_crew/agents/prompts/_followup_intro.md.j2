@@ -1,0 +1,16 @@
+{% if after_merge %}
+{% set intros = {
+  "ci_failed": "After the merge, CI fails. Fix the cause. Failing job logs:",
+  "review_changes": "After the merge, the reviewer requested changes. Address every finding:",
+  "policy_failed": "After the merge, your change violates repository policy and was rejected. Fix every violation:",
+  "check_failed": "After the merge, the repository checks fail. Fix the cause. Check output:",
+} %}
+{% else %}
+{% set intros = {
+  "ci_failed": "CI failed on your change. Fix the cause. Failing job logs:",
+  "review_changes": "The reviewer requested changes. Address every finding:",
+  "policy_failed": "Your change violates repository policy and was rejected. Fix every violation:",
+  "check_failed": "The repository checks failed on your change. Fix the cause. Check output:",
+} %}
+{% endif %}
+{{ intros[kind] }}

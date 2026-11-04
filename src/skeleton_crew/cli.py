@@ -14,12 +14,12 @@ from skeleton_crew.core.config import BootstrapConfig, get_config
 from skeleton_crew.core.db import make_engine, make_sessionmaker, run_migrations
 from skeleton_crew.core.logging import configure_logging
 from skeleton_crew.core.security import hash_password
-from skeleton_crew.domain.settings import AgentBackendName, AppSettings
+from skeleton_crew.domain.settings import AppSettings
 from skeleton_crew.github.gateway import Gateway, GitHubGateway, make_github_client
 from skeleton_crew.github.write_guard import AuditSink
 from skeleton_crew.pipeline.deps import PipelineDeps, audit_sink
 from skeleton_crew.pipeline.run_controller import RunController
-from skeleton_crew.pipeline.run_setup import make_backends, preflight_problems
+from skeleton_crew.pipeline.run_setup import preflight
 from skeleton_crew.runtime.containers import DockerRuntime
 from skeleton_crew.runtime.secret_scan import scan_patch
 from skeleton_crew.scheduler.scheduler import RunScheduler
@@ -59,8 +59,9 @@ async def _build_deps(
             token_provider=token_provider,
         )
 
-    def backend_factory(name: AgentBackendName, settings: AppSettings) -> AgentBackend:
-        return backend_for(name, config=config, auth_mode=settings.claude_auth_mode)
+    def backend_factory(name: str, settings: AppSettings) -> AgentBackend:
+        options = settings.backend_options.get(name, {})
+        return backend_for(name, credentials=config.agent_credentials, options=options)
 
     return PipelineDeps(
         config=config,
@@ -113,7 +114,7 @@ async def _preflight(config: BootstrapConfig) -> list[str]:
         async with sessionmaker() as session:
             settings = await settings_store.load_settings(session)
         gateway = deps.gateway_factory(settings, audit_sink(sessionmaker, None))
-        return await preflight_problems(deps, settings, gateway, make_backends(deps, settings))
+        return (await preflight(deps, settings, gateway)).problems
     finally:
         await engine.dispose()
 

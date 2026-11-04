@@ -22,21 +22,27 @@ Skeleton Crew uses three labels, which are configurable in the UI. Only a human 
 1. The selector picks issues labelled `skeleton`, up to the daily quota.
 2. A worker opens a PR from branch `skeleton/<number>-<slug>`, with `Closes #<number>` in the body.
 3. The worker keeps fixing until CI is green and the `skeleton-crew/review` check is green.
-4. The issue keeps the `skeleton` label. While a skeleton PR for it is open, no new PR is started for it.
-5. A human reviews and merges the PR. Agents never merge.
+4. The issue keeps the `skeleton` label. While a skeleton PR for it is open, no new PR is started for it. An issue with more than one open skeleton PR is skipped entirely.
+5. If the branch already exists without an open PR, Skeleton Crew continues it only when the controller pushed its head itself. A branch with someone else's commits, or whose PR was closed without merging, escalates instead.
+6. A human reviews and merges the PR. Agents never merge.
 
 ### Keeping PRs up to date
 
-While the issue still has `skeleton`, each run checks whether its open skeleton PR conflicts with the base branch. A conflict goes to a worker, then CI and review run again, all within `conflict_fixes_per_day`. A PR that is only behind is left as it is. Remove `skeleton` (or push a commit to the branch yourself) and Skeleton Crew leaves the PR alone.
+While the issue still has `skeleton`, each run asks GitHub whether its open skeleton PR merges cleanly. A conflict goes to a worker, then CI and review run again, all within `conflict_fixes_per_day`. A PR that merges cleanly, or whose state GitHub has not computed yet, is left as it is. Remove `skeleton` (or push a commit to the branch yourself) and Skeleton Crew leaves the PR alone.
 
 ### Escalation
 
 The controller comments on the issue, removes `skeleton` and adds `skeleton HITL` when:
 
-- the worker or selector judges the scope larger than the issue describes;
+- the selector, worker or reviewer judges the scope larger than the issue describes;
 - the selector rejects the issue as unsafe or not real work on this repository;
-- the maximum number of CI or review rounds is reached;
+- the worker reports it is blocked, or a worker or reviewer session fails;
+- the setup command fails;
+- the maximum number of check, CI, policy or review rounds is reached, or CI does not report or finish in time;
+- an existing branch has commits Skeleton Crew did not push, or its PR was closed without merging;
 - the worker times out or the run window ends.
+
+To retry an issue whose existing branch escalated, delete the branch `skeleton/<number>-<slug>`, remove `skeleton HITL` and add `skeleton` again. The next run starts a fresh branch.
 
 ### New issues found by a worker
 

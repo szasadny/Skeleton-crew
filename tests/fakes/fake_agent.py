@@ -6,7 +6,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from skeleton_crew.agents.base import ExecOutcome, SessionOutcome, SessionRequest, failed_outcome
-from skeleton_crew.domain.settings import AgentBackendName, Role, RoleAgent
+from skeleton_crew.domain.settings import Role, RoleAgent
 
 
 def ok_outcome(structured_output: str, *, session_id: str = "fake-session") -> SessionOutcome:
@@ -38,7 +38,7 @@ class FakeBackend:
         self,
         outcomes: Mapping[Role, Sequence[SessionOutcome | str]] | None = None,
         *,
-        name: AgentBackendName = AgentBackendName.CLAUDE_CODE,
+        name: str = "fake",
         env: Mapping[str, str] | None = None,
         problems: Sequence[str] = (),
         egress: tuple[str, ...] = ("fake.example.com",),

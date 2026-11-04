@@ -1,3 +1,4 @@
+from collections.abc import Collection
 from datetime import datetime
 from typing import Literal
 
@@ -35,7 +36,7 @@ _WORKER_TASK_FIELDS = frozenset(
         "review_rounds",
         "policy_rounds",
         "cost_usd",
-        "escalation_reason",
+        "note",
     }
 )
 _REFINE_TASK_FIELDS = frozenset({"state", "session_id", "cost_usd", "error"})
@@ -194,3 +195,34 @@ async def last_pushed_task(session: AsyncSession, issue_number: int) -> WorkerTa
 async def count_refine_tasks_since(session: AsyncSession, since: datetime) -> int:
     query = select(func.count()).select_from(RefineTask).where(RefineTask.created_at >= since)
     return int(await session.scalar(query) or 0)
+
+
+async def expired_worker_task_ids(
+    session: AsyncSession, ids: Collection[int], before: datetime
+) -> list[int]:
+    query = select(WorkerTask.id).where(
+        WorkerTask.id.in_(ids),
+        WorkerTask.state.in_(TERMINAL_TASK_STATES),
+        WorkerTask.updated_at < before,
+    )
+    return list(await session.scalars(query.order_by(WorkerTask.id)))
+
+
+async def expired_refine_task_ids(
+    session: AsyncSession, ids: Collection[int], before: datetime
+) -> list[int]:
+    query = select(RefineTask.id).where(
+        RefineTask.id.in_(ids),
+        RefineTask.state.in_(TERMINAL_REFINE_STATES),
+        RefineTask.updated_at < before,
+    )
+    return list(await session.scalars(query.order_by(RefineTask.id)))
+
+
+async def expired_run_ids(
+    session: AsyncSession, ids: Collection[int], before: datetime
+) -> list[int]:
+    query = select(Run.id).where(
+        Run.id.in_(ids), Run.state != RunState.RUNNING, Run.finished_at < before
+    )
+    return list(await session.scalars(query.order_by(Run.id)))

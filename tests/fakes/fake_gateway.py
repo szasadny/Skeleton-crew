@@ -9,6 +9,7 @@ from skeleton_crew.domain.label_policy import LabelChange, check_label_change
 from skeleton_crew.domain.settings import LabelNames
 from skeleton_crew.domain.text_policy import truncate_text
 from skeleton_crew.domain.trust_policy import ContentEdit, IssueComment, LabelEvent
+from skeleton_crew.github._git import git_branch_head, git_clone, git_fetch, git_push
 from skeleton_crew.github.gateway import (
     BranchRule,
     CiState,
@@ -17,10 +18,6 @@ from skeleton_crew.github.gateway import (
     PullRef,
     TrustData,
     format_job_logs,
-    git_branch_head,
-    git_clone,
-    git_fetch,
-    git_push,
 )
 from skeleton_crew.github.preflight import REQUIRED_PERMISSIONS
 from skeleton_crew.github.write_guard import (
@@ -36,6 +33,7 @@ from skeleton_crew.github.write_guard import (
 )
 
 BOT_LOGIN = "skeleton-crew[bot]"
+LOCAL_PROTOCOL = "file"
 MAINTAINER = "maintainer"
 _EPOCH = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -68,6 +66,8 @@ class FakePull:
     head_ref: str
     head_sha: str
     same_repo: bool = True
+    state: str = "open"
+    merged: bool = False
 
     def ref(self) -> PullRef:
         return PullRef(
@@ -125,7 +125,8 @@ class FakeGitHubGateway:
         self.review_checks: dict[str, tuple[bool, str]] = {}
         self.pushes: list[tuple[str, str]] = []
         self.leases: list[str | None] = []
-        self.behind: dict[str, int] = {}
+        self.mergeable: dict[int, list[bool | None]] = {}
+        self.mergeable_reads: list[int] = []
         self.permission_lookups: list[str] = []
         self._ticks = 0
 
@@ -190,11 +191,31 @@ class FakeGitHubGateway:
         self.permission_lookups.append(login)
         return self.permissions.get(login, "read")
 
-    async def open_skeleton_pr_for(self, issue_number: int) -> PullRef | None:
+    async def open_skeleton_prs(self) -> dict[int, tuple[PullRef, ...]]:
+        self._maybe_fail("open_skeleton_prs")
+        found: dict[int, tuple[PullRef, ...]] = {}
         for pull in self.pulls:
-            if pull.same_repo and issue_number_from_branch(pull.head_ref) == issue_number:
+            number = issue_number_from_branch(pull.head_ref)
+            if pull.state == "open" and pull.same_repo and number is not None:
+                found[number] = (*found.get(number, ()), pull.ref())
+        return found
+
+    async def closed_unmerged_pr_for(self, branch: str) -> PullRef | None:
+        check_push_target(branch, self.base_branch)
+        self._maybe_fail("closed_unmerged_pr_for")
+        for pull in self.pulls:
+            closed = pull.state == "closed" and not pull.merged and pull.same_repo
+            if closed and pull.head_ref == branch:
                 return pull.ref()
         return None
+
+    async def pr_mergeable(self, number: int) -> bool | None:
+        self._maybe_fail("pr_mergeable")
+        self.mergeable_reads.append(number)
+        script = self.mergeable.get(number)
+        if not script:
+            return None
+        return script.pop(0) if len(script) > 1 else script[0]
 
     async def ci_status(self, sha: str, required: Collection[str] = ()) -> CiStatus:
         check_sha(sha)
@@ -319,28 +340,27 @@ class FakeGitHubGateway:
             dry_result=None,
         )
 
-    async def commits_behind(self, sha: str) -> int:
-        check_sha(sha)
-        self._maybe_fail("commits_behind")
-        return self.behind.get(sha, 0)
-
     async def clone(self, dest: Path) -> str:
         if self.source_repo is None:
             raise RuntimeError("FakeGitHubGateway.clone needs source_repo")
-        return await git_clone(str(self.source_repo), dest, self.base_branch, None)
+        return await git_clone(
+            str(self.source_repo), dest, self.base_branch, None, protocol=LOCAL_PROTOCOL
+        )
 
     async def fetch_branch(self, repo_dir: Path, branch: str) -> str:
         check_push_target(branch, self.base_branch)
         if self.push_remote is None:
             raise RuntimeError("FakeGitHubGateway.fetch_branch needs push_remote")
-        return await git_fetch(repo_dir, str(self.push_remote), branch, None)
+        return await git_fetch(
+            repo_dir, str(self.push_remote), branch, None, protocol=LOCAL_PROTOCOL
+        )
 
     async def branch_head(self, branch: str) -> str | None:
         check_push_target(branch, self.base_branch)
         self._maybe_fail("branch_head")
         if self.push_remote is None:
             return None
-        return await git_branch_head(str(self.push_remote), branch, None)
+        return await git_branch_head(str(self.push_remote), branch, None, protocol=LOCAL_PROTOCOL)
 
     async def push_branch(
         self, repo_dir: Path, branch: str, sha: str, expected_sha: str | None = None
@@ -348,7 +368,15 @@ class FakeGitHubGateway:
         async def perform() -> None:
             self._maybe_fail("push_branch")
             if self.push_remote is not None:
-                await git_push(repo_dir, str(self.push_remote), sha, branch, None, expected_sha)
+                await git_push(
+                    repo_dir,
+                    str(self.push_remote),
+                    sha,
+                    branch,
+                    None,
+                    expected_sha,
+                    protocol=LOCAL_PROTOCOL,
+                )
             self.pushes.append((branch, sha))
             self.leases.append(expected_sha)
             self._record("push_branch", branch=branch, sha=sha)

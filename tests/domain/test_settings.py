@@ -100,6 +100,41 @@ def test_invalid_model_names_are_rejected(model: str) -> None:
         RoleAgent(model=model)
 
 
+@pytest.mark.parametrize("backend", ["", "Claude", "a-b", "1x", "x" * 41, "x\ny", "--flag"])
+def test_invalid_backend_names_are_rejected(backend: str) -> None:
+    with pytest.raises(ValidationError):
+        RoleAgent(backend=backend)
+
+
+@pytest.mark.parametrize("effort", ["", "--max", "hi gh", "x\n", "x" * 33])
+def test_invalid_efforts_are_rejected(effort: str) -> None:
+    with pytest.raises(ValidationError):
+        RoleAgent(effort=effort)
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"Bad": {"mode": "x"}},
+        {"backend": {"bad-key": "x"}},
+        {"backend": {"mode": "--flag"}},
+        {"backend": {"mode": "a\nb"}},
+        {"backend": {"mode": "a b"}},
+        {"backend": {"mode": ""}},
+        {"backend": {"mode": "x" * 101}},
+        {"backend": {f"o{i}": "x" for i in range(21)}},
+    ],
+)
+def test_invalid_backend_options_are_rejected(options: dict[str, dict[str, str]]) -> None:
+    with pytest.raises(ValidationError):
+        AppSettings(backend_options=options)
+
+
+def test_valid_backend_options_are_accepted() -> None:
+    options = {"backend": {"mode": "api_key", "region": "eu-west-1"}}
+    assert AppSettings(backend_options=options).backend_options == options
+
+
 @pytest.mark.parametrize("tz", ["Mars/Base", "", "../etc/passwd"])
 def test_invalid_timezone_is_rejected(tz: str) -> None:
     with pytest.raises(ValidationError):
@@ -135,3 +170,13 @@ def test_repo_commands_are_optional_and_bounded(field: str) -> None:
 def test_missing_role_agent_is_rejected() -> None:
     with pytest.raises(ValidationError, match="missing agent config"):
         AppSettings(agents={Role.WORKER: RoleAgent()})
+
+
+@pytest.mark.parametrize("days", [0, -1, 366])
+def test_task_retention_days_out_of_range_is_rejected(days: int) -> None:
+    with pytest.raises(ValidationError):
+        Limits(task_retention_days=days)
+
+
+def test_task_retention_defaults_to_thirty_days() -> None:
+    assert Limits().task_retention_days == 30

@@ -1,15 +1,9 @@
 from fastapi import APIRouter, Request
 from fastapi.responses import Response
 
-from skeleton_crew.agents.registry import models_for
-from skeleton_crew.domain.settings import (
-    AgentBackendName,
-    AppSettings,
-    ClaudeAuthMode,
-    Effort,
-    Role,
-)
-from skeleton_crew.web.forms import Kind, SettingsPage
+from skeleton_crew.agents.registry import available_backends, field_problems
+from skeleton_crew.domain.settings import AppSettings, Role
+from skeleton_crew.web.forms import GENERAL, Kind, SettingsPage
 
 router = APIRouter()
 
@@ -19,30 +13,33 @@ _ROLE_FIELDS = {
     "effort": Kind.TEXT,
     "web_tools": Kind.BOOL,
 }
+_BACKENDS = available_backends()
+_FIELDS = {
+    **{f"agents.{role}.{name}": kind for role in Role for name, kind in _ROLE_FIELDS.items()},
+    **{
+        f"backend_options.{spec.name}.{option}": Kind.TEXT
+        for spec in _BACKENDS
+        for option in spec.options
+    },
+}
 
 
-def _unknown_models(settings: AppSettings) -> dict[str, list[str]]:
+def _problems(settings: AppSettings) -> dict[str, list[str]]:
     errors: dict[str, list[str]] = {}
-    for role, agent in settings.agents.items():
-        if agent.model not in models_for(agent.backend):
-            errors[f"agents.{role}.model"] = [f"not a {agent.backend} model"]
+    for name, messages in field_problems(settings).items():
+        errors.setdefault(name if name in _FIELDS else GENERAL, []).extend(messages)
     return errors
 
 
 _PAGE = SettingsPage(
     template="agents.html",
-    fields={
-        **{f"agents.{role}.{name}": kind for role in Role for name, kind in _ROLE_FIELDS.items()},
-        "claude_auth_mode": Kind.TEXT,
-    },
+    fields=_FIELDS,
     context={
         "roles": tuple(Role),
-        "backends": tuple(AgentBackendName),
-        "models": {backend.value: models_for(backend) for backend in AgentBackendName},
-        "efforts": tuple(Effort),
-        "auth_modes": tuple(ClaudeAuthMode),
+        "backends": _BACKENDS,
+        "specs": {spec.name: spec for spec in _BACKENDS},
     },
-    check=_unknown_models,
+    check=_problems,
 )
 
 

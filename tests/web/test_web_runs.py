@@ -31,7 +31,7 @@ async def _run_with_task(web: Web) -> tuple[Run, WorkerTask]:
             pr_number=42,
             ci_rounds=3,
             cost_usd=1.234,
-            escalation_reason="max CI rounds reached",
+            note="max CI rounds reached",
         )
         refine = await runs_store.add_refine_task(session, run.id, 99)
         await runs_store.update_refine_task(session, refine.id, state=RefineState.DONE)
@@ -70,6 +70,16 @@ async def test_run_detail_shows_tasks(web: Web) -> None:
     assert f"/runs/{run.id}/transcripts/worker-{task.id}" in html
     assert "#99" in html
     assert (await web.client.get("/runs/9999")).status_code == 404
+
+
+async def test_run_detail_links_every_transcript_key(web: Web) -> None:
+    run, task = await _run_with_task(web)
+    async with web.sessionmaker() as session:
+        [refine] = await runs_store.list_refine_tasks(session, run.id)
+    html = (await web.client.get(f"/runs/{run.id}")).text
+    for key in (f"worker-{task.id}", f"refine-{refine.id}", f"run-{run.id}-selector"):
+        assert f'href="/runs/{run.id}/transcripts/{key}"' in html
+        assert (await web.client.get(f"/runs/{run.id}/transcripts/{key}")).status_code == 200
 
 
 async def test_transcript_list_and_view_are_redacted(web: Web) -> None:
@@ -140,6 +150,23 @@ async def test_symlinked_transcript_is_rejected(web: Web, tmp_path: Path) -> Non
     assert view.status_code == 404
 
 
+async def test_transcript_list_sorts_numbers_numerically(web: Web) -> None:
+    run, task = await _run_with_task(web)
+    directory = _transcripts_dir(web, f"worker-{task.id}")
+    names = ["worker-10.jsonl", "check-1.log", "worker-2.jsonl", "reviewer-1.jsonl", "check-12.log"]
+    for name in names:
+        (directory / name).write_text("{}\n")
+    listing = (await web.client.get(f"/runs/{run.id}/transcripts/worker-{task.id}")).text
+    order = sorted(names, key=listing.index)
+    assert order == [
+        "check-1.log",
+        "check-12.log",
+        "reviewer-1.jsonl",
+        "worker-2.jsonl",
+        "worker-10.jsonl",
+    ]
+
+
 async def test_selector_transcripts_of_the_run(web: Web) -> None:
     run, _ = await _run_with_task(web)
     directory = _transcripts_dir(web, f"run-{run.id}-selector")
@@ -148,3 +175,73 @@ async def test_selector_transcripts_of_the_run(web: Web) -> None:
         f"/runs/{run.id}/transcripts/run-{run.id}-selector/selector-1.jsonl"
     )
     assert view.status_code == 200
+
+
+async def test_repo_command_logs_are_listed_and_redacted(web: Web) -> None:
+    run, task = await _run_with_task(web)
+    directory = _transcripts_dir(web, f"worker-{task.id}")
+    (directory / "setup-1.log").write_text(f"installing with {TOKEN_SECRET}\n")
+    (directory / "check-2.log").write_text("tests <b>ok</b>\n")
+    (directory / "other-1.log").write_text("hidden")
+    listing = (await web.client.get(f"/runs/{run.id}/transcripts/worker-{task.id}")).text
+    assert "setup-1.log" in listing
+    assert "check-2.log" in listing
+    assert "other-1.log" not in listing
+    setup = await web.client.get(f"/runs/{run.id}/transcripts/worker-{task.id}/setup-1.log")
+    assert setup.status_code == 200
+    assert TOKEN_SECRET not in setup.text
+    assert "installing with ***" in setup.text
+    check = await web.client.get(f"/runs/{run.id}/transcripts/worker-{task.id}/check-2.log")
+    assert "tests &lt;b&gt;ok&lt;/b&gt;" in check.text
+
+
+async def test_large_repo_command_log_shows_only_the_tail(web: Web) -> None:
+    run, task = await _run_with_task(web)
+    directory = _transcripts_dir(web, f"worker-{task.id}")
+    body = "".join(f"line {i:07d}\n" for i in range(MAX_TRANSCRIPT_BYTES // 10))
+    (directory / "check-1.log").write_text(f"HEAD {TOKEN_SECRET}\n{body}LAST LINE\n")
+    view = await web.client.get(f"/runs/{run.id}/transcripts/worker-{task.id}/check-1.log")
+    assert "Showing the last 500 KB only." in view.text
+    assert "LAST LINE" in view.text
+    assert "HEAD" not in view.text
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "..%2Fsetup-1.log",
+        "..%2F..%2Fsetup-1.log",
+        "setup-1.log%2F..",
+        "setup-1.txt",
+        "setup-1.log.bak",
+        "setup-1.logx",
+        "setup-1.jsonl.log",
+        "Setup-1.log",
+        "setup-.log",
+        "setup-%D9%A1.log",
+        "other-1.log",
+        "setup-1.sh",
+    ],
+)
+async def test_repo_command_log_bad_names_are_rejected(web: Web, name: str) -> None:
+    run, task = await _run_with_task(web)
+    directory = _transcripts_dir(web, f"worker-{task.id}")
+    hidden = ("setup-1.txt", "setup-1.log.bak", "setup-1.sh", "other-1.log")
+    for present in ("setup-1.log", *hidden):
+        (directory / present).write_text("x\n")
+    response = await web.client.get(f"/runs/{run.id}/transcripts/worker-{task.id}/{name}")
+    assert response.status_code == 404
+    listing = (await web.client.get(f"/runs/{run.id}/transcripts/worker-{task.id}")).text
+    assert not [entry for entry in hidden if entry in listing]
+
+
+async def test_symlinked_repo_command_log_is_rejected(web: Web, tmp_path: Path) -> None:
+    run, task = await _run_with_task(web)
+    directory = _transcripts_dir(web, f"worker-{task.id}")
+    outside = tmp_path / "secret.txt"
+    outside.write_text("do not show")
+    os.symlink(outside, directory / "check-1.log")
+    listing = (await web.client.get(f"/runs/{run.id}/transcripts/worker-{task.id}")).text
+    assert "check-1.log" not in listing
+    view = await web.client.get(f"/runs/{run.id}/transcripts/worker-{task.id}/check-1.log")
+    assert view.status_code == 404

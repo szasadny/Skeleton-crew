@@ -11,7 +11,7 @@ from githubkit import GitHub
 
 from skeleton_crew.core.audit import AuditKind, AuditOutcome
 from skeleton_crew.domain.settings import LabelNames
-from skeleton_crew.github.gateway import GitHubGateway
+from skeleton_crew.github.gateway import GitHubGateway, github_remote_url
 
 API = "https://api.github.com"
 REPO = "o/r"
@@ -69,7 +69,6 @@ def make_gateway(
     max_comment_chars: int = 1500,
     remote_url: Callable[[str], str] | None = None,
 ) -> GitHubGateway:
-    extra = {} if remote_url is None else {"remote_url": remote_url}
     return GitHubGateway(
         client=make_client(),
         repo=REPO,
@@ -79,7 +78,8 @@ def make_gateway(
         audit=audit,
         max_comment_chars=max_comment_chars,
         token_provider=token_provider(),
-        **extra,
+        remote_url=remote_url or github_remote_url,
+        remote_protocol="https" if remote_url is None else "file",
     )
 
 

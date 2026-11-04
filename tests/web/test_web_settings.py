@@ -10,8 +10,6 @@ from web_helpers import Web, open_web
 from skeleton_crew.core.audit import AuditKind
 from skeleton_crew.domain.settings import (
     AppSettings,
-    ClaudeAuthMode,
-    Effort,
     Limits,
     Role,
     Weekday,
@@ -37,7 +35,7 @@ def _agents_form(**overrides: str) -> dict[str, str]:
         form[f"agents.{role}.backend"] = "claude_code"
         form[f"agents.{role}.model"] = "opus"
         form[f"agents.{role}.effort"] = "medium"
-    form["claude_auth_mode"] = "subscription"
+    form["backend_options.claude_code.auth_mode"] = "subscription"
     return form | overrides
 
 
@@ -123,6 +121,8 @@ async def test_limits_page_exposes_model_constraints(web: Web) -> None:
     html = (await web.client.get("/limits")).text
     assert 'name="limits.issues_per_day" type="number" step="1" min="0" max="50"' in html
     assert 'name="limits.worker_timeout_hours" type="number" step="any" min="0" max="24"' in html
+    assert 'name="limits.task_retention_days" type="number" step="1" min="1" max="365"' in html
+    assert "2 per worker (worker and reviewer) plus 1 for the refiner" in html
     assert "Max budget USD per session" in html
 
 
@@ -152,15 +152,15 @@ async def test_agents_round_trip(web: Web) -> None:
             "agents.worker.model": "sonnet",
             "agents.worker.effort": "high",
             "agents.worker.web_tools": "on",
-            "claude_auth_mode": "api_key",
+            "backend_options.claude_code.auth_mode": "api_key",
         }
     )
     assert await _post(web, "/agents", form) == (303, "/agents?msg=saved")
     settings = await web.settings()
     worker = settings.agents[Role.WORKER]
-    assert (worker.model, worker.effort, worker.web_tools) == ("sonnet", Effort.HIGH, True)
+    assert (worker.model, worker.effort, worker.web_tools) == ("sonnet", "high", True)
     assert settings.agents[Role.REVIEWER].web_tools is False
-    assert settings.claude_auth_mode is ClaudeAuthMode.API_KEY
+    assert settings.backend_options == {"claude_code": {"auth_mode": "api_key"}}
     assert 'value="api_key" selected' in (await web.client.get("/agents")).text
 
 
@@ -177,7 +177,7 @@ async def test_agents_validation_error(web: Web) -> None:
 async def test_agents_rejects_a_model_the_backend_does_not_offer(web: Web, model: str) -> None:
     status, html = await _post(web, "/agents", _agents_form(**{"agents.worker.model": model}))
     assert status == 422
-    assert "not a claude_code model" in html
+    assert "not a Claude Code model" in html
     assert (await web.settings()).agents[Role.WORKER].model == "opus"
 
 
@@ -188,8 +188,38 @@ async def test_agents_model_is_a_select_of_backend_models(web: Web) -> None:
 
 
 async def test_agents_rejects_unknown_backend(web: Web) -> None:
-    status, _ = await _post(web, "/agents", _agents_form(**{"agents.worker.backend": "evil"}))
+    status, html = await _post(web, "/agents", _agents_form(**{"agents.worker.backend": "evil"}))
     assert status == 422
+    assert "unknown agent backend evil" in html
+    assert (await web.settings()).agents == AppSettings().agents
+
+
+async def test_agents_rejects_an_unknown_effort(web: Web) -> None:
+    status, html = await _post(web, "/agents", _agents_form(**{"agents.worker.effort": "ultra"}))
+    assert status == 422
+    assert "not a Claude Code effort" in html
+
+
+@pytest.mark.parametrize("value", ["root", "api_key\n--flag", "--dangerously-skip-permissions"])
+async def test_agents_rejects_option_values_outside_the_backend_spec(web: Web, value: str) -> None:
+    form = _agents_form(**{"backend_options.claude_code.auth_mode": value})
+    status, _ = await _post(web, "/agents", form)
+    assert status == 422
+    assert (await web.settings()).backend_options == {}
+
+
+async def test_agents_ignores_option_fields_the_registry_does_not_declare(web: Web) -> None:
+    form = _agents_form(
+        **{"backend_options.claude_code.inject": "x", "backend_options.evil.a": "b"}
+    )
+    assert await _post(web, "/agents", form) == (303, "/agents?msg=saved")
+    assert (await web.settings()).backend_options == {"claude_code": {"auth_mode": "subscription"}}
+
+
+async def test_agents_page_renders_backend_options_from_the_registry(web: Web) -> None:
+    html = (await web.client.get("/agents")).text
+    assert "<legend>Claude Code</legend>" in html
+    assert 'value="subscription" selected' in html
 
 
 async def test_repo_round_trip(web: Web) -> None:

@@ -18,7 +18,7 @@
 </div>
 {% endmacro %}
 
-{% macro number(spec, values, errors) %}
+{% macro number(spec, values, errors, hint=none) %}
 <div class="field">
   <label for="{{ spec.name }}">{{ spec.label }}</label>
   <input id="{{ spec.name }}" name="{{ spec.name }}" type="number" step="{{ spec.step }}"
@@ -26,6 +26,7 @@
     {%- if spec.max is not none %} max="{{ spec.max }}"{% endif %}
     {%- if not spec.optional %} required{% endif %} value="{{ value_of(values, spec.name) }}">
   {% if spec.optional %}<p class="hint">Leave empty for no limit.</p>{% endif %}
+  {% if hint %}<p class="hint">{{ hint }}</p>{% endif %}
   {{ field_errors(errors, spec.name) }}
 </div>
 {% endmacro %}

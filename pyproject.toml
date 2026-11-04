@@ -1,7 +1,7 @@
 [project]
 name = "skeleton-crew"
 version = "0.1.0"
-description = "Self-hosted orchestrator that lets Claude Code workers resolve labelled GitHub issues under hard guardrails."
+description = "Self-hosted orchestrator that lets coding-agent workers resolve labelled GitHub issues under hard guardrails."
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
@@ -89,3 +89,14 @@ layers = [
     "skeleton_crew.core",
     "skeleton_crew.domain",
 ]
+
+[[tool.importlinter.contracts]]
+name = "Private gateway modules are imported only by the gateway"
+type = "forbidden"
+source_modules = ["skeleton_crew.*", "skeleton_crew.github.*"]
+forbidden_modules = ["skeleton_crew.github._git", "skeleton_crew.github._ci"]
+ignore_imports = [
+    "skeleton_crew.github.gateway -> skeleton_crew.github._git",
+    "skeleton_crew.github.gateway -> skeleton_crew.github._ci",
+]
+allow_indirect_imports = true

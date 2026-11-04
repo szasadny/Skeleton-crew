@@ -2,7 +2,7 @@ import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 
-from skeleton_crew.pipeline.sessions import AGENT_USER, WORKSPACE
+from skeleton_crew.pipeline.sessions import AGENT_USER, WORKSPACE, next_numbered
 from skeleton_crew.pipeline.worker_job import WorkerJob
 
 OUTPUT_TAIL_CHARS = 20_000
@@ -23,12 +23,6 @@ class CommandResult:
         return "timed out" if self.timed_out else f"exit {self.exit_code}"
 
 
-def _log_path(transcripts: Path, name: str) -> Path:
-    transcripts.mkdir(parents=True, exist_ok=True)
-    count = sum(1 for _ in transcripts.glob(f"{name}-*.log"))
-    return transcripts / f"{name}-{count + 1}.log"
-
-
 def _tail(path: Path) -> str:
     with path.open("rb") as file:
         file.seek(max(path.stat().st_size - OUTPUT_TAIL_CHARS * 4, 0))
@@ -38,7 +32,7 @@ def _tail(path: Path) -> str:
 async def run_repo_command(job: WorkerJob, command: str, name: str) -> CommandResult:
     if job.sandbox is None:
         raise RuntimeError("worker container is not running")
-    log_path = await asyncio.to_thread(_log_path, job.sandbox.transcripts, name)
+    log_path = await asyncio.to_thread(next_numbered, job.sandbox.transcripts, name, ".log")
     # No env is passed: the repo's own commands never see the model credential.
     result = await job.ctx.deps.runtime.exec(
         job.sandbox.handle,

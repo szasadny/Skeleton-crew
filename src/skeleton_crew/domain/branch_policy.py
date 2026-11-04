@@ -38,3 +38,15 @@ def check_push_target(branch: str, base_branch: str) -> None:
         raise PolicyViolation(f"push target not allowed: {branch!r}")
     if branch == base_branch:
         raise PolicyViolation("push target is the base branch")
+
+
+def pushed_by_controller(head: str, last_pushed: str | None) -> bool:
+    return last_pushed is not None and head == last_pushed
+
+
+def continuation_problem(head: str, last_pushed: str | None, closed_pr: int | None) -> str | None:
+    if not pushed_by_controller(head, last_pushed):
+        return "the branch has commits Skeleton Crew did not push"
+    if closed_pr is not None:
+        return f"PR #{closed_pr} was closed without merging"
+    return None

@@ -5,16 +5,16 @@ import pytest
 from fake_agent import ExecStep, FakeBackend, FakeExecutor, claude_result_line, make_request
 from pydantic import SecretStr
 
-from skeleton_crew.agents.backends.claude_code import ClaudeCodeBackend
+from skeleton_crew.agents.backends.claude_code import AuthMode, ClaudeCodeBackend
 from skeleton_crew.agents.session import run_session
-from skeleton_crew.domain.settings import ClaudeAuthMode, Role
+from skeleton_crew.domain.settings import Role
 
 _TOKEN = "oauth-token-placeholder-1234"  # noqa: S105
 
 
 def _claude() -> ClaudeCodeBackend:
     return ClaudeCodeBackend(
-        auth_mode=ClaudeAuthMode.SUBSCRIPTION, oauth_token=SecretStr(_TOKEN), api_key=None
+        auth_mode=AuthMode.SUBSCRIPTION, credentials={"claude_oauth_token": SecretStr(_TOKEN)}
     )
 
 
@@ -25,10 +25,10 @@ async def test_successful_session_returns_structured_output(tmp_path: Path) -> N
     assert outcome.ok
     assert outcome.structured_output == '{"status": "done"}'
     [call] = executor.calls
-    assert call.argv[4:6] == ["claude", "-p"]
+    assert call.argv[:2] == ["claude", "-p"]
     assert call.env["CLAUDE_CODE_OAUTH_TOKEN"] == _TOKEN
     assert call.cwd == "/workspace"
-    assert call.timeout_s > 3600
+    assert call.timeout_s == make_request().timeout_s
 
 
 async def test_transcript_is_rewritten_without_credentials(tmp_path: Path) -> None:
@@ -44,7 +44,11 @@ async def test_transcript_is_rewritten_without_credentials(tmp_path: Path) -> No
 
 
 @pytest.mark.parametrize(
-    "step", [ExecStep(timed_out=True, exit_code=-1), ExecStep(exit_code=124, stdout="partial\n")]
+    "step",
+    [
+        ExecStep(timed_out=True, exit_code=-1),
+        ExecStep(timed_out=True, exit_code=124, stdout="partial\n"),
+    ],
 )
 async def test_timeout_returns_a_failed_outcome(tmp_path: Path, step: ExecStep) -> None:
     executor = FakeExecutor(default=step)

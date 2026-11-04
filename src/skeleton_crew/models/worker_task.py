@@ -29,6 +29,6 @@ class WorkerTask(Base):
     review_rounds: Mapped[int] = mapped_column(default=0)
     policy_rounds: Mapped[int] = mapped_column(default=0)
     cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
-    escalation_reason: Mapped[str | None] = mapped_column(Text)
+    note: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utc_now, onupdate=utc_now)

@@ -11,7 +11,7 @@ from skeleton_crew.domain.task_state import (
 )
 
 HAPPY_PATH = [
-    (TaskState.QUEUED, TaskEvent.PREPARED, TaskState.PREPARING),
+    (TaskState.QUEUED, TaskEvent.STARTED, TaskState.PREPARING),
     (TaskState.PREPARING, TaskEvent.PREPARED, TaskState.CODING),
     (TaskState.CODING, TaskEvent.CODE_DONE, TaskState.POLICY_CHECK),
     (TaskState.POLICY_CHECK, TaskEvent.POLICY_PASSED, TaskState.AWAITING_CI),
@@ -20,6 +20,7 @@ HAPPY_PATH = [
 ]
 LOOPS_BACK = [
     (TaskState.POLICY_CHECK, TaskEvent.POLICY_FAILED, TaskState.CODING),
+    (TaskState.POLICY_CHECK, TaskEvent.CHECK_FAILED, TaskState.CODING),
     (TaskState.AWAITING_CI, TaskEvent.CI_FAILED, TaskState.CODING),
     (TaskState.REVIEWING, TaskEvent.REVIEW_CHANGES, TaskState.CODING),
 ]
@@ -66,6 +67,23 @@ def test_coding_cannot_skip_policy_check() -> None:
         transition(TaskState.CODING, TaskEvent.POLICY_PASSED)
     with pytest.raises(InvalidTransition):
         transition(TaskState.CODING, TaskEvent.REVIEW_APPROVED)
+
+
+def test_queued_task_cannot_skip_preparing() -> None:
+    with pytest.raises(InvalidTransition):
+        transition(TaskState.QUEUED, TaskEvent.PREPARED)
+
+
+@pytest.mark.parametrize("state", [s for s in NON_TERMINAL if s is not TaskState.QUEUED])
+def test_only_a_queued_task_can_start(state: TaskState) -> None:
+    with pytest.raises(InvalidTransition):
+        transition(state, TaskEvent.STARTED)
+
+
+@pytest.mark.parametrize("state", [s for s in NON_TERMINAL if s is not TaskState.POLICY_CHECK])
+def test_check_failure_only_follows_a_policy_check(state: TaskState) -> None:
+    with pytest.raises(InvalidTransition):
+        transition(state, TaskEvent.CHECK_FAILED)
 
 
 def test_terminal_set() -> None:

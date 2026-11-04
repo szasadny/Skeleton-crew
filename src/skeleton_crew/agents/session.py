@@ -3,8 +3,6 @@ import os
 from pathlib import Path
 
 from skeleton_crew.agents.base import (
-    KILL_AFTER_S,
-    TIMEOUT_EXIT_CODE,
     AgentBackend,
     Executor,
     SessionOutcome,
@@ -13,7 +11,6 @@ from skeleton_crew.agents.base import (
 )
 from skeleton_crew.core.logging import redact
 
-_EXEC_MARGIN_S = 30
 _STDERR_LOG_CHARS = 2000
 
 logger = logging.getLogger(__name__)
@@ -46,7 +43,7 @@ async def run_session(
             backend.command(req),
             env=env,
             cwd=req.cwd,
-            timeout_s=req.timeout_s + KILL_AFTER_S + _EXEC_MARGIN_S,
+            timeout_s=req.timeout_s,
             stdout_path=transcript_path,
         )
     except Exception as exc:
@@ -62,9 +59,8 @@ async def run_session(
             redact(result.stderr_tail[-_STDERR_LOG_CHARS:], secrets),
         )
     _redact_file(transcript_path, secrets)
-    timed_out = result.timed_out or result.exit_code == TIMEOUT_EXIT_CODE
     try:
-        return backend.parse(transcript_path, result.exit_code, timed_out)
+        return backend.parse(transcript_path, result.exit_code, result.timed_out)
     except Exception:
         logger.exception("%s output for %s could not be parsed", backend.name, req.role)
-        return failed_outcome("output could not be parsed", timed_out=timed_out)
+        return failed_outcome("output could not be parsed", timed_out=result.timed_out)

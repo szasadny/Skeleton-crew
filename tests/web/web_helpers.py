@@ -30,7 +30,7 @@ def make_config(data_dir: Path, **overrides: Any) -> BootstrapConfig:
         "github_app_private_key_path": "/nonexistent/key.pem",
         "ui_password_hash": _HASH,
         "session_secret": "s" * 32,
-        "claude_oauth_token": TOKEN_SECRET,
+        "agent_credentials": {"claude_oauth_token": TOKEN_SECRET},
         "data_dir": data_dir,
         "insecure_cookies": True,
     }

@@ -5,6 +5,7 @@ from skeleton_crew.agents.prompting import PromptName
 from skeleton_crew.domain.errors import PolicyViolation
 from skeleton_crew.domain.schemas import SelectionResult, check_selection
 from skeleton_crew.domain.settings import Role
+from skeleton_crew.domain.task_keys import selector_key
 from skeleton_crew.pipeline.deps import RunContext
 from skeleton_crew.pipeline.readonly import readonly_checkout, remove_checkout
 from skeleton_crew.pipeline.run_setup import Candidate
@@ -12,14 +13,15 @@ from skeleton_crew.pipeline.sessions import Sandbox, remove_sandbox, run_agent, 
 from skeleton_crew.runtime.workspace import task_paths
 
 
-def selector_key(run_id: int) -> str:
-    return f"run-{run_id}-selector"
-
-
 def _candidate_context(candidates: Sequence[Candidate]) -> list[dict[str, object]]:
     return [
-        {"number": i.number, "title": i.title, "body": i.body, "comments": list(c)}
-        for i, c in candidates
+        {
+            "number": c.issue.number,
+            "title": c.issue.title,
+            "body": c.issue.body,
+            "comments": list(c.comments),
+        }
+        for c in candidates
     ]
 
 
@@ -55,4 +57,4 @@ async def select_issues(
         await asyncio.to_thread(remove_checkout, paths)
     if reply.result is None:
         raise PolicyViolation(f"selector session failed: {reply.error}")
-    return check_selection(reply.result, [i.number for i, _ in candidates], quota)
+    return check_selection(reply.result, [c.issue.number for c in candidates], quota)

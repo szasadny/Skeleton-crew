@@ -1,34 +1,37 @@
 import asyncio
 import base64
 from pathlib import Path
+from typing import Any
 
 import pytest
 from github_helpers import TOKEN, AuditLog, commit_on_top, git, make_bare_remote, make_gateway
 
+from skeleton_crew.core import git as core_git
 from skeleton_crew.core.audit import AuditKind, AuditOutcome
+from skeleton_crew.core.git import HARDENING, GitCommandError
 from skeleton_crew.domain.errors import PolicyViolation
-from skeleton_crew.github import gateway as gateway_module
-from skeleton_crew.github.gateway import GitCommandError, _git_env, github_remote_url, run_git
+from skeleton_crew.github import _git as git_module
+from skeleton_crew.github._git import auth_env, git_branch_head, git_clone
+from skeleton_crew.github.gateway import github_remote_url
 
 
 def test_remote_url_is_https_github() -> None:
     assert github_remote_url("o/r") == "https://github.com/o/r.git"
 
 
-def test_git_env_scopes_auth_header_to_github_and_hardens_config() -> None:
-    env = _git_env(TOKEN)
+def test_auth_env_scopes_auth_header_to_github() -> None:
+    env = auth_env(TOKEN)
 
-    assert env["GIT_CONFIG_NOSYSTEM"] == "1"
-    assert env["GIT_CONFIG_GLOBAL"] == "/dev/null"
-    assert env["GIT_TERMINAL_PROMPT"] == "0"
     assert env["GIT_CONFIG_COUNT"] == "1"
     assert env["GIT_CONFIG_KEY_0"] == "http.https://github.com/.extraheader"
     expected = base64.b64encode(f"x-access-token:{TOKEN}".encode()).decode()
     assert env["GIT_CONFIG_VALUE_0"] == f"AUTHORIZATION: basic {expected}"
-    assert "GIT_CONFIG_COUNT" not in _git_env(None)
+    assert auth_env(None) == {}
 
 
-async def test_token_never_reaches_git_argv(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_token_never_reaches_git_argv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     seen: list[tuple[object, ...]] = []
     real = asyncio.create_subprocess_exec
 
@@ -38,18 +41,35 @@ async def test_token_never_reaches_git_argv(monkeypatch: pytest.MonkeyPatch) -> 
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", spy)
 
-    await run_git(["--version"], cwd=None, token=TOKEN)
+    bare, _ = make_bare_remote(tmp_path)
+    await git_branch_head(str(bare), "main", TOKEN, protocol="file")
 
     assert seen
     assert all(TOKEN not in str(arg) for args in seen for arg in args)
-    assert seen[0][:5] == ("git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false")
+    assert seen[0][: 1 + len(HARDENING)] == ("git", *HARDENING)
 
 
-async def test_git_failure_redacts_token() -> None:
+async def test_git_failure_redacts_token(tmp_path: Path) -> None:
     with pytest.raises(GitCommandError) as info:
-        await run_git(["rev-parse", TOKEN], cwd=None, token=TOKEN)
+        await git_branch_head(str(tmp_path / TOKEN), "main", TOKEN, protocol="file")
 
+    assert "failed" in str(info.value)
     assert TOKEN not in str(info.value)
+
+
+async def test_remote_git_allows_only_https_by_default(tmp_path: Path) -> None:
+    bare, _ = make_bare_remote(tmp_path)
+
+    with pytest.raises(GitCommandError, match="transport 'file' not allowed"):
+        await git_clone(str(bare), tmp_path / "clone", "main", TOKEN)
+    with pytest.raises(GitCommandError, match="transport 'ext' not allowed"):
+        await git_branch_head("ext::sh -c touch% /tmp/pwned", "main", None)
+
+
+@pytest.mark.parametrize("protocol", ["", "file -c x=y", "file.allow", "Ext", "a=b"])
+async def test_remote_git_rejects_malformed_protocol(tmp_path: Path, protocol: str) -> None:
+    with pytest.raises(ValueError, match="protocol"):
+        await git_branch_head(str(tmp_path), "main", None, protocol=protocol)
 
 
 async def test_clone_checks_out_base_and_stores_no_credentials(tmp_path: Path) -> None:
@@ -68,16 +88,16 @@ async def test_clone_with_planted_credential_is_rejected(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     bare, _ = make_bare_remote(tmp_path)
-    real_run_git = gateway_module.run_git
+    real_run_git = core_git.run_git
 
-    async def run_and_plant(args: list[str], **kwargs: object) -> str:
-        out = await real_run_git(args, **kwargs)  # type: ignore[arg-type]
+    async def run_and_plant(args: list[str], **kwargs: Any) -> str:
+        out = await real_run_git(args, **kwargs)
         if args[0] == "clone":
             dest = Path(args[-1])
             git(dest, "config", "http.https://github.com/.extraheader", "AUTHORIZATION: x")
         return out
 
-    monkeypatch.setattr(gateway_module, "run_git", run_and_plant)
+    monkeypatch.setattr(git_module, "run_git", run_and_plant)
     gateway = make_gateway(AuditLog(), remote_url=lambda _: str(bare))
 
     with pytest.raises(PolicyViolation):
