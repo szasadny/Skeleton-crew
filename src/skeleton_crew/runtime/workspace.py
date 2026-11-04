@@ -84,6 +84,16 @@ def task_paths(tasks_dir: Path, task_key: str) -> TaskPaths:
     )
 
 
+def list_task_keys(tasks_dir: Path) -> list[str]:
+    if tasks_dir.is_symlink() or not tasks_dir.is_dir():
+        return []
+    return sorted(
+        child.name
+        for child in tasks_dir.iterdir()
+        if is_task_key(child.name) and not child.is_symlink() and child.is_dir()
+    )
+
+
 def remove_task_dirs(tasks_dir: Path, keys: Iterable[str]) -> list[str]:
     # Without fd-based rmtree a swapped-in symlink could redirect the delete outside tasks_dir.
     if not shutil.rmtree.avoids_symlink_attacks:

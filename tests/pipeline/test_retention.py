@@ -98,6 +98,19 @@ async def test_recent_and_non_terminal_task_dirs_are_kept(harness: Harness) -> N
     assert all(path.exists() for path in kept)
 
 
+async def test_dir_of_a_row_that_is_not_terminal_is_kept(harness: Harness) -> None:
+    run = await _past_run(harness, OLD)
+    awaiting = await _worker_task(harness, run, TaskState.AWAITING_CI, OLD)
+    refining = await _refine_task(harness, run, RefineState.REFINING, OLD)
+    kept = [_task_dir(harness, f"worker-{awaiting}"), _task_dir(harness, f"refine-{refining}")]
+    expired = _task_dir(harness, f"run-{run}-selector")
+
+    await harness.run()
+
+    assert all(path.exists() for path in kept)
+    assert not expired.exists()
+
+
 async def test_retention_setting_moves_the_cutoff(harness: Harness) -> None:
     run = await _past_run(harness, RECENT)
     task_dir = _task_dir(

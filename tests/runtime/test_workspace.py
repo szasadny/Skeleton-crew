@@ -15,6 +15,7 @@ from skeleton_crew.runtime.workspace import (
     checkout_commit,
     commit_tree,
     diff_summary,
+    list_task_keys,
     make_agent_copy,
     make_readonly_copy,
     merge_trees,
@@ -594,3 +595,15 @@ def test_remove_task_dirs_ignores_a_plain_file(tmp_path: Path) -> None:
 
     assert remove_task_dirs(tasks, ["run-3-selector"]) == []
     assert (tasks / "run-3-selector").is_file()
+
+
+def test_list_task_keys_skips_links_files_and_other_names(tmp_path: Path) -> None:
+    outside = _outside(tmp_path)
+    tasks = tmp_path / "tasks"
+    for name in ("worker-1", "refine-2", "run-3-selector", "notes", "worker-x"):
+        (tasks / name).mkdir(parents=True)
+    (tasks / "worker-4").symlink_to(outside, target_is_directory=True)
+    (tasks / "worker-5").write_text("file")
+
+    assert list_task_keys(tasks) == ["refine-2", "run-3-selector", "worker-1"]
+    assert list_task_keys(tmp_path / "missing") == []
