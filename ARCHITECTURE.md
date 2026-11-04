@@ -43,6 +43,7 @@ Each row has exactly one correct place. Putting it anywhere else violates the co
 | The policy check → audit → dry-run sequence every GitHub write runs | `github/write_guard.py` (shared by the gateway and its test fake) |
 | Starting, exec'ing, stopping containers; runtime health | `runtime/containers.py` |
 | Controller-side git work: worker copies, applying patches, diff summaries | `runtime/workspace.py` |
+| Pruning expired task directories | `pipeline/retention.py` (which keys expire), `runtime/workspace.py` (safe removal) |
 | Egress allowlist rendering and reload | `runtime/egress.py` |
 | Secret scanning of a patch (gitleaks) | `runtime/secret_scan.py` |
 | The agent backend interface and the session runner | `agents/base.py`, `agents/session.py` |
@@ -199,6 +200,8 @@ SQLite in the data directory, with Alembic migrations applied at startup.
 | `WorkerTask` | One issue in one run: kind (`issue`, `pr_fix`; `pr_update` only on historical rows), state, branch, PR, base and head SHA, session id, container id, round counters, cost, `note` (why it escalated, aborted or failed) |
 | `RefineTask` | One refine in one run: state, session id |
 | `AuditEvent` | Append-only: every GitHub write (allowed, blocked or dry-run), settings or rules change, kill switch |
+
+Task directories (`<data>/tasks/<key>/`, transcripts and command logs) of terminal tasks and finished runs are pruned at the start of each run once older than `task_retention_days`; their rows and the audit log are never pruned.
 
 ---
 

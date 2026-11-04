@@ -121,6 +121,8 @@ async def test_limits_page_exposes_model_constraints(web: Web) -> None:
     html = (await web.client.get("/limits")).text
     assert 'name="limits.issues_per_day" type="number" step="1" min="0" max="50"' in html
     assert 'name="limits.worker_timeout_hours" type="number" step="any" min="0" max="24"' in html
+    assert 'name="limits.task_retention_days" type="number" step="1" min="1" max="365"' in html
+    assert "2 per worker (worker and reviewer) plus 1 for the refiner" in html
     assert "Max budget USD per session" in html
 
 

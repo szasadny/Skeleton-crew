@@ -72,6 +72,16 @@ async def test_run_detail_shows_tasks(web: Web) -> None:
     assert (await web.client.get("/runs/9999")).status_code == 404
 
 
+async def test_run_detail_links_every_transcript_key(web: Web) -> None:
+    run, task = await _run_with_task(web)
+    async with web.sessionmaker() as session:
+        [refine] = await runs_store.list_refine_tasks(session, run.id)
+    html = (await web.client.get(f"/runs/{run.id}")).text
+    for key in (f"worker-{task.id}", f"refine-{refine.id}", f"run-{run.id}-selector"):
+        assert f'href="/runs/{run.id}/transcripts/{key}"' in html
+        assert (await web.client.get(f"/runs/{run.id}/transcripts/{key}")).status_code == 200
+
+
 async def test_transcript_list_and_view_are_redacted(web: Web) -> None:
     run, task = await _run_with_task(web)
     directory = _transcripts_dir(web, f"worker-{task.id}")
@@ -138,6 +148,23 @@ async def test_symlinked_transcript_is_rejected(web: Web, tmp_path: Path) -> Non
     assert "worker-2.jsonl" not in listing
     view = await web.client.get(f"/runs/{run.id}/transcripts/worker-{task.id}/worker-2.jsonl")
     assert view.status_code == 404
+
+
+async def test_transcript_list_sorts_numbers_numerically(web: Web) -> None:
+    run, task = await _run_with_task(web)
+    directory = _transcripts_dir(web, f"worker-{task.id}")
+    names = ["worker-10.jsonl", "check-1.log", "worker-2.jsonl", "reviewer-1.jsonl", "check-12.log"]
+    for name in names:
+        (directory / name).write_text("{}\n")
+    listing = (await web.client.get(f"/runs/{run.id}/transcripts/worker-{task.id}")).text
+    order = sorted(names, key=listing.index)
+    assert order == [
+        "check-1.log",
+        "check-12.log",
+        "reviewer-1.jsonl",
+        "worker-2.jsonl",
+        "worker-10.jsonl",
+    ]
 
 
 async def test_selector_transcripts_of_the_run(web: Web) -> None:

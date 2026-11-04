@@ -9,7 +9,7 @@
   <dt>Finished</dt><dd>{{ run.finished_at | dt }}</dd>
   {% if run.note %}<dt>Note</dt><dd>{{ run.note }}</dd>{% endif %}
 </dl>
-<p><a href="/runs/{{ run.id }}/transcripts/run-{{ run.id }}-selector">Selector transcripts</a></p>
+<p><a href="/runs/{{ run.id }}/transcripts/{{ selector_key }}">Selector transcripts</a></p>
 
 <h2>Worker tasks</h2>
 {% if tasks %}
@@ -25,7 +25,7 @@
     <td>{{ task.ci_rounds }} / {{ task.review_rounds }} / {{ task.policy_rounds }}</td>
     <td>${{ "%.2f" | format(task.cost_usd) }}</td>
     <td>{{ task.note or "" }}</td>
-    <td><a href="/runs/{{ run.id }}/transcripts/worker-{{ task.id }}">Transcripts</a></td>
+    <td><a href="/runs/{{ run.id }}/transcripts/{{ worker_keys[task.id] }}">Transcripts</a></td>
   </tr>
   {% endfor %}
   </tbody>
@@ -45,7 +45,7 @@
     <td>{{ task.state.value }}</td>
     <td>${{ "%.2f" | format(task.cost_usd) }}</td>
     <td>{{ task.error or "" }}</td>
-    <td><a href="/runs/{{ run.id }}/transcripts/refine-{{ task.id }}">Transcripts</a></td>
+    <td><a href="/runs/{{ run.id }}/transcripts/{{ refine_keys[task.id] }}">Transcripts</a></td>
   </tr>
   {% endfor %}
   </tbody>

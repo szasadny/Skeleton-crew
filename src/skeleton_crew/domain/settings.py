@@ -81,6 +81,7 @@ class Limits(_Frozen):
     ci_poll_seconds: int = Field(default=60, ge=10, le=900)
     ci_timeout_minutes: int = Field(default=60, ge=5, le=480)
     ci_grace_minutes: int = Field(default=10, ge=1, le=120)
+    task_retention_days: int = Field(default=30, ge=1, le=365)
 
 
 def _identifier(value: str, what: str) -> str:

@@ -40,6 +40,8 @@ The controller comments on the issue, removes `skeleton` and adds `skeleton HITL
 - an existing branch has commits Skeleton Crew did not push, or its PR was closed without merging;
 - the worker times out or the run window ends.
 
+To retry an issue whose existing branch escalated, delete the branch `skeleton/<number>-<slug>`, remove `skeleton HITL` and add `skeleton` again. The next run starts a fresh branch.
+
 ### New issues found by a worker
 
 A worker may report problems outside its scope. The controller creates each one as a new issue with `skeleton HITL`, never with `skeleton` or `skeleton refine`, up to a per-worker limit.

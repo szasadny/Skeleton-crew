@@ -3,10 +3,11 @@
 {% block content %}
 <h1>Limits</h1>
 {{ m.general_errors(errors) }}
+{% set hints = {"limits.max_parallel_workers": "Peak agent containers: 2 per worker (worker and reviewer) plus 1 for the refiner, each with the CPU and memory limits from the Repo page."} %}
 <form method="post" action="/limits">
   {{ m.csrf() }}
   <div class="grid">
-    {% for spec in specs %}{{ m.number(spec, values, errors) }}{% endfor %}
+    {% for spec in specs %}{{ m.number(spec, values, errors, hints.get(spec.name)) }}{% endfor %}
   </div>
   <button type="submit">Save</button>
 </form>

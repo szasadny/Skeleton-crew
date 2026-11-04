@@ -4,6 +4,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from skeleton_crew.domain.task_state import RefineState, RunState, TaskKind, TaskState
+from skeleton_crew.models.types import utc_now
 from skeleton_crew.store import runs_store
 
 
@@ -147,3 +148,26 @@ async def test_last_pushed_task_ignores_dry_runs_and_unpushed_tasks(session: Asy
     assert last is not None
     assert last.id == pushed.id
     assert await runs_store.last_pushed_task(session, 6) is None
+
+
+async def test_expired_ids_only_cover_old_terminal_rows(session: AsyncSession) -> None:
+    run = await runs_store.create_run(session, "manual", dry_run=False)
+    live = await runs_store.create_run(session, "manual", dry_run=False)
+    done = await runs_store.add_worker_task(session, run.id, 1, "a")
+    await runs_store.update_worker_task(session, done.id, state=TaskState.DONE)
+    queued = await runs_store.add_worker_task(session, run.id, 2, "b")
+    refined = await runs_store.add_refine_task(session, run.id, 3)
+    await runs_store.update_refine_task(session, refined.id, state=RefineState.DONE)
+    await runs_store.add_refine_task(session, run.id, 4)
+    await runs_store.finish_run(session, run.id, RunState.COMPLETED)
+    later = utc_now() + timedelta(seconds=1)
+
+    assert await runs_store.terminal_worker_task_ids_before(session, later) == [done.id]
+    assert await runs_store.terminal_refine_task_ids_before(session, later) == [refined.id]
+    assert await runs_store.finished_run_ids_before(session, later) == [run.id]
+    earlier = done.updated_at - timedelta(seconds=1)
+    assert await runs_store.terminal_worker_task_ids_before(session, earlier) == []
+    assert await runs_store.terminal_refine_task_ids_before(session, earlier) == []
+    assert await runs_store.finished_run_ids_before(session, earlier) == []
+    assert queued.id not in await runs_store.terminal_worker_task_ids_before(session, later)
+    assert live.id not in await runs_store.finished_run_ids_before(session, later)

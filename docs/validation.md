@@ -74,3 +74,7 @@ Expected: the task's transcripts show `worker-1` ending with `hook_stopped` and 
 Wait until an issue shows up in `gh issue list` before clicking **Run now**: GitHub's issue search lags a few seconds behind issue creation.
 
 When all six sections pass, the install is ready for a real repository.
+
+## Known dependency debt
+
+githubkit 0.17 deprecates its `httpx` transport, and `pyproject.toml` ignores the "Using `httpx` with GitHubKit is deprecated" warning. The tests cannot move to the new transport yet because respx, their HTTP mock, only patches `httpx`. When respx or another maintained mock supports the new transport, switch the gateway client and the tests to it and drop the filterwarnings entry.

@@ -33,8 +33,15 @@ class _RunView:
         }
 
     def context(self, request: Request) -> dict[str, object]:
-        repo = get_state(request).config.repo
-        return {"run": self.run, "tasks": self.tasks, "refines": self.refines, "repo": repo}
+        return {
+            "run": self.run,
+            "tasks": self.tasks,
+            "refines": self.refines,
+            "repo": get_state(request).config.repo,
+            "selector_key": selector_key(self.run.id),
+            "worker_keys": {task.id: worker_key(task.id) for task in self.tasks},
+            "refine_keys": {task.id: refine_key(task.id) for task in self.refines},
+        }
 
 
 async def _load_run(request: Request, run_id: int, key: str | None = None) -> _RunView:

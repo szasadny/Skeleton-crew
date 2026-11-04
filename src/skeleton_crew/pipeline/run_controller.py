@@ -21,6 +21,7 @@ from skeleton_crew.pipeline.deps import PipelineDeps, RunContext, audit_sink
 from skeleton_crew.pipeline.escalation import escalate_issue
 from skeleton_crew.pipeline.pr_maintenance import choose_pr_updates, has_conflicts, run_pr_fix
 from skeleton_crew.pipeline.refine_flow import run_refine
+from skeleton_crew.pipeline.retention import prune_task_dirs
 from skeleton_crew.pipeline.run_setup import (
     Candidate,
     Candidates,
@@ -166,6 +167,7 @@ class RunController:
                 {"problems": problems},
             )
             return RunState.PREFLIGHT_FAILED, "; ".join(problems)
+        await prune_task_dirs(deps, started, settings.limits.task_retention_days)
         async with deps.sessionmaker() as session:
             rules = await load_rules(session)
             quotas = await remaining_quotas(session, settings, started)

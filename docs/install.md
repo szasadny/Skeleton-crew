@@ -9,6 +9,10 @@ Skeleton Crew runs on one dedicated Ubuntu 24.04 or Debian 12 VM. The controller
 3. Add a cloud-init drive with your user, SSH key and a static LAN IP, then boot.
 4. Clone this repository on the VM, for example to `/opt/skeleton-crew`.
 
+### Sizing
+
+A worker keeps its reviewer container alive between review rounds, and the refiner runs alongside the workers; the selector runs before any worker starts. The peak is therefore `2 × max_parallel_workers + 1` agent containers, each capped at the `cpus` and `memory_gb` from the Repo page, plus the controller and the egress proxy. With the defaults (2 workers, 2 CPUs, 4 GB) that is 5 containers with caps of 10 CPUs and 20 GB. Caps are limits, not reservations: give the VM enough memory for the load you expect, or lower `max_parallel_workers` or `memory_gb`.
+
 ## 2. Create the GitHub App
 
 1. Create a new GitHub App under your account or organisation, either by hand or from [github-app-manifest.json](github-app-manifest.json) (set a unique `name` and your `url` first).

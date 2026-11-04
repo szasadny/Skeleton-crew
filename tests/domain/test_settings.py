@@ -170,3 +170,13 @@ def test_repo_commands_are_optional_and_bounded(field: str) -> None:
 def test_missing_role_agent_is_rejected() -> None:
     with pytest.raises(ValidationError, match="missing agent config"):
         AppSettings(agents={Role.WORKER: RoleAgent()})
+
+
+@pytest.mark.parametrize("days", [0, -1, 366])
+def test_task_retention_days_out_of_range_is_rejected(days: int) -> None:
+    with pytest.raises(ValidationError):
+        Limits(task_retention_days=days)
+
+
+def test_task_retention_defaults_to_thirty_days() -> None:
+    assert Limits().task_retention_days == 30

@@ -1,15 +1,17 @@
 import asyncio
+import logging
 import re
 import shutil
 import tarfile
 import tempfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import IO
 
 from skeleton_crew.core.git import GitCommandError, run_git_sync
 from skeleton_crew.domain.errors import PolicyViolation
+from skeleton_crew.domain.task_keys import is_task_key
 
 MAX_PATCH_BYTES = 20_000_000
 GIT_TIMEOUT_S = 300.0
@@ -17,6 +19,8 @@ GIT_TIMEOUT_S = 300.0
 _TASK_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 _SHA_RE = re.compile(r"^[0-9a-f]{40}([0-9a-f]{24})?$")
 _AUTHOR_RE = re.compile(r"^(?P<name>[^<>\n\0]*[^<>\s\0])\s*<(?P<email>[^<>\s\0]+)>$")
+
+log = logging.getLogger(__name__)
 
 AGENT_PATCH_ARGV: tuple[str, ...] = (
     "sh",
@@ -78,6 +82,27 @@ def task_paths(tasks_dir: Path, task_key: str) -> TaskPaths:
         inbox=root / "inbox",
         transcripts=root / "transcripts",
     )
+
+
+def remove_task_dirs(tasks_dir: Path, keys: Iterable[str]) -> list[str]:
+    # Without fd-based rmtree a swapped-in symlink could redirect the delete outside tasks_dir.
+    if not shutil.rmtree.avoids_symlink_attacks:
+        raise OSError("rmtree is not symlink-safe on this platform")
+    root = tasks_dir.resolve()
+    removed = []
+    for key in keys:
+        path = root / key
+        if not is_task_key(key) or path.is_symlink() or not path.is_dir():
+            continue
+        if path.resolve().parent != root:
+            continue
+        try:
+            shutil.rmtree(path)
+        except OSError:
+            log.exception("could not remove task directory %s", key)
+            continue
+        removed.append(key)
+    return removed
 
 
 def make_agent_copy(paths: TaskPaths, *, fresh: bool = True) -> None:

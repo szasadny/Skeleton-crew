@@ -15,14 +15,22 @@ def _transcripts_dir(tasks_dir: Path, key: str) -> Path | None:
     return directory if directory.is_dir() and not directory.is_symlink() else None
 
 
+def _order(name: str) -> tuple[str, int]:
+    stem, _, rest = name.partition("-")
+    return stem, int(rest.partition(".")[0])
+
+
 def list_transcripts(tasks_dir: Path, key: str) -> list[str]:
     directory = _transcripts_dir(tasks_dir, key)
     if directory is None:
         return []
     return sorted(
-        path.name
-        for path in directory.iterdir()
-        if _NAME_RE.fullmatch(path.name) and path.is_file() and not path.is_symlink()
+        (
+            path.name
+            for path in directory.iterdir()
+            if _NAME_RE.fullmatch(path.name) and path.is_file() and not path.is_symlink()
+        ),
+        key=_order,
     )
 
 
