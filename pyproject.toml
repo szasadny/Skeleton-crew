@@ -70,7 +70,7 @@ filterwarnings = [
 ]
 addopts = "--strict-markers -m 'not docker'"
 markers = [
-    "docker: needs a real Docker daemon with the Sysbox runtime (run on the VM)",
+    "docker: needs a real Docker daemon with the Sysbox runtime (VM or CI)",
 ]
 
 [tool.importlinter]
