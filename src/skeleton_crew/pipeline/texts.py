@@ -2,6 +2,7 @@ from collections.abc import Sequence
 
 from skeleton_crew.domain.diff_policy import FileChange
 from skeleton_crew.domain.schemas import NewIssue, RefineResult, ReviewResult
+from skeleton_crew.domain.settings import Role
 from skeleton_crew.domain.text_policy import sanitize_agent_text
 
 COMMIT_AUTHOR = "Skeleton Crew <skeleton-crew@users.noreply.github.com>"
@@ -23,6 +24,7 @@ CONTINUED_SUMMARY = (
 REFINE_HEADER = "## Refined spec\n\n"
 REFINE_QUESTIONS_HEADER = "\n\n### Open questions\n\n"
 REFINE_RESERVED_CHARS = len(REFINE_HEADER) + len(REFINE_QUESTIONS_HEADER)
+BLOCKERS_HEADER = "\n\n### Blockers\n\n"
 
 
 def _cap(text: str, max_chars: int, reserved: int) -> str:
@@ -44,9 +46,19 @@ def pr_title(agent_title: str) -> str:
     return PR_TITLE_PREFIX + sanitize_agent_text(agent_title, PR_TITLE_CHARS)
 
 
-def pr_body(issue_number: int, summary: str, max_chars: int) -> str:
+def tag_blockers(role: Role, blockers: Sequence[str]) -> list[str]:
+    return [f"{role.value}: {blocker}" for blocker in blockers]
+
+
+def _blockers_section(blockers: Sequence[str]) -> str:
+    if not blockers:
+        return ""
+    return BLOCKERS_HEADER + "\n".join(f"- {blocker}" for blocker in dict.fromkeys(blockers))
+
+
+def pr_body(issue_number: int, summary: str, blockers: Sequence[str], max_chars: int) -> str:
     prefix = f"Closes #{issue_number}\n\n"
-    return prefix + _cap(summary, max_chars, len(prefix))
+    return prefix + _cap(summary + _blockers_section(blockers), max_chars, len(prefix))
 
 
 def commit_message(issue_number: int, agent_title: str) -> str:
@@ -76,11 +88,18 @@ def review_text(result: ReviewResult) -> str:
     for finding in result.findings:
         where = f"{finding.path}:{finding.line}" if finding.line else finding.path or "general"
         lines.append(f"- [{finding.severity}] {where}: {finding.message}")
+    for doc in result.missing_doc_updates:
+        lines.append(f"- [docs] {doc.path}: {doc.reason}")
     return "\n".join(lines)
 
 
-def review_check_summary(result: ReviewResult, max_chars: int) -> str:
-    return sanitize_agent_text(review_text(result), max_chars)
+def review_check_summary(
+    result: ReviewResult, worker_blockers: Sequence[str], max_chars: int
+) -> str:
+    blockers = tag_blockers(Role.WORKER, worker_blockers) + tag_blockers(
+        Role.REVIEWER, result.blockers
+    )
+    return sanitize_agent_text(review_text(result) + _blockers_section(blockers), max_chars)
 
 
 def diff_stats(changes: Sequence[FileChange]) -> str:

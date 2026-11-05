@@ -245,3 +245,38 @@ async def test_symlinked_repo_command_log_is_rejected(web: Web, tmp_path: Path) 
     assert "check-1.log" not in listing
     view = await web.client.get(f"/runs/{run.id}/transcripts/worker-{task.id}/check-1.log")
     assert view.status_code == 404
+
+
+async def test_run_detail_lists_blockers_escaped(web: Web) -> None:
+    run, task = await _run_with_task(web)
+    async with web.sessionmaker() as session:
+        await runs_store.update_worker_task(
+            session,
+            task.id,
+            blockers=["worker: Python 3.13 is missing", "reviewer: <script>alert(1)</script>"],
+        )
+        await session.commit()
+    html = (await web.client.get(f"/runs/{run.id}")).text
+    assert 'class="blockers-row"' in html
+    assert "<li>worker: Python 3.13 is missing</li>" in html
+    assert "<script>alert(1)</script>" not in html
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
+
+
+async def test_run_detail_without_blockers_has_no_blockers_row(web: Web) -> None:
+    run, _ = await _run_with_task(web)
+    assert 'class="blockers-row"' not in (await web.client.get(f"/runs/{run.id}")).text
+
+
+async def test_runs_list_counts_tasks_with_blockers(web: Web) -> None:
+    async with web.sessionmaker() as session:
+        blocked = await runs_store.create_run(session, "manual", dry_run=False)
+        for number, blockers in ((1, ["worker: a"]), (2, None), (3, [])):
+            task = await runs_store.add_worker_task(session, blocked.id, number, "T")
+            await runs_store.update_worker_task(session, task.id, blockers=blockers)
+        clean = await runs_store.create_run(session, "manual", dry_run=False)
+        await runs_store.add_worker_task(session, clean.id, 4, "T")
+        await session.commit()
+    html = (await web.client.get("/runs")).text
+    assert html.count("with blockers") == 1
+    assert "1 task with blockers" in html

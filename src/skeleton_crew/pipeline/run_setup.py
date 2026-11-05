@@ -1,4 +1,6 @@
+import asyncio
 import logging
+import shutil
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -10,7 +12,9 @@ from skeleton_crew.agents.base import AgentBackend
 from skeleton_crew.agents.registry import settings_problems
 from skeleton_crew.agents.rules import compose_rules, default_rules
 from skeleton_crew.core.audit import AuditKind, AuditOutcome
+from skeleton_crew.domain.repo_docs import render_repo_docs, select_docs
 from skeleton_crew.domain.settings import AppSettings, Role
+from skeleton_crew.domain.task_keys import selector_key
 from skeleton_crew.domain.task_state import TaskKind
 from skeleton_crew.domain.trust_policy import IssueComment
 from skeleton_crew.github.gateway import (
@@ -25,6 +29,7 @@ from skeleton_crew.github.trust import trusted_issues
 from skeleton_crew.github.write_guard import AuditSink
 from skeleton_crew.pipeline.deps import PipelineDeps
 from skeleton_crew.runtime.egress import apply_allowlist
+from skeleton_crew.runtime.workspace import read_repo_docs, task_paths
 from skeleton_crew.store import rules_store, runs_store
 
 COMMON_RULES = "common"
@@ -189,3 +194,21 @@ async def load_rules(session: AsyncSession) -> dict[Role, str]:
         own = await rules_store.active_rules(session, role.value) or default_rules(role.value)
         rules[role] = compose_rules(common, own)
     return rules
+
+
+async def collect_repo_docs(
+    deps: PipelineDeps, gw: Gateway, run_id: int, backends: Mapping[str, AgentBackend]
+) -> dict[str, str]:
+    clone = task_paths(deps.config.tasks_dir, selector_key(run_id)).controller_repo
+    try:
+        await gw.clone(clone)
+        sources = await asyncio.to_thread(read_repo_docs, clone)
+    except BaseException:
+        await asyncio.to_thread(shutil.rmtree, clone, ignore_errors=True)
+        raise
+    return {
+        name: render_repo_docs(
+            select_docs(sources.candidates, sources.texts, backend.auto_loaded_docs())
+        )
+        for name, backend in backends.items()
+    }

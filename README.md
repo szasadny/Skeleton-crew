@@ -2,26 +2,26 @@
 
 Self-hosted orchestrator that lets coding agents resolve GitHub issues under guardrails enforced in code.
 
-When you incorporate skeleton crew into your project, then the skeleton crew will start to:
+The workflow is dependent on the attached label:
 
-- pick issues labelled `skeleton`, and for each one starts a coding-agent worker in its own container, which opens a PR and keeps fixing until CI and the orchestrator review are green.
-- refine issues labelled `skeleton refine` into an actionable spec and hands them back to you with the label `skeleton HITL` (Human In The Loop).
+- **`skeleton`**: a worker agent in its own container implements the issue and opens a PR, then fixes it until CI and the review are green.
+- **`skeleton refine`**: an agent turns a rough issue into a spec and hands it back with `skeleton HITL` (Human In The Loop).
 
-The skeleton crew never merges and never adds the labels `skeleton` or `skeleton refine` themselves. The human user is that gate that decides what gets picked up and what gets merged. The full label lifecycle is in [docs/labels.md](docs/labels.md).
+The user decides what gets picked up and what gets merged: Skeleton Crew never merges and never adds the labels `skeleton` or `skeleton refine`. Label lifecycle: [docs/labels.md](docs/labels.md).
 
 ## Security
 
-Skeleton crew agents never hold a GitHub token. They only return changes in their workspace and schema-validated JSON. A deterministic controller checks both against policy, and only then performs the few GitHub actions it is allowed to. Threat model and guardrails are in [SECURITY.md](SECURITY.md).
+[SECURITY.md](SECURITY.md)
 
 ## Requirements
 
-- A dedicated Ubuntu 24.04 LTS or Debian 12 VM with Docker and the [Sysbox](https://github.com/nestybox/sysbox) runtime.
-- A custom GitHub App installed on the target repository.
-- Credentials for the coding agent of choice.
+- Dedicated Ubuntu 24.04 or Debian 12 VM with Docker and [Sysbox](https://github.com/nestybox/sysbox)
+- A GitHub App installed on the target repository
+- Credentials for the coding agent
 
 ## Install
 
-Step-by-step guide for the VM, GitHub App, ruleset and first run: [docs/install.md](docs/install.md).
+[docs/install.md](docs/install.md)
 
 ## License
 

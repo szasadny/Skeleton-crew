@@ -57,6 +57,10 @@
 </div>
 {% endmacro %}
 
+{% macro blockers_badge(count) %}
+{% if count %}<span class="badge warning">{{ count }} {{ "task" if count == 1 else "tasks" }} with blockers</span>{% endif %}
+{% endmacro %}
+
 {% macro pager(base, page, has_next, extra="") %}
 <nav class="pager">
   {% if page > 1 %}<a href="{{ base }}?page={{ page - 1 }}{{ extra }}">Previous</a>{% endif %}

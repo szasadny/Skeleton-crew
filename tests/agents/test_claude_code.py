@@ -114,6 +114,10 @@ def test_egress_is_the_anthropic_api_only() -> None:
     assert _backend(AuthMode.SUBSCRIPTION).egress_domains() == ("api.anthropic.com",)
 
 
+def test_auto_loaded_docs_are_the_root_and_dot_claude_claude_md() -> None:
+    assert _backend(AuthMode.API_KEY).auto_loaded_docs() == ("CLAUDE.md", ".claude/CLAUDE.md")
+
+
 def _stream(tmp_path: Path, *lines: str) -> Path:
     path = tmp_path / "stdout.jsonl"
     path.write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")

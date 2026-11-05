@@ -27,6 +27,14 @@
     <td>{{ task.note or "" }}</td>
     <td><a href="/runs/{{ run.id }}/transcripts/{{ worker_keys[task.id] }}">Transcripts</a></td>
   </tr>
+  {% if task.blockers %}
+  <tr class="blockers-row">
+    <td colspan="8">
+      <strong>Blockers</strong>
+      <ul class="blockers">{% for blocker in task.blockers %}<li>{{ blocker }}</li>{% endfor %}</ul>
+    </td>
+  </tr>
+  {% endif %}
   {% endfor %}
   </tbody>
 </table>

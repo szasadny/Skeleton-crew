@@ -24,7 +24,9 @@ from skeleton_crew.domain.settings import Role
 from skeleton_crew.domain.task_state import TaskState
 from skeleton_crew.github.gateway import CiState, CiStatus, FailedJob
 from skeleton_crew.pipeline.sessions import AGENT_USER, INBOX, ROLE_LABEL, WORKSPACE
+from skeleton_crew.pipeline.task_record import MAX_STORED_BLOCKERS, WorkerTaskRecord
 from skeleton_crew.runtime.containers import ExecResult
+from skeleton_crew.store import runs_store
 
 BRANCH = "skeleton/1-add-greeting"
 GREETING = {"app.py": "def main() -> None:\n    print('hi')\n"}
@@ -158,6 +160,103 @@ async def test_review_changes_then_approve(harness: Harness) -> None:
     follow_up = harness.backend.prompts(Role.WORKER)[1]
     assert "Handle empty input." in follow_up.prompt
     assert follow_up.resume_session_id == "worker-session"
+
+
+async def test_missing_doc_update_alone_requests_changes(harness: Harness) -> None:
+    harness.patches = [harness.patch(GREETING), harness.patch({"README.md": "Greets.\n"})]
+    harness.backend.script(Role.WORKER, worker_json(), worker_json())
+    missing: dict[str, object] = {"path": "README.md", "reason": "Does not mention the greeting."}
+    harness.backend.script(
+        Role.REVIEWER, review_json("changes_requested", missing_docs=[missing]), review_json()
+    )
+
+    run_id = await harness.run()
+
+    [task] = await harness.tasks(run_id)
+    assert (task.state, task.review_rounds) == (TaskState.DONE, 1)
+    [first_check, _] = [w for w in harness.gateway.writes if w.action == "set_review_check"]
+    assert first_check.args["success"] is False
+    assert "- [docs] README.md: Does not mention the greeting." in str(first_check.args["summary"])
+    follow_up = harness.backend.prompts(Role.WORKER)[1]
+    assert "- [docs] README.md: Does not mention the greeting." in follow_up.prompt
+
+
+async def test_blockers_reach_the_pr_body_the_review_checks_and_the_task(
+    harness: Harness,
+) -> None:
+    harness.patches = [harness.patch(GREETING), harness.patch({"README.md": "Greets.\n"})]
+    harness.backend.script(
+        Role.WORKER,
+        worker_json(blockers=["Python 3.13 is missing", "Python 3.13 is missing"]),
+        worker_json(blockers=["Python 3.13 is missing", "pypi.org is blocked"]),
+    )
+    harness.backend.script(
+        Role.REVIEWER,
+        review_json("changes_requested", findings=[BLOCKER], blockers=["Could not run tests"]),
+        review_json(blockers=["Could not run tests"]),
+    )
+
+    run_id = await harness.run()
+
+    [task] = await harness.tasks(run_id)
+    assert task.state is TaskState.DONE
+    assert task.blockers == [
+        "worker: Python 3.13 is missing",
+        "reviewer: Could not run tests",
+        "worker: pypi.org is blocked",
+    ]
+    [pr] = harness.writes("open_pr")
+    assert str(pr.args["body"]).endswith("### Blockers\n\n- Python 3.13 is missing")
+    first, second = (str(w.args["summary"]) for w in harness.writes("set_review_check"))
+    assert first.endswith(
+        "### Blockers\n\n- worker: Python 3.13 is missing\n- reviewer: Could not run tests"
+    )
+    assert "- worker: pypi.org is blocked" in second
+    assert "- reviewer: Could not run tests" in second
+
+
+async def test_no_blockers_leave_the_task_and_texts_clean(harness: Harness) -> None:
+    harness.patches = [harness.patch(GREETING)]
+    harness.backend.script(Role.WORKER, worker_json())
+    harness.backend.script(Role.REVIEWER, review_json())
+
+    run_id = await harness.run()
+
+    [task] = await harness.tasks(run_id)
+    assert task.blockers is None
+    [pr] = harness.writes("open_pr")
+    [check] = harness.writes("set_review_check")
+    assert "Blockers" not in str(pr.args["body"])
+    assert "Blockers" not in str(check.args["summary"])
+
+
+async def test_blockers_of_a_worker_that_gives_up_are_recorded(harness: Harness) -> None:
+    harness.backend.script(
+        Role.WORKER, worker_json("blocked", note="No toolchain.", blockers=["Node 22 is missing"])
+    )
+
+    run_id = await harness.run()
+
+    [task] = await harness.tasks(run_id)
+    assert task.state is TaskState.ESCALATED
+    assert task.blockers == ["worker: Node 22 is missing"]
+
+
+async def test_task_record_dedupes_and_caps_blockers(harness: Harness) -> None:
+    async with harness.sessionmaker() as session:
+        run = await runs_store.create_run(session, "manual", dry_run=True)
+        task = await runs_store.add_worker_task(session, run.id, 1, "Add greeting")
+        await session.commit()
+    record = WorkerTaskRecord(harness.sessionmaker, task.id)
+    await record.add_blockers(["worker: a", "worker: a", "reviewer: a"])
+    await record.add_blockers(["worker: a"])
+    await record.add_blockers([f"worker: {n}" for n in range(50)])
+
+    [stored] = await harness.tasks(run.id)
+    assert stored.blockers is not None
+    assert stored.blockers[:3] == ["worker: a", "reviewer: a", "worker: 0"]
+    assert len(stored.blockers) == MAX_STORED_BLOCKERS
+    assert stored.blockers == record.blockers
 
 
 def _snapshot_reviewer_mounts(harness: Harness) -> list[dict[str, str]]:

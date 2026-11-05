@@ -58,6 +58,9 @@ class FakeBackend:
     def egress_domains(self) -> tuple[str, ...]:
         return self._egress
 
+    def auto_loaded_docs(self) -> tuple[str, ...]:
+        return ("CLAUDE.md",)
+
     def credential_problems(self) -> list[str]:
         return list(self._problems)
 

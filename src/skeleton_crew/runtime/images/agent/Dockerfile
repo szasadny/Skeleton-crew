@@ -2,10 +2,17 @@ FROM ubuntu:24.04
 
 ARG CLAUDE_CODE_VERSION=2.1.312
 ARG DOCKER_GPG_FINGERPRINT=9DC858229FC7DD38854AE2D88D81803C0EBFCD88
+ARG MISE_VERSION=2026.11.1
+ARG MISE_SHA256=7129dbab31d698f9028db9374f7ba7987232b0426f837dcbce437130a61415f9
 
 ENV DEBIAN_FRONTEND=noninteractive \
     DISABLE_AUTOUPDATER=1 \
-    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
+    MISE_DATA_DIR=/home/agent/.local/share/mise \
+    MISE_YES=1 \
+    MISE_TRUSTED_CONFIG_PATHS=/workspace \
+    MISE_IDIOMATIC_VERSION_FILE_ENABLE_TOOLS=python,node,ruby,go,java \
+    PATH=/home/agent/.local/share/mise/shims:${PATH}
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
@@ -26,6 +33,13 @@ RUN install -m 0755 -d /etc/apt/keyrings \
     && apt-get install -y --no-install-recommends \
         docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin \
     && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL -o /tmp/mise \
+        "https://github.com/jdx/mise/releases/download/v${MISE_VERSION}/mise-v${MISE_VERSION}-linux-x64" \
+    && echo "${MISE_SHA256}  /tmp/mise" | sha256sum -c - \
+    && install -m 0755 /tmp/mise /usr/local/bin/mise \
+    && rm /tmp/mise \
+    && mise --version
 
 # The native installer targets $HOME; the binary is self-contained, so it is moved to a system path.
 RUN curl -fsSL https://claude.ai/install.sh -o /tmp/install-claude.sh \

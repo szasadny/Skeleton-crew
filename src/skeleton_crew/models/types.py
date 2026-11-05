@@ -1,10 +1,13 @@
+import json
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from sqlalchemy import DateTime, Dialect, String
+from pydantic import TypeAdapter
+from sqlalchemy import DateTime, Dialect, String, Text
 from sqlalchemy.types import TypeDecorator
 
 ENUM_LENGTH = 32
+_STRING_LIST = TypeAdapter(list[str])
 
 
 def utc_now() -> datetime:
@@ -40,3 +43,14 @@ class StrEnumType[E: StrEnum](TypeDecorator[E]):
 
     def process_result_value(self, value: str | None, dialect: Dialect) -> E | None:
         return None if value is None else self._enum_cls(value)
+
+
+class JsonStringList(TypeDecorator[list[str]]):
+    impl = Text
+    cache_ok = True
+
+    def process_bind_param(self, value: list[str] | None, dialect: Dialect) -> str | None:
+        return None if value is None else json.dumps(_STRING_LIST.validate_python(value))
+
+    def process_result_value(self, value: str | None, dialect: Dialect) -> list[str] | None:
+        return None if value is None else _STRING_LIST.validate_json(value)

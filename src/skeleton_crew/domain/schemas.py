@@ -41,11 +41,12 @@ Text1000 = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1,
 Text1500 = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1500)]
 Text4000 = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4000)]
 Text6000 = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=6000)]
-FindingPath = Annotated[
+Line300 = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=300),
     AfterValidator(_single_line),
 ]
+FindingPath = Line300
 
 
 class _AgentOutput(BaseModel):
@@ -71,6 +72,7 @@ class WorkerResult(_AgentOutput):
     note: Text1500 | None = None
     new_issues: list[NewIssue] = Field(default_factory=list, max_length=10)
     objections: list[Objection] = Field(default_factory=list, max_length=20)
+    blockers: list[Line300] = Field(max_length=10)
 
     @model_validator(mode="after")
     def _note_explains_non_done(self) -> Self:
@@ -92,17 +94,26 @@ class ReviewFinding(_AgentOutput):
         return self
 
 
+class MissingDocUpdate(_AgentOutput):
+    path: FindingPath
+    reason: Text500
+
+
 class ReviewResult(_AgentOutput):
     verdict: Literal["approve", "changes_requested", "scope_too_large"]
     summary: Text1000
     findings: list[ReviewFinding] = Field(default_factory=list, max_length=30)
+    missing_doc_updates: list[MissingDocUpdate] = Field(max_length=20)
+    blockers: list[Line300] = Field(max_length=10)
 
     @model_validator(mode="after")
     def _verdict_matches_findings(self) -> Self:
         if self.verdict == "approve" and any(f.severity != "minor" for f in self.findings):
             raise ValueError("approve is not allowed with blocker or major findings")
-        if self.verdict == "changes_requested" and not self.findings:
-            raise ValueError("changes_requested needs at least one finding")
+        if self.verdict == "approve" and self.missing_doc_updates:
+            raise ValueError("approve is not allowed with missing doc updates")
+        if self.verdict == "changes_requested" and not (self.findings or self.missing_doc_updates):
+            raise ValueError("changes_requested needs a finding or a missing doc update")
         return self
 
 
