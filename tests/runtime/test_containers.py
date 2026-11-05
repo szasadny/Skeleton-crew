@@ -14,8 +14,10 @@ from skeleton_crew.domain.errors import PolicyViolation
 from skeleton_crew.runtime import containers
 from skeleton_crew.runtime.containers import (
     MANAGED_LABEL,
+    READY_FILE,
     AgentContainerSpec,
     ContainerHandle,
+    ContainerStartError,
     DockerRuntime,
     Mount,
     timeout_argv,
@@ -47,6 +49,7 @@ def make_spec(tmp_path: Path, **overrides: Any) -> AgentContainerSpec:
 def client() -> MagicMock:
     mock = MagicMock(spec=DockerClient)
     mock.api = MagicMock(spec=APIClient)
+    mock.containers.run.return_value.exec_run.return_value.exit_code = 0
     return mock
 
 
@@ -97,6 +100,62 @@ async def test_managed_label_cannot_be_overridden(tmp_path: Path, client: MagicM
     client.containers.run.return_value.id = "abc"
     await DockerRuntime(client).start(make_spec(tmp_path, labels={MANAGED_LABEL: "false"}))
     assert client.containers.run.call_args.kwargs["labels"][MANAGED_LABEL] == "true"
+
+
+async def test_start_waits_for_the_ready_marker(
+    tmp_path: Path, client: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(containers, "_READY_POLL_S", 0.0)
+    container = client.containers.run.return_value
+    container.id = "abc"
+    container.status = "running"
+    container.exec_run.side_effect = [MagicMock(exit_code=1), MagicMock(exit_code=0)]
+
+    handle = await DockerRuntime(client).start(make_spec(tmp_path))
+
+    assert handle.id == "abc"
+    assert container.exec_run.call_count == 2
+    container.exec_run.assert_called_with(["test", "-f", READY_FILE])
+    client.containers.get.assert_not_called()
+
+
+async def test_start_fails_closed_when_never_ready(
+    tmp_path: Path, client: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(containers, "_READY_POLL_S", 0.0)
+    monkeypatch.setattr(containers, "_READY_TIMEOUT_S", 0.0)
+    container = client.containers.run.return_value
+    container.id = "abc"
+    container.status = "running"
+    container.exec_run.return_value.exit_code = 1
+
+    with pytest.raises(ContainerStartError, match="not ready"):
+        await DockerRuntime(client).start(make_spec(tmp_path))
+    client.containers.get.assert_called_once_with("abc")
+    client.containers.get.return_value.remove.assert_called_once_with(force=True, v=True)
+
+
+async def test_start_fails_when_container_stops_during_startup(
+    tmp_path: Path, client: MagicMock
+) -> None:
+    container = client.containers.run.return_value
+    container.id = "abc"
+    container.status = "exited"
+    container.exec_run.side_effect = docker.errors.APIError("container is not running")
+
+    with pytest.raises(ContainerStartError, match="stopped during startup"):
+        await DockerRuntime(client).start(make_spec(tmp_path))
+    client.containers.get.return_value.remove.assert_called_once_with(force=True, v=True)
+
+
+async def test_start_error_survives_a_failed_cleanup(tmp_path: Path, client: MagicMock) -> None:
+    container = client.containers.run.return_value
+    container.status = "exited"
+    container.exec_run.return_value.exit_code = 1
+    client.containers.get.return_value.remove.side_effect = docker.errors.APIError("wedged")
+
+    with pytest.raises(ContainerStartError):
+        await DockerRuntime(client).start(make_spec(tmp_path))
 
 
 @pytest.mark.parametrize(

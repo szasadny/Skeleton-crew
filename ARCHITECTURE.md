@@ -100,7 +100,7 @@ VM (Ubuntu 24.04 or Debian 12, Docker + Sysbox)
    ├─ caddy         TLS → web UI on the LAN IP
    ├─ controller    FastAPI + APScheduler + SQLite; only holder of the GitHub App key; docker.sock
    ├─ egress-proxy  Squid with a domain allowlist; the only internet route for agent containers
-   └─ agent-*       spawned per session: runtime=sysbox-runc, internal network, non-root, resource limits
+   └─ agent-*       spawned per session: runtime=sysbox-runc, internal network, non-root, resource limits; handed out only once the entrypoint is ready
 ```
 
 The data directory (`SC_DATA_DIR`) is bind-mounted into the controller at the **same path** as on the host, so the controller can hand host paths to Docker for agent mounts.

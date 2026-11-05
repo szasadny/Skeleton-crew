@@ -68,7 +68,7 @@ docker/       controller Dockerfile
 deploy/       Caddyfile
 scripts/      install.sh (Ubuntu 24.04 or Debian 12 VM)
 docker-compose.yml
-.github/workflows/ci.yml
+.github/workflows/ci.yml, docker.yml
 ```
 
 Packages are created when their step is built. Do not create empty placeholders.
@@ -95,7 +95,8 @@ From the repo root:
 1. Lint: `uv run --no-sync ruff check . && uv run --no-sync ruff format --check .` (`ruff check --fix` / `ruff format` to fix)
 2. Types and layers: `uv run --no-sync mypy && uv run --no-sync lint-imports`
 3. Tests: `uv run --no-sync pytest -q`
-4. Container tests (on a host with Docker + Sysbox only): `uv run --no-sync pytest -m docker -q`
+4. Container tests (on a host with Docker + Sysbox only; CI runs them too): `uv run --no-sync pytest -m docker -q`
+5. Dependency audit: `uv audit --locked --preview-features audit-command`
 
 Dependencies: `uv sync --locked`. After changing a dependency, run `uv lock` and commit `uv.lock` in the same change. pytest runs with `filterwarnings = ["error"]`: fix warnings at the source.
 
