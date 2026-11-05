@@ -81,11 +81,16 @@ def new_issue_text(issue: NewIssue, source_issue: int, max_chars: int) -> tuple[
 
 
 def refine_comment(result: RefineResult, max_chars: int) -> str:
-    text = result.spec_markdown
+    budget = max_chars - len(REFINE_HEADER)
+    questions = ""
     if result.open_questions:
-        questions = "\n".join(f"- {q}" for q in result.open_questions)
-        text += f"{REFINE_QUESTIONS_HEADER}{questions}"
-    return REFINE_HEADER + _cap(text, max_chars, len(REFINE_HEADER))
+        # The owner acts on the questions, so they keep their room and the spec is cut instead.
+        listed = "\n".join(f"- {q}" for q in result.open_questions)
+        questions = REFINE_QUESTIONS_HEADER + _cap(
+            listed, budget // 2, len(REFINE_QUESTIONS_HEADER)
+        )
+    spec = _cap(result.spec_markdown, budget, len(questions))
+    return REFINE_HEADER + spec + questions
 
 
 def review_text(result: ReviewResult) -> str:

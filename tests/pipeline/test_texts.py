@@ -1,6 +1,16 @@
-from skeleton_crew.domain.schemas import MissingDocUpdate, ReviewFinding, ReviewResult
+from skeleton_crew.domain.schemas import (
+    MissingDocUpdate,
+    RefineResult,
+    ReviewFinding,
+    ReviewResult,
+)
 from skeleton_crew.domain.text_policy import TRUNCATION_SUFFIX
-from skeleton_crew.pipeline.texts import pr_body, review_check_summary, review_text
+from skeleton_crew.pipeline.texts import (
+    pr_body,
+    refine_comment,
+    review_check_summary,
+    review_text,
+)
 
 
 def _result(*docs: MissingDocUpdate, blockers: tuple[str, ...] = ()) -> ReviewResult:
@@ -77,3 +87,30 @@ def test_pr_body_caps_many_blockers_and_keeps_the_closing_line() -> None:
     assert len(body) == 1000
     assert body.startswith("Closes #1\n\n")
     assert body.endswith(TRUNCATION_SUFFIX)
+
+
+def test_refine_comment_keeps_questions_when_the_spec_is_too_long() -> None:
+    result = RefineResult(spec_markdown="s" * 3000, open_questions=["Which slot?", "Who approves?"])
+    comment = refine_comment(result, 1500)
+    assert len(comment) <= 1500
+    assert comment.startswith("## Refined spec\n\nsss")
+    assert TRUNCATION_SUFFIX in comment
+    assert comment.endswith("### Open questions\n\n- Which slot?\n- Who approves?")
+
+
+def test_refine_comment_caps_many_long_questions_to_half() -> None:
+    result = RefineResult(spec_markdown="Goal.", open_questions=["q" * 300] * 10)
+    comment = refine_comment(result, 1500)
+    assert len(comment) <= 1500
+    assert comment.startswith("## Refined spec\n\nGoal.\n\n### Open questions")
+    assert comment.endswith(TRUNCATION_SUFFIX)
+
+
+def test_refine_comment_without_questions_is_only_the_spec() -> None:
+    comment = refine_comment(RefineResult(spec_markdown="Goal: greet."), 1500)
+    assert comment == "## Refined spec\n\nGoal: greet."
+
+
+def test_refine_comment_sanitises_questions() -> None:
+    result = RefineResult(spec_markdown="Goal.", open_questions=["Ask @owner?"])
+    assert "@owner" not in refine_comment(result, 1500)
