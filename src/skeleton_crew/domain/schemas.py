@@ -127,9 +127,17 @@ class SelectionPick(_AgentOutput):
     reason: Text300
 
 
+class SelectionQuestion(_AgentOutput):
+    issue_number: int = Field(ge=1)
+    problem: Text300
+    question: Text300
+    options: list[Text300] = Field(min_length=1, max_length=5)
+
+
 class SelectionResult(_AgentOutput):
     picks: list[SelectionPick] = Field(default_factory=list, max_length=50)
     too_large: list[SelectionPick] = Field(default_factory=list, max_length=50)
+    needs_decision: list[SelectionQuestion] = Field(default_factory=list, max_length=50)
     rejected: list[SelectionPick] = Field(default_factory=list, max_length=50)
 
 
@@ -142,15 +150,19 @@ def check_selection(
 ) -> SelectionResult:
     if quota < 0:
         raise PolicyViolation(f"invalid quota: {quota}")
-    numbers = [p.issue_number for p in (*result.picks, *result.too_large, *result.rejected)]
+    entries: list[SelectionPick | SelectionQuestion] = [
+        *result.picks,
+        *result.too_large,
+        *result.needs_decision,
+        *result.rejected,
+    ]
+    numbers = [entry.issue_number for entry in entries]
     if len(set(numbers)) != len(numbers):
         raise PolicyViolation("selection lists an issue more than once")
     unknown = sorted(set(numbers) - set(candidates))
     if unknown:
         raise PolicyViolation(f"selection lists unknown issues: {unknown}")
-    return SelectionResult(
-        picks=result.picks[:quota], too_large=result.too_large, rejected=result.rejected
-    )
+    return result.model_copy(update={"picks": result.picks[:quota]})
 
 
 def parse_output[T: BaseModel](model: type[T], raw: str) -> T:

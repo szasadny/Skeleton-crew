@@ -145,7 +145,7 @@ every package → core (core → domain only)
 
 1. **Preflight**: a ruleset on the base branch requires a PR plus ≥1 approval, and the App cannot bypass it (without any ruleset only when `allow_unprotected_base_branch` is on); the App has the required permissions, no `workflows` permission and no `administration` write; the agent settings pass `agents/registry.py`; Docker, Sysbox, the agent image and the proxy are healthy; each configured backend has its credential; the required checks can be read, the egress allowlist applied and the repo docs read (§6.3) from a clone of the base branch that the selector reuses. Any failure ends the run as `preflight_failed`. While the kill switch is on, no run starts.
 2. **Candidates**: open issues with the labels that pass the trust rules (`docs/labels.md` § Trust), except issues that also carry `skeleton HITL` (or, for `skeleton`, `skeleton refine`). Issues with an open skeleton PR go to PR maintenance instead. Expired task directories are pruned before this step (§5).
-3. **Selector**: orders candidates up to the daily quota. Every candidate it does not pick is escalated as too large or rejected, with a reason.
+3. **Selector**: orders candidates up to the daily quota. It escalates only issues that are clearly too large, need an owner decision (with the question and options) or are rejected; every other candidate it does not pick stays queued.
 4. **Worker pool** (≤ `max_parallel_workers`), and in parallel the **refine flow**. PR maintenance jobs (§4.4) take slots before new issues.
 5. **Stop** when candidates or quota run out, the window ends, or the kill switch fires.
 

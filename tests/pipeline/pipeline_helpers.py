@@ -220,12 +220,24 @@ def review_json(
 
 
 def selection_json(
-    picks: Sequence[int] = (), too_large: Sequence[int] = (), rejected: Sequence[int] = ()
+    picks: Sequence[int] = (),
+    too_large: Sequence[int] = (),
+    rejected: Sequence[int] = (),
+    needs_decision: Sequence[int] = (),
 ) -> str:
     return json.dumps(
         {
             "picks": [{"issue_number": n, "reason": "small"} for n in picks],
             "too_large": [{"issue_number": n, "reason": "huge"} for n in too_large],
+            "needs_decision": [
+                {
+                    "issue_number": n,
+                    "problem": "Fallback address is not specified.",
+                    "question": "Which address should replies go to?",
+                    "options": ["owner account", "info address from .env"],
+                }
+                for n in needs_decision
+            ],
             "rejected": [{"issue_number": n, "reason": "unsafe"} for n in rejected],
         }
     )

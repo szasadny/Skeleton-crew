@@ -14,6 +14,7 @@ from skeleton_crew.domain.schemas import (
     ReviewFinding,
     ReviewResult,
     SelectionPick,
+    SelectionQuestion,
     SelectionResult,
     WorkerResult,
     check_selection,
@@ -47,6 +48,15 @@ def review(**overrides: Any) -> str:
 
 def finding(severity: str = "minor", **overrides: Any) -> dict[str, Any]:
     return {"severity": severity, "message": "m", **overrides}
+
+
+def decision_raw(**overrides: Any) -> dict[str, Any]:
+    return {
+        "issue_number": 3,
+        "problem": "p",
+        "question": "q",
+        "options": ["a", "b"],
+    } | overrides
 
 
 def doc(**overrides: Any) -> dict[str, Any]:
@@ -253,6 +263,12 @@ def test_refine_result_limits() -> None:
         {"picks": [{"issue_number": 3, "reason": "x" * 301}]},
         {"picks": [{"issue_number": 3, "reason": "r"}] * 51},
         {"too_large": [{"issue_number": 3, "reason": "r"}] * 51},
+        {"needs_decision": [decision_raw(options=[])]},
+        {"needs_decision": [decision_raw(options=["o"] * 6)]},
+        {"needs_decision": [decision_raw(question="")]},
+        {"needs_decision": [decision_raw(problem="x" * 301)]},
+        {"needs_decision": [{**decision_raw(), "reason": "r"}]},
+        {"needs_decision": [{k: v for k, v in decision_raw().items() if k != "options"}]},
     ],
 )
 def test_invalid_selection_output_fails_closed(raw: dict[str, Any]) -> None:
@@ -274,6 +290,30 @@ def test_violation_message_does_not_echo_agent_input() -> None:
 
 def pick(number: int) -> SelectionPick:
     return SelectionPick(issue_number=number, reason="r")
+
+
+def decision(number: int) -> SelectionQuestion:
+    return SelectionQuestion.model_validate(decision_raw(issue_number=number))
+
+
+def test_check_selection_keeps_decisions_beyond_the_quota() -> None:
+    result = SelectionResult(picks=[pick(1), pick(2)], needs_decision=[decision(3)])
+    checked = check_selection(result, {1, 2, 3}, 1)
+    assert checked == SelectionResult(picks=[pick(1)], needs_decision=[decision(3)])
+
+
+@pytest.mark.parametrize(
+    ("picks", "decisions"),
+    [([], [99]), ([1], [1]), ([], [2, 2])],
+)
+def test_check_selection_rejects_unknown_or_repeated_decisions(
+    picks: list[int], decisions: list[int]
+) -> None:
+    result = SelectionResult(
+        picks=[pick(n) for n in picks], needs_decision=[decision(n) for n in decisions]
+    )
+    with pytest.raises(PolicyViolation):
+        check_selection(result, {1, 2, 3}, 10)
 
 
 def test_check_selection_truncates_picks_to_quota() -> None:
