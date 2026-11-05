@@ -8,6 +8,7 @@ import pytest
 from docker.client import DockerClient, from_env
 
 from skeleton_crew.runtime.containers import (
+    READY_FILE,
     SANDBOX_RUNTIME,
     AgentContainerSpec,
     ContainerHandle,
@@ -73,6 +74,16 @@ async def test_exec_runs_as_agent_in_sysbox(
     attrs = client.containers.get(handle.id).attrs["HostConfig"]
     assert attrs["Runtime"] == SANDBOX_RUNTIME
     assert attrs["Privileged"] is False
+
+
+async def test_start_returns_only_after_the_entrypoint_is_ready(
+    started: tuple[DockerRuntime, ContainerHandle],
+) -> None:
+    runtime, handle = started
+    result = await runtime.exec(
+        handle, ["test", "-f", READY_FILE], env={}, cwd="/", user="agent", timeout_s=30
+    )
+    assert result.exit_code == 0
 
 
 async def test_workspace_mount_is_read_only(started: tuple[DockerRuntime, ContainerHandle]) -> None:

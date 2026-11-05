@@ -12,20 +12,28 @@ from typing import IO, Protocol
 import docker.errors
 import docker.types
 from docker.client import DockerClient, from_env
+from docker.models.containers import Container
 
 from skeleton_crew.domain.errors import PolicyViolation
 
 MANAGED_LABEL = "skeleton-crew.managed"
 SANDBOX_RUNTIME = "sysbox-runc"
 KILL_GRACE_S = 30
+READY_FILE = "/run/skeleton-crew-ready"
 STDERR_TAIL_BYTES = 64_000
 _CONTROLLER_TIMEOUT_MARGIN_S = 10.0
 _TIMEOUT_EXIT_CODE = 124
 _KILLED_EXIT_CODE = 137
+_READY_TIMEOUT_S = 60.0
+_READY_POLL_S = 0.2
 _DOCKER_SOCKET_PATHS = frozenset({"/var/run/docker.sock", "/run/docker.sock"})
 _GITHUB_TOKEN_PREFIXES = ("ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_")
 
 log = logging.getLogger(__name__)
+
+
+class ContainerStartError(Exception):
+    pass
 
 
 @dataclass(frozen=True)
@@ -143,6 +151,13 @@ class _Sink:
         return bytes(self._memory)
 
 
+def _is_ready(container: Container) -> bool:
+    try:
+        return container.exec_run(["test", "-f", READY_FILE]).exit_code == 0
+    except docker.errors.APIError:
+        return False
+
+
 class DockerRuntime:
     def __init__(self, client: DockerClient | None = None) -> None:
         self._client = client if client is not None else from_env()
@@ -178,7 +193,26 @@ class DockerRuntime:
             mounts=mounts,
             environment=dict(spec.env),
         )
+        # Sysbox can wedge a container killed while its nested dockerd is still starting.
+        problem = self._wait_ready(container)
+        if problem is not None:
+            try:
+                self._remove_blocking(str(container.id))
+            except docker.errors.DockerException:
+                log.exception("could not remove container %s", spec.name)
+            raise ContainerStartError(f"container {spec.name} {problem}")
         return ContainerHandle(id=str(container.id), name=spec.name)
+
+    def _wait_ready(self, container: Container) -> str | None:
+        deadline = time.monotonic() + _READY_TIMEOUT_S
+        while not _is_ready(container):
+            container.reload()
+            if container.status != "running":
+                return f"stopped during startup ({container.status})"
+            if time.monotonic() > deadline:
+                return f"was not ready after {_READY_TIMEOUT_S:.0f}s"
+            time.sleep(_READY_POLL_S)
+        return None
 
     async def exec(
         self,

@@ -68,7 +68,7 @@ docker/       controller Dockerfile
 deploy/       Caddyfile
 scripts/      install.sh (Ubuntu 24.04 or Debian 12 VM)
 docker-compose.yml
-.github/workflows/ci.yml
+.github/workflows/ci.yml, docker.yml
 ```
 
 Packages are created when their step is built. Do not create empty placeholders.

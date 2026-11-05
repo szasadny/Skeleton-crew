@@ -23,27 +23,6 @@ jobs:
       - run: uv run --no-sync lint-imports
       - run: uv run --no-sync pytest -q
 
-  docker:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-      - run: uv sync --locked
-      - name: Install Sysbox
-        run: |
-          source <(grep -E '^SYSBOX_(VERSION|SHA256)=' scripts/install.sh)
-          deb="$RUNNER_TEMP/sysbox-ce_${SYSBOX_VERSION}.linux_amd64.deb"
-          curl -fsSLo "$deb" \
-            "https://github.com/nestybox/sysbox/releases/download/v${SYSBOX_VERSION}/sysbox-ce_${SYSBOX_VERSION}.linux_amd64.deb"
-          echo "$SYSBOX_SHA256  $deb" | sha256sum -c -
-          sudo apt-get update
-          sudo apt-get install -y fuse3 jq "$deb"
-          docker info --format '{{json .Runtimes}}' | grep -q '"sysbox-runc"'
-      - run: docker build -t skeleton-crew-agent:latest src/skeleton_crew/runtime/images/agent
-      - run: uv run --no-sync pytest -m docker -q
-
   security:
     runs-on: ubuntu-24.04
     steps:

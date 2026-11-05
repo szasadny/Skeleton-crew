@@ -29,4 +29,5 @@ start_dockerd() {
 
 start_dockerd || log "dockerd failed to start"
 
+touch /run/skeleton-crew-ready
 exec sleep infinity
