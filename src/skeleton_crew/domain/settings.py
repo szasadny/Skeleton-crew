@@ -62,12 +62,12 @@ class Schedule(_Frozen):
 
 
 class Limits(_Frozen):
-    issues_per_day: int = Field(default=3, ge=0, le=50)
-    refines_per_day: int = Field(default=5, ge=0, le=50)
-    conflict_fixes_per_day: int = Field(default=5, ge=0, le=50)
+    issues_per_day: int = Field(default=10, ge=0, le=50)
+    refines_per_day: int = Field(default=10, ge=0, le=50)
+    conflict_fixes_per_day: int = Field(default=30, ge=0, le=50)
     max_parallel_workers: int = Field(default=2, ge=1, le=10)
     session_timeout_minutes: int = Field(default=60, ge=5, le=480)
-    worker_timeout_hours: float = Field(default=4.0, gt=0, le=24)
+    worker_timeout_hours: float = Field(default=3.0, gt=0, le=24)
     max_turns: int = Field(default=200, ge=10, le=2000)
     max_ci_rounds: int = Field(default=3, ge=0, le=10)
     max_review_rounds: int = Field(default=3, ge=0, le=10)
