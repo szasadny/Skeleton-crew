@@ -13,7 +13,7 @@ Skeleton Crew uses three labels, which are configurable in the UI. Only a human 
 ### Refining
 
 1. A human adds `skeleton refine` to an issue.
-2. During the next run, the refiner posts one "Refined spec" comment with acceptance criteria and open questions. It never waits for an answer.
+2. During the next run, the refiner posts one short "Refined spec" comment: what must happen, acceptance criteria and open questions for the owner. It never waits for an answer.
 3. The controller removes `skeleton refine` and adds `skeleton HITL`.
 4. The human reviews the spec, edits the issue if needed, and swaps `skeleton HITL` for `skeleton`.
 

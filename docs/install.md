@@ -93,9 +93,11 @@ Rulesets need a public repository or a paid plan. On a free private repository, 
 
 The agent image ships [mise](https://mise.jdx.dev), so a repo can get the language versions it declares (`.tool-versions`, `mise.toml`, `.python-version`, `.nvmrc`, `.node-version`, …) instead of the image's system Python and Node:
 
-1. On the Repo page, set **Setup command** to `mise install` followed by the repo's dependency install, e.g. `mise install && uv sync`.
+1. On the Repo page, set **Setup command** to `mise install` followed by the repo's dependency install, e.g. `mise install && mise use -g uv@latest && uv sync --locked`. `mise install` only installs the tools the repo declares; add tools like uv with `mise use -g`.
 2. Add the hosts mise downloads from to the egress allowlist on the same page. For Python, Node and uv: `mise-versions.jdx.dev`, `nodejs.org`, `github.com`, `release-assets.githubusercontent.com` and `tuf-repo-cdn.sigstore.dev` (attestation checks). Other tools may need more; the egress proxy log shows denied hosts.
 3. The target repo must gitignore dependencies installed inside it (`.venv`, `node_modules`), or they end up in the patch.
+
+The setup command runs in the worker's container before its first session, and everything it leaves behind stays available to the worker. That includes containers on the container's own Docker, so it can start services the repo's tests need, e.g. `docker compose -f docker-compose.test.yml up -d --wait db`. Image pulls need `registry-1.docker.io`, `auth.docker.io` and `production.cloudfront.docker.com` in the allowlist (the default). Allowlist changes take effect at the start of the next run.
 
 ## Labels
 
