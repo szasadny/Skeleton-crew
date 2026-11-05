@@ -74,6 +74,34 @@ async def test_selector_rejected_issue_escalates_with_reason(harness: Harness) -
     assert_no_forbidden_writes(harness)
 
 
+async def test_selector_decision_escalates_with_question_and_options(harness: Harness) -> None:
+    harness.add_ready_issue(4, "Default reply-to")
+    harness.backend.script(Role.SELECTOR, selection_json([], needs_decision=[4]))
+
+    run_id = await harness.run()
+
+    assert await harness.tasks(run_id) == []
+    assert harness.actions() == ["comment", "change_labels"]
+    body = str(harness.writes("comment")[0].args["body"])
+    assert "needs a decision: Fallback address is not specified." in body
+    assert "Question: Which address should replies go to?" in body
+    assert "- owner account\n- info address from .env" in body
+    assert harness.writes("change_labels")[0].args["issue"] == 4
+    assert_no_forbidden_writes(harness)
+
+
+async def test_selector_leaves_unlisted_candidates_untouched(harness: Harness) -> None:
+    harness.add_ready_issue(5)
+    harness.add_ready_issue(6)
+    harness.backend.script(Role.SELECTOR, selection_json([]))
+
+    run_id = await harness.run()
+
+    assert await harness.tasks(run_id) == []
+    assert harness.actions() == []
+    assert (await harness.run_row(run_id)).state is RunState.COMPLETED
+
+
 async def test_selector_with_unknown_issue_fails_closed(harness: Harness) -> None:
     harness.add_ready_issue(1)
     harness.backend.script(Role.SELECTOR, selection_json([1, 99]))

@@ -19,7 +19,7 @@ Skeleton Crew uses three labels, which are configurable in the UI. Only a human 
 
 ### Implementing
 
-1. The selector picks issues labelled `skeleton`, up to the daily quota.
+1. The selector picks issues labelled `skeleton`, up to the daily quota. Issues it does not pick keep `skeleton` for a later run.
 2. A worker opens a PR from branch `skeleton/<number>-<slug>`, with `Closes #<number>` in the body.
 3. The worker keeps fixing until CI is green and the `skeleton-crew/review` check is green.
 4. The issue keeps the `skeleton` label. While a skeleton PR for it is open, no new PR is started for it. An issue with more than one open skeleton PR is skipped entirely.
@@ -34,7 +34,9 @@ While the issue still has `skeleton`, each run asks GitHub whether its open skel
 
 The controller comments on the issue, removes `skeleton` and adds `skeleton HITL` when:
 
-- the selector, worker or reviewer judges the scope larger than the issue describes;
+- the selector judges that the issue asks for a feature, refactor or architecture change it does not work out;
+- the selector needs an owner decision; the comment names the problem, the question and the options;
+- the worker or reviewer judges the scope larger than the issue describes;
 - the selector rejects the issue as unsafe or not real work on this repository;
 - the worker reports it is blocked, or a worker or reviewer session fails;
 - the setup command fails;

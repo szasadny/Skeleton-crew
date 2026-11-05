@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 
 from skeleton_crew.domain.diff_policy import FileChange
-from skeleton_crew.domain.schemas import NewIssue, RefineResult, ReviewResult
+from skeleton_crew.domain.schemas import NewIssue, RefineResult, ReviewResult, SelectionQuestion
 from skeleton_crew.domain.settings import Role
 from skeleton_crew.domain.text_policy import sanitize_agent_text
 
@@ -34,6 +34,11 @@ def _cap(text: str, max_chars: int, reserved: int) -> str:
 def escalation_comment(reason: str, max_chars: int) -> str:
     prefix = f"{ESCALATION_INTRO}\n\nReason: "
     return prefix + _cap(reason, max_chars, len(prefix))
+
+
+def decision_reason(decision: SelectionQuestion) -> str:
+    options = "\n".join(f"- {option}" for option in decision.options)
+    return f"{decision.problem}\n\nQuestion: {decision.question}\n\nOptions:\n{options}"
 
 
 def continued_comment(branch: str) -> str:

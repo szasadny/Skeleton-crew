@@ -36,7 +36,7 @@ from skeleton_crew.pipeline.run_setup import (
     remaining_quotas,
 )
 from skeleton_crew.pipeline.selector import select_issues
-from skeleton_crew.pipeline.texts import INTERRUPTED_COMMENT
+from skeleton_crew.pipeline.texts import INTERRUPTED_COMMENT, decision_reason
 from skeleton_crew.pipeline.worker_flow import run_worker
 from skeleton_crew.store import runs_store, settings_store
 
@@ -230,6 +230,12 @@ class RunController:
         for pick in selection.too_large:
             await self._escalate(
                 ctx, pick.issue_number, f"the selector judged the issue too large: {pick.reason}"
+            )
+        for decision in selection.needs_decision:
+            await self._escalate(
+                ctx,
+                decision.issue_number,
+                f"the selector needs a decision: {decision_reason(decision)}",
             )
         for pick in selection.rejected:
             await self._escalate(
