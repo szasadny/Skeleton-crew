@@ -69,6 +69,7 @@ deploy/       Caddyfile
 scripts/      install.sh (Ubuntu 24.04 or Debian 12 VM)
 docker-compose.yml
 .github/workflows/ci.yml, docker.yml
+.github/scripts/ci-tested.sh  skips main CI when the merged PR already tested the same tree
 ```
 
 Packages are created when their step is built. Do not create empty placeholders.
