@@ -1,6 +1,6 @@
-FROM ghcr.io/astral-sh/uv:0.11.21 AS uv
+FROM ghcr.io/astral-sh/uv:0.13.7 AS uv
 
-FROM python:3.14-slim AS build
+FROM python:3.15-slim AS build
 COPY --from=uv /uv /usr/local/bin/uv
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
@@ -13,7 +13,7 @@ COPY README.md LICENSE ./
 COPY src ./src
 RUN uv sync --locked --no-dev --no-editable
 
-FROM python:3.14-slim
+FROM python:3.15-slim
 ARG GITLEAKS_VERSION=8.30.1
 ARG GITLEAKS_SHA256=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
 RUN apt-get update \
