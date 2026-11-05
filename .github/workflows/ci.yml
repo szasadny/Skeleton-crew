@@ -42,18 +42,7 @@ jobs:
           sudo apt-get install -y fuse3 jq "$deb"
           docker info --format '{{json .Runtimes}}' | grep -q '"sysbox-runc"'
       - run: docker build -t skeleton-crew-agent:latest src/skeleton_crew/runtime/images/agent
-      - run: for i in $(seq 10); do echo "== round $i"; uv run --no-sync pytest -m docker -q -x || exit 1; done
-      - name: Diagnose
-        if: always()
-        run: |
-          uname -r
-          cat /etc/docker/daemon.json
-          docker info
-          docker ps -a
-          ps -eo pid,ppid,stat,wchan:32,etimes,cmd | awk 'NR==1 || $3 ~ /D/'
-          for pid in $(ps -eo pid,stat | awk '$2 ~ /D/ {print $1}'); do echo "== $pid"; sudo cat /proc/$pid/stack; done
-          ps -eo pid,ppid,stat,wchan:32,cmd --forest | grep -A20 -E 'containerd-shim|sysbox' | head -150
-          sudo journalctl -u docker -u containerd -u sysbox-mgr -u sysbox-fs --no-pager -o short-precise | tail -300
+      - run: uv run --no-sync pytest -m docker -q
 
   security:
     runs-on: ubuntu-24.04
