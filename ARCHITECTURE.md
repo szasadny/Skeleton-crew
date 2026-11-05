@@ -35,6 +35,7 @@ Each row has exactly one correct place. Putting it anywhere else violates the co
 | Deciding whether issue content is trusted (pure rules) | `domain/trust_policy.py` |
 | A task, refine or run state, or a transition | `domain/task_state.py` |
 | The JSON an agent role must return, and its cross-checks | `domain/schemas.py` (Pydantic, `extra="forbid"`) |
+| Which target-repo docs an agent gets (instruction docs, their links, caps) and how they are rendered | `domain/repo_docs.py` |
 | A UI-editable setting | `domain/settings.py` |
 | Any GitHub API call, clone, fetch or push | `github/gateway.py`: the only GitHub entry point |
 | Git transport to GitHub (clone, fetch, ls-remote, push) and its auth-header env | `github/_git.py`, used only by the gateway |
@@ -43,7 +44,7 @@ Each row has exactly one correct place. Putting it anywhere else violates the co
 | Ruleset and App-permission checks | `github/preflight.py` |
 | The policy check → audit → dry-run sequence every GitHub write runs | `github/write_guard.py` (shared by the gateway and its test fake) |
 | Starting, exec'ing, stopping containers; runtime health | `runtime/containers.py` |
-| Controller-side git work: worker copies, applying patches, diff summaries | `runtime/workspace.py` |
+| Controller-side git work: worker copies, applying patches, diff summaries, reading the repo docs | `runtime/workspace.py` |
 | Pruning expired task directories | `pipeline/retention.py` (which keys expire), `runtime/workspace.py` (safe removal) |
 | Egress allowlist rendering and reload | `runtime/egress.py` |
 | Secret scanning of a patch (gitleaks) | `runtime/secret_scan.py` |
@@ -54,7 +55,7 @@ Each row has exactly one correct place. Putting it anywhere else violates the co
 | A default work rule | `agents/rules/<role>.md` (seed for the UI-editable copy) |
 | Reading or writing settings, rules, runs, tasks | `store/` |
 | Validating a work-rules revision (known key, non-empty, size cap) | `store/rules_store.py` |
-| Run orchestration: preflight order, selection, worker slots | `pipeline/run_controller.py`, setup steps in `pipeline/run_setup.py` |
+| Run orchestration: preflight order, selection, worker slots | `pipeline/run_controller.py`, setup steps (rules, repo docs) in `pipeline/run_setup.py` |
 | Starting the worker for a new issue (fresh or existing branch) | `pipeline/worker_flow.py` |
 | The worker job loop: coding, repo checks, push, CI wait, review rounds, job outcome | `pipeline/job_engine.py` |
 | Worker job state (git SHAs, rounds, reviewer session, follow-up kinds) | `pipeline/worker_job.py` |
@@ -142,7 +143,7 @@ every package → core (core → domain only)
 
 ### 4.1 Run flow
 
-1. **Preflight**: a ruleset on the base branch requires a PR plus ≥1 approval, and the App cannot bypass it (without any ruleset only when `allow_unprotected_base_branch` is on); the App has the required permissions, no `workflows` permission and no `administration` write; the agent settings pass `agents/registry.py`; Docker, Sysbox, the agent image and the proxy are healthy; each configured backend has its credential; the required checks can be read and the egress allowlist applied. Any failure ends the run as `preflight_failed`. While the kill switch is on, no run starts.
+1. **Preflight**: a ruleset on the base branch requires a PR plus ≥1 approval, and the App cannot bypass it (without any ruleset only when `allow_unprotected_base_branch` is on); the App has the required permissions, no `workflows` permission and no `administration` write; the agent settings pass `agents/registry.py`; Docker, Sysbox, the agent image and the proxy are healthy; each configured backend has its credential; the required checks can be read, the egress allowlist applied and the repo docs read (§6.3) from a clone of the base branch that the selector reuses. Any failure ends the run as `preflight_failed`. While the kill switch is on, no run starts.
 2. **Candidates**: open issues with the labels that pass the trust rules (`docs/labels.md` § Trust), except issues that also carry `skeleton HITL` (or, for `skeleton`, `skeleton refine`). Issues with an open skeleton PR go to PR maintenance instead. Expired task directories are pruned before this step (§5).
 3. **Selector**: orders candidates up to the daily quota. Every candidate it does not pick is escalated as too large or rejected, with a reason.
 4. **Worker pool** (≤ `max_parallel_workers`), and in parallel the **refine flow**. PR maintenance jobs (§4.4) take slots before new issues.
@@ -222,7 +223,7 @@ Task directories (`<data>/tasks/<key>/`, transcripts and command logs) of termin
 
 ### 6.2 Agent backends
 
-`agents/base.py` defines `AgentBackend`. A backend turns a `SessionRequest` (role, prompt, model, effort, limits, schema, rules file, resume id) into an argv plus environment, and turns the CLI output into a `SessionOutcome` (session id, raw structured output, cost, turns, error flags, early-stop reason). It also declares the egress domains and credentials it needs. Each backend module exports a `BackendSpec` (name, display name, models, efforts, options with allowed values and defaults, credential names, web-tools support, factory). `agents/registry.py` holds the specs: it builds a backend with only its declared credentials and its options, and rejects an unknown backend, model, effort, option or unsupported web tools, on UI save (`field_problems`) and in preflight (`settings_problems`; a run then ends `preflight_failed`). `agents/session.py` runs any backend through an injected executor with transcript capture; the executor (`runtime/containers.py`) enforces the wall-clock timeout with SIGINT and a hard kill, so backends add no timeout wrapper of their own. Output is always validated by `domain/schemas.py`, whether or not the backend enforces a schema itself. The target repo's own agent hooks run as configured. When a session ends cleanly without a result, for example because a hook stopped the turn, the backend reports it as `stopped_early` and `pipeline/sessions.py` resumes the same session with a continue prompt, up to `max_continues` times, then fails closed.
+`agents/base.py` defines `AgentBackend`. A backend turns a `SessionRequest` (role, prompt, model, effort, limits, schema, rules file, resume id) into an argv plus environment, and turns the CLI output into a `SessionOutcome` (session id, raw structured output, cost, turns, error flags, early-stop reason). It also declares the egress domains and credentials it needs, and the repo docs its CLI loads by itself (`auto_loaded_docs`, e.g. `CLAUDE.md` and `.claude/CLAUDE.md` for Claude Code). Each backend module exports a `BackendSpec` (name, display name, models, efforts, options with allowed values and defaults, credential names, web-tools support, factory). `agents/registry.py` holds the specs: it builds a backend with only its declared credentials and its options, and rejects an unknown backend, model, effort, option or unsupported web tools, on UI save (`field_problems`) and in preflight (`settings_problems`; a run then ends `preflight_failed`). `agents/session.py` runs any backend through an injected executor with transcript capture; the executor (`runtime/containers.py`) enforces the wall-clock timeout with SIGINT and a hard kill, so backends add no timeout wrapper of their own. Output is always validated by `domain/schemas.py`, whether or not the backend enforces a schema itself. The target repo's own agent hooks run as configured. When a session ends cleanly without a result, for example because a hook stopped the turn, the backend reports it as `stopped_early` and `pipeline/sessions.py` resumes the same session with a continue prompt, up to `max_continues` times, then fails closed.
 
 MVP backend: **Claude Code** (`agents/backends/claude_code.py`): `claude -p` with `--output-format stream-json`, `--json-schema`, `--resume`, `--max-turns`, `--disallowedTools` for every interactive tool, and `--max-budget-usd` in API-key mode. Option `auth_mode` is `subscription` (`SC_AGENT_CREDENTIALS__CLAUDE_OAUTH_TOKEN` from `claude setup-token`, passed as `CLAUDE_CODE_OAUTH_TOKEN`) or `api_key` (`SC_AGENT_CREDENTIALS__ANTHROPIC_API_KEY`, passed as `ANTHROPIC_API_KEY`), always with the unmodified CLI. Codex and OpenCode come after the MVP as extra backends.
 
@@ -237,11 +238,13 @@ No other package changes: the UI, preflight and pipeline read everything from th
 
 ### 6.3 Work rules and precedence
 
-Each session gets `common.md` + `<role>.md` as its appended system prompt, in this order of authority:
+Each session gets `common.md` + `<role>.md` + the repo docs as its appended system prompt, in this order of authority:
 
 1. Code policy (`domain/`): cannot be overridden.
 2. Skeleton work rules: process.
-3. Target repo's `CLAUDE.md` / `AGENTS.md`: code standards.
+3. Target repo's docs: code standards.
+
+The repo docs are read once per run from the base branch (`domain/repo_docs.py`): every tracked `CLAUDE.md` and `AGENTS.md`, `.claude/CLAUDE.md`, and the tracked `.md` files their relative links point to, one level deep. Docs the role's backend already loads itself are left out, but their links still count. Each doc is fenced, and docs over the size or count caps are listed by path instead.
 
 Untrusted text (issue bodies, comments, CI logs) is rendered into prompts only inside delimited `<untrusted …>` blocks, with the closing delimiter escaped.
 

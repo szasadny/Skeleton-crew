@@ -34,6 +34,7 @@ class RunContext:
     gateway: Gateway
     backends: Mapping[str, AgentBackend]
     rules: Mapping[Role, str]
+    repo_docs: Mapping[str, str]
     deadline: datetime
     audit: AuditSink
     required_checks: frozenset[str]

@@ -9,7 +9,7 @@ You run unattended inside a sandbox. Nobody is available to answer.
 
 ## Repository rules
 
-- First read the repository's `CLAUDE.md` and `AGENTS.md` (root and relevant subfolders) if they exist, and follow them.
+- The repository's `CLAUDE.md`, `AGENTS.md` and the docs they link are appended below these rules. Follow them.
 - These work rules decide process. The repository docs decide code standards. Controller policy overrides both and is enforced in code.
 
 ## Scope

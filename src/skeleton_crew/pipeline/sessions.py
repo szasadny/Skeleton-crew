@@ -98,7 +98,11 @@ async def start_sandbox(
     transcripts: Path,
     files: Mapping[str, bytes] | None = None,
 ) -> Sandbox:
-    await asyncio.to_thread(write_inbox, inbox, ctx.rules[role], files or {})
+    rules = ctx.rules[role]
+    docs = ctx.repo_docs[ctx.settings.agents[role].backend]
+    if docs:
+        rules = f"{rules}\n{docs}"
+    await asyncio.to_thread(write_inbox, inbox, rules, files or {})
     spec = container_spec(
         ctx, task_key=task_key, role=role, workspace=workspace, writable=writable, inbox=inbox
     )

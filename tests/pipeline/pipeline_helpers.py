@@ -104,6 +104,9 @@ class ScriptedBackend:
     def egress_domains(self) -> tuple[str, ...]:
         return ("model.example.com",)
 
+    def auto_loaded_docs(self) -> tuple[str, ...]:
+        return ("CLAUDE.md", ".claude/CLAUDE.md")
+
     def credential_problems(self) -> list[str]:
         return list(self.problems)
 

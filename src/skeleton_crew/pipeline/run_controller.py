@@ -28,6 +28,7 @@ from skeleton_crew.pipeline.run_setup import (
     OpenPr,
     Quotas,
     apply_egress,
+    collect_repo_docs,
     find_candidates,
     load_required_checks,
     load_rules,
@@ -159,6 +160,13 @@ class RunController:
             except Exception as exc:
                 log.exception("egress allowlist could not be applied")
                 problems = [f"egress allowlist could not be applied: {type(exc).__name__}"]
+        repo_docs: dict[str, str] = {}
+        if not problems:
+            try:
+                repo_docs = await collect_repo_docs(deps, gw, run_id, backends)
+            except Exception as exc:
+                log.exception("repository docs could not be read")
+                problems = [f"repository docs could not be read: {type(exc).__name__}"]
         if problems:
             await sink(
                 AuditKind.PREFLIGHT_FAILED,
@@ -178,6 +186,7 @@ class RunController:
             gateway=gw,
             backends=backends,
             rules=rules,
+            repo_docs=repo_docs,
             deadline=started + timedelta(hours=settings.schedule.window_hours),
             audit=sink,
             required_checks=required,

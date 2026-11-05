@@ -42,6 +42,7 @@ def disallowed_tools(*, web_tools: bool) -> str:
 
 
 EGRESS_DOMAINS = ("api.anthropic.com",)
+AUTO_LOADED_DOCS = ("CLAUDE.md", ".claude/CLAUDE.md")
 # Aliases follow the latest model; full ids pin one.
 MODELS = (
     "opus",
@@ -103,6 +104,9 @@ class ClaudeCodeBackend:
 
     def egress_domains(self) -> tuple[str, ...]:
         return EGRESS_DOMAINS
+
+    def auto_loaded_docs(self) -> tuple[str, ...]:
+        return AUTO_LOADED_DOCS
 
     def _credential(self) -> tuple[str, str | None]:
         name, var = _CREDENTIALS[self._auth_mode]
