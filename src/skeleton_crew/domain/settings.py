@@ -173,7 +173,7 @@ class RuntimeLimits(_Frozen):
         "registry.npmjs.org",
         "registry-1.docker.io",
         "auth.docker.io",
-        "production.cloudflare.docker.com",
+        "production.cloudfront.docker.com",
     )
     cpus: float = Field(default=2.0, gt=0, le=64)
     memory_gb: float = Field(default=4.0, gt=0, le=256)

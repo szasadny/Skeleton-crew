@@ -89,6 +89,14 @@ Rulesets need a public repository or a paid plan. On a free private repository, 
 2. Label a few small issues, start a run and read the audit log to see what would have happened.
 3. When the planned actions look right, switch `dry_run` off in the UI.
 
+## Toolchains
+
+The agent image ships [mise](https://mise.jdx.dev), so a repo can get the language versions it declares (`.tool-versions`, `mise.toml`, `.python-version`, `.nvmrc`, `.node-version`, …) instead of the image's system Python and Node:
+
+1. On the Repo page, set **Setup command** to `mise install` followed by the repo's dependency install, e.g. `mise install && uv sync`.
+2. Add the hosts mise downloads from to the egress allowlist on the same page. For Python, Node and uv: `mise-versions.jdx.dev`, `nodejs.org`, `github.com`, `release-assets.githubusercontent.com` and `tuf-repo-cdn.sigstore.dev` (attestation checks). Other tools may need more; the egress proxy log shows denied hosts.
+3. The target repo must gitignore dependencies installed inside it (`.venv`, `node_modules`), or they end up in the patch.
+
 ## Labels
 
 How the `skeleton`, `skeleton refine` and `skeleton HITL` labels work: [labels.md](labels.md).

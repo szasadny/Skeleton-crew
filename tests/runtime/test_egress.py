@@ -1,3 +1,4 @@
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -121,6 +122,15 @@ def test_agent_image_trusts_only_the_workspace() -> None:
     assert "safe.directory '*'" not in dockerfile
     assert "safe.directory *" not in dockerfile
     assert "ARG CLAUDE_CODE_VERSION" in dockerfile
+
+
+def test_agent_image_pins_mise_by_version_and_checksum() -> None:
+    dockerfile = (IMAGES / "agent" / "Dockerfile").read_text()
+    assert re.search(r"^ARG MISE_VERSION=\d+\.\d+\.\d+$", dockerfile, re.MULTILINE)
+    assert re.search(r"^ARG MISE_SHA256=[0-9a-f]{64}$", dockerfile, re.MULTILINE)
+    assert "releases/download/v${MISE_VERSION}/" in dockerfile
+    assert 'echo "${MISE_SHA256}  /tmp/mise" | sha256sum -c -' in dockerfile
+    assert "mise/releases/latest" not in dockerfile
 
 
 @pytest.mark.parametrize("script", ["agent/entrypoint.sh", "egress-proxy/entrypoint.sh"])

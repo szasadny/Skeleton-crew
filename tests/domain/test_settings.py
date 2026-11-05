@@ -84,6 +84,18 @@ def test_invalid_egress_domains_are_rejected(domain: str) -> None:
         RuntimeLimits(egress_allowlist=(domain,))
 
 
+def test_default_allowlist_uses_current_docker_hub_blob_host() -> None:
+    allowlist = RuntimeLimits().egress_allowlist
+    assert "production.cloudfront.docker.com" in allowlist
+    assert "production.cloudflare.docker.com" not in allowlist
+
+
+def test_default_allowlist_has_no_toolchain_download_hosts() -> None:
+    allowlist = RuntimeLimits().egress_allowlist
+    for host in ("github.com", "release-assets.githubusercontent.com", "nodejs.org"):
+        assert host not in allowlist
+
+
 @pytest.mark.parametrize("domain", ["pypi.org", ".github.com", "a-b.example.co.uk"])
 def test_valid_egress_domains_are_accepted(domain: str) -> None:
     assert RuntimeLimits(egress_allowlist=(domain,)).egress_allowlist == (domain,)
