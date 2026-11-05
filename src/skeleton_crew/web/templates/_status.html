@@ -24,6 +24,7 @@
   <a href="/runs/{{ last_run.id }}">Run {{ last_run.id }}</a>: {{ last_run.state.value }}, {{ last_run.trigger }}{% if last_run.dry_run %}, dry run{% endif %}.
   Started {{ last_run.started_at | dt }}{% if last_run.finished_at %}, finished {{ last_run.finished_at | dt }}{% endif %}.
 </p>
+{% if last_run_blocked %}<p>{{ m.blockers_badge(last_run_blocked) }}</p>{% endif %}
 {% if last_run_states %}<p>Tasks: {% for state, count in last_run_states %}{{ state }} {{ count }}{% if not loop.last %}, {% endif %}{% endfor %}</p>{% endif %}
 {% else %}
 <p>No runs yet.</p>

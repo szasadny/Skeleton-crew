@@ -12,7 +12,7 @@ from skeleton_crew.pipeline.sessions import (
     start_sandbox,
     update_inbox,
 )
-from skeleton_crew.pipeline.texts import diff_stats
+from skeleton_crew.pipeline.texts import diff_stats, tag_blockers
 from skeleton_crew.pipeline.worker_job import WorkerJob, review_root
 from skeleton_crew.pipeline.worker_policy import PolicyCheck
 from skeleton_crew.runtime.workspace import binary_diff, make_readonly_copy, refresh_readonly_copy
@@ -87,6 +87,7 @@ async def review_change(
     await job.record.add_cost(reply.outcome.cost_usd)
     if reply.result is None:
         raise Escalation(f"review session failed: {reply.error}")
+    await job.record.add_blockers(tag_blockers(Role.REVIEWER, reply.result.blockers))
     reviewer.session_id = reply.outcome.session_id
     reviewer.reviewed_sha = head_sha
     return reply.result

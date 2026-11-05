@@ -8,6 +8,8 @@
   --danger: #cf222e;
   --notice: #dafbe1;
   --alert: #ffebe9;
+  --warning: #9a6700;
+  --warning-bg: #fff8c5;
 }
 
 * { box-sizing: border-box; }
@@ -148,3 +150,17 @@ pre.block {
 .pager { display: flex; gap: 1rem; align-items: center; }
 .filters { display: flex; gap: 0.5rem; align-items: center; margin: 0 0 1rem; }
 .filters select { width: auto; }
+
+.badge {
+  display: inline-block;
+  padding: 0 0.5rem;
+  border-radius: 1rem;
+  border: 1px solid var(--border);
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+.badge.warning { color: var(--warning); background: var(--warning-bg); border-color: var(--warning); }
+
+tr.blockers-row td { background: var(--warning-bg); border-left: 3px solid var(--warning); }
+tr.blockers-row strong { color: var(--warning); }
+ul.blockers { margin: 0.2rem 0 0; padding-left: 1.2rem; }

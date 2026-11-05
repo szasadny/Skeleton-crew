@@ -107,3 +107,25 @@ async def test_last_run_summary(web: Web) -> None:
     html = (await web.client.get("/")).text
     assert f"Run {run.id}</a>: running, schedule, dry run." in html
     assert "queued 1" in html
+
+
+async def test_last_run_shows_tasks_with_blockers(web: Web) -> None:
+    async with web.sessionmaker() as session:
+        await save_settings(session, AppSettings())
+        run = await runs_store.create_run(session, "manual", dry_run=False)
+        for number in (1, 2, 3):
+            task = await runs_store.add_worker_task(session, run.id, number, "T")
+            if number < 3:
+                await runs_store.update_worker_task(session, task.id, blockers=["worker: x"])
+        await session.commit()
+    html = (await web.client.get("/partials/status")).text
+    assert "2 tasks with blockers" in html
+
+
+async def test_last_run_without_blockers_shows_no_badge(web: Web) -> None:
+    async with web.sessionmaker() as session:
+        await save_settings(session, AppSettings())
+        run = await runs_store.create_run(session, "manual", dry_run=False)
+        await runs_store.add_worker_task(session, run.id, 1, "T")
+        await session.commit()
+    assert "with blockers" not in (await web.client.get("/")).text

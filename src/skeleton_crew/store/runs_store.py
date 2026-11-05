@@ -37,6 +37,7 @@ _WORKER_TASK_FIELDS = frozenset(
         "policy_rounds",
         "cost_usd",
         "note",
+        "blockers",
     }
 )
 _REFINE_TASK_FIELDS = frozenset({"state", "session_id", "cost_usd", "error"})
@@ -125,6 +126,21 @@ async def update_worker_task(session: AsyncSession, task_id: int, **fields: obje
 async def list_tasks(session: AsyncSession, run_id: int) -> list[WorkerTask]:
     query = select(WorkerTask).where(WorkerTask.run_id == run_id).order_by(WorkerTask.id)
     return list(await session.scalars(query))
+
+
+async def count_tasks_with_blockers(
+    session: AsyncSession, run_ids: Collection[int]
+) -> dict[int, int]:
+    query = (
+        select(WorkerTask.run_id, func.count())
+        .where(
+            WorkerTask.run_id.in_(run_ids),
+            WorkerTask.blockers.is_not(None),
+            WorkerTask.blockers != [],
+        )
+        .group_by(WorkerTask.run_id)
+    )
+    return {run_id: count for run_id, count in (await session.execute(query)).all()}
 
 
 async def add_refine_task(session: AsyncSession, run_id: int, issue_number: int) -> RefineTask:

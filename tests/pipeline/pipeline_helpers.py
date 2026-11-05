@@ -177,6 +177,7 @@ def worker_json(
     note: str | None = None,
     new_issues: Sequence[dict[str, str]] = (),
     objections: Sequence[dict[str, object]] = (),
+    blockers: Sequence[str] = (),
 ) -> str:
     return json.dumps(
         {
@@ -186,6 +187,7 @@ def worker_json(
             "note": note,
             "new_issues": list(new_issues),
             "objections": list(objections),
+            "blockers": list(blockers),
         }
     )
 
@@ -204,6 +206,7 @@ def review_json(
     verdict: str = "approve",
     findings: Sequence[dict[str, object]] = (),
     missing_docs: Sequence[dict[str, object]] = (),
+    blockers: Sequence[str] = (),
 ) -> str:
     return json.dumps(
         {
@@ -211,6 +214,7 @@ def review_json(
             "summary": "Reviewed.",
             "findings": list(findings),
             "missing_doc_updates": list(missing_docs),
+            "blockers": list(blockers),
         }
     )
 

@@ -27,6 +27,7 @@ async def _status(request: Request) -> dict[str, Any]:
         "settings": settings,
         "last_run": last_run,
         "last_run_states": sorted(Counter(task.state.value for task in last_tasks).items()),
+        "last_run_blocked": sum(1 for task in last_tasks if task.blockers),
         "active_tasks": active,
         "repo": state.config.repo,
     }

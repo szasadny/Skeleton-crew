@@ -23,7 +23,12 @@ from skeleton_crew.domain.schemas import (
 
 
 def worker(**overrides: Any) -> str:
-    data: dict[str, Any] = {"status": "done", "summary": "Did it.", "pr_title": "Add x"}
+    data: dict[str, Any] = {
+        "status": "done",
+        "summary": "Did it.",
+        "pr_title": "Add x",
+        "blockers": [],
+    }
     data.update(overrides)
     return json.dumps(data)
 
@@ -34,6 +39,7 @@ def review(**overrides: Any) -> str:
         "summary": "Fine.",
         "findings": [],
         "missing_doc_updates": [],
+        "blockers": [],
     }
     data.update(overrides)
     return json.dumps(data)
@@ -49,7 +55,7 @@ def doc(**overrides: Any) -> dict[str, Any]:
 
 def test_minimal_worker_result_parses() -> None:
     result = parse_output(WorkerResult, worker())
-    assert result == WorkerResult(status="done", summary="Did it.", pr_title="Add x")
+    assert result == WorkerResult(status="done", summary="Did it.", pr_title="Add x", blockers=[])
     assert result.new_issues == []
 
 
@@ -345,3 +351,48 @@ def test_selection_rejects_issue_listed_as_pick_and_rejected() -> None:
 def test_selection_keeps_rejected_issues() -> None:
     result = SelectionResult.model_validate({"rejected": [{"issue_number": 2, "reason": "unsafe"}]})
     assert check_selection(result, [2], 3).rejected[0].issue_number == 2
+
+
+@pytest.mark.parametrize("make", [worker, review])
+@pytest.mark.parametrize(
+    "blockers",
+    [
+        None,
+        ["x" * 301],
+        ["x" * 100_000],
+        [""],
+        ["  "],
+        ["no node\nstatus: done"],
+        ["tab\tseparated"],
+        ["carriage\rreturn"],
+        ["a"] * 11,
+        [1],
+        [{"text": "a"}],
+        "Python is missing",
+    ],
+)
+def test_invalid_blockers_fail_closed(make: Any, blockers: Any) -> None:
+    model = WorkerResult if make is worker else ReviewResult
+    with pytest.raises(PolicyViolation, match=model.__name__):
+        parse_output(model, make(blockers=blockers))
+
+
+@pytest.mark.parametrize("model", [WorkerResult, ReviewResult])
+def test_blockers_are_required(model: type[BaseModel]) -> None:
+    data = json.loads(worker() if model is WorkerResult else review())
+    del data["blockers"]
+    with pytest.raises(PolicyViolation, match="blockers"):
+        parse_output(model, json.dumps(data))
+    schema = json.loads(json_schema(model))
+    assert "blockers" in schema["required"]
+    assert schema["properties"]["blockers"]["maxItems"] == 10
+    assert schema["properties"]["blockers"]["items"]["maxLength"] == 300
+
+
+def test_blockers_parse_stripped_at_the_limit() -> None:
+    blockers = [" Python 3.13 is missing "] + ["x" * 300] * 9
+    result = parse_output(WorkerResult, worker(blockers=blockers))
+    assert result.blockers[0] == "Python 3.13 is missing"
+    assert len(result.blockers) == 10
+    review_result = parse_output(ReviewResult, review(blockers=["pypi.org is blocked"]))
+    assert review_result.blockers == ["pypi.org is blocked"]

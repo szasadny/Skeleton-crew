@@ -1,7 +1,11 @@
+from collections.abc import Sequence
+
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from skeleton_crew.domain.task_state import RefineState, TaskEvent, TaskState, transition
 from skeleton_crew.store import runs_store
+
+MAX_STORED_BLOCKERS = 30
 
 
 class WorkerTaskRecord:
@@ -10,6 +14,7 @@ class WorkerTaskRecord:
         self.task_id = task_id
         self.state = TaskState.QUEUED
         self.cost_usd = 0.0
+        self.blockers: list[str] = []
 
     async def update(self, **fields: object) -> None:
         async with self._sessionmaker() as session:
@@ -24,6 +29,14 @@ class WorkerTaskRecord:
     async def add_cost(self, cost_usd: float, **fields: object) -> None:
         self.cost_usd += cost_usd
         await self.update(cost_usd=self.cost_usd, **fields)
+
+    async def add_blockers(self, blockers: Sequence[str]) -> None:
+        new = [b for b in dict.fromkeys(blockers) if b not in self.blockers]
+        room = MAX_STORED_BLOCKERS - len(self.blockers)
+        if not new or room <= 0:
+            return
+        self.blockers += new[:room]
+        await self.update(blockers=list(self.blockers))
 
 
 class RefineTaskRecord:

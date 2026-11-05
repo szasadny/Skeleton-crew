@@ -41,11 +41,12 @@ Text1000 = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1,
 Text1500 = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1500)]
 Text4000 = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4000)]
 Text6000 = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=6000)]
-FindingPath = Annotated[
+Line300 = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=300),
     AfterValidator(_single_line),
 ]
+FindingPath = Line300
 
 
 class _AgentOutput(BaseModel):
@@ -71,6 +72,7 @@ class WorkerResult(_AgentOutput):
     note: Text1500 | None = None
     new_issues: list[NewIssue] = Field(default_factory=list, max_length=10)
     objections: list[Objection] = Field(default_factory=list, max_length=20)
+    blockers: list[Line300] = Field(max_length=10)
 
     @model_validator(mode="after")
     def _note_explains_non_done(self) -> Self:
@@ -102,6 +104,7 @@ class ReviewResult(_AgentOutput):
     summary: Text1000
     findings: list[ReviewFinding] = Field(default_factory=list, max_length=30)
     missing_doc_updates: list[MissingDocUpdate] = Field(max_length=20)
+    blockers: list[Line300] = Field(max_length=10)
 
     @model_validator(mode="after")
     def _verdict_matches_findings(self) -> Self:

@@ -33,6 +33,14 @@ def test_reviewer_rules_require_the_missing_doc_updates_list() -> None:
     assert "no missing doc updates" in text
 
 
+@pytest.mark.parametrize("key", ["worker", "reviewer"])
+def test_rules_require_reporting_blockers(key: str) -> None:
+    text = default_rules(key)
+    assert "`blockers`" in text
+    assert "hiding it is not" in text
+    assert "An empty list means nothing hindered you" in text
+
+
 def test_unknown_rules_key_is_rejected() -> None:
     with pytest.raises(ValueError, match="unknown rules key"):
         default_rules("../../etc/passwd")

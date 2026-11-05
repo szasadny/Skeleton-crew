@@ -178,6 +178,8 @@ The controller never runs git inside a directory an agent can write to: a plante
 
 Reviewer, refiner and selector sessions get a fresh read-only copy. Within one worker job the reviewer keeps its container and session: a later review round resumes it, with the copy refreshed in place to the new head and the changes since its last review in `/skeleton-in/since-review.diff`. Every review must list in `missing_doc_updates` each doc that should have changed but did not (an empty list means none); `domain/schemas.py` rejects `approve` while that list is non-empty, so a missing doc update always goes back to the worker.
 
+Workers and reviewers must list in `blockers` whatever hindered doing or verifying the work (missing tool, blocked domain, checks that could not run), also when worked around. The task row keeps them all, the PR body lists the worker's blockers known when the PR opens, and each review check lists the round's worker and reviewer blockers.
+
 The first push of a new branch uses a lease that requires the branch not to exist. Each run lists open PRs once (`open_skeleton_prs`); an issue with more than one open skeleton PR is skipped for new work and maintenance, with an audit event. If `skeleton/<n>-<slug>` already exists without an open PR when a worker starts, the controller decides before any write (`domain/branch_policy.continuation_problem`):
 
 - The head is not the last commit the controller pushed in a live run (`runs_store.last_pushed_task`): escalate ("the branch has commits Skeleton Crew did not push"). Foreign content is never adopted, so it never skips the per-push secret scan.
@@ -206,7 +208,7 @@ SQLite in the data directory, with Alembic migrations applied at startup.
 | `SettingsRow` | One row holding the UI-editable settings as JSON, validated by `domain/settings.py` |
 | `RuleRevision` | Append-only history of each role's work rules; the newest revision is active |
 | `Run` | One daily or manual run: trigger, `dry_run`, state, timestamps, note |
-| `WorkerTask` | One issue in one run: kind (`issue`, `pr_fix`; `pr_update` only on historical rows), state, branch, PR, base and head SHA, session id, container id, round counters, cost, `note` (why it escalated, aborted or failed) |
+| `WorkerTask` | One issue in one run: kind (`issue`, `pr_fix`; `pr_update` only on historical rows), state, branch, PR, base and head SHA, session id, container id, round counters, cost, `note` (why it escalated, aborted or failed), `blockers` (JSON list of role-prefixed blockers from every worker and reviewer session, deduplicated and capped) |
 | `RefineTask` | One refine in one run: state, session id, cost, error |
 | `AuditEvent` | Append-only: kind and outcome from `core/audit.py`, summary, payload, run |
 

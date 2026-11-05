@@ -22,6 +22,7 @@ from skeleton_crew.pipeline.texts import (
     pr_title,
     review_check_summary,
     review_text,
+    tag_blockers,
 )
 from skeleton_crew.pipeline.worker_job import FollowUp, FollowUpKind, WorkerJob, remove_work_dirs
 from skeleton_crew.pipeline.worker_policy import PolicyCheck, check_change
@@ -140,8 +141,9 @@ async def deliver(
     if follow_up is not None:
         return follow_up
     await job.record.fire(TaskEvent.CI_PASSED)
-    summary = result.summary if result else CONTINUED_SUMMARY
-    return await review(job, check, summary, ci_state)
+    if result is None:
+        return await review(job, check, CONTINUED_SUMMARY, (), ci_state)
+    return await review(job, check, result.summary, result.blockers, ci_state)
 
 
 async def _run_checks(job: WorkerJob) -> FollowUp | None:
@@ -210,6 +212,7 @@ async def _code(job: WorkerJob, follow_up: FollowUp | None) -> WorkerResult:
     await job.record.add_cost(reply.outcome.cost_usd, session_id=job.session_id)
     if reply.result is None:
         raise Escalation(f"worker session failed: {reply.error}")
+    await job.record.add_blockers(tag_blockers(Role.WORKER, reply.result.blockers))
     await _report_new_issues(job, reply.result)
     job.objections |= {(o.check, o.path, o.line): o.reason for o in reply.result.objections}
     if reply.result.status != "done":
@@ -260,13 +263,15 @@ async def publish(job: WorkerJob, result: WorkerResult | None, head_sha: str) ->
     if job.pr_requested:
         return
     job.pr_requested = True
-    title, summary = (
-        (result.pr_title, result.summary) if result else (job.issue.title, CONTINUED_SUMMARY)
+    title, summary, blockers = (
+        (result.pr_title, result.summary, result.blockers)
+        if result
+        else (job.issue.title, CONTINUED_SUMMARY, [])
     )
     pull = await gw.open_pr(
         branch=job.branch,
         title=pr_title(title),
-        body=pr_body(job.issue.number, summary, max_chars),
+        body=pr_body(job.issue.number, summary, blockers, max_chars),
     )
     if pull is not None:
         await job.record.update(pr_number=pull.number)
@@ -311,12 +316,16 @@ async def _ci_details(job: WorkerJob, failed_jobs: Sequence[FailedJob]) -> str:
 
 
 async def review(
-    job: WorkerJob, check: PolicyCheck, worker_summary: str, ci_state: str
+    job: WorkerJob,
+    check: PolicyCheck,
+    worker_summary: str,
+    worker_blockers: Sequence[str],
+    ci_state: str,
 ) -> FollowUp | None:
     gw, max_chars = job.ctx.gateway, job.ctx.settings.limits.max_comment_chars
     result = await review_change(job, check, worker_summary, ci_state)
     head = job.git.tip_sha
-    summary = review_check_summary(result, max_chars)
+    summary = review_check_summary(result, worker_blockers, max_chars)
     if result.verdict == "approve":
         await gw.set_review_check(sha=head, success=True, summary=summary)
         await job.record.fire(TaskEvent.REVIEW_APPROVED)

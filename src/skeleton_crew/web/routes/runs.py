@@ -63,7 +63,14 @@ async def _load_run(request: Request, run_id: int, key: str | None = None) -> _R
 async def runs(request: Request, page: int = Query(1, ge=1, le=100_000)) -> Response:
     async with get_state(request).sessionmaker() as session:
         rows = await runs_store.list_runs(session, PAGE_SIZE + 1, (page - 1) * PAGE_SIZE)
-    context = {"runs": rows[:PAGE_SIZE], "page": page, "has_next": len(rows) > PAGE_SIZE}
+        shown = rows[:PAGE_SIZE]
+        blocked = await runs_store.count_tasks_with_blockers(session, [r.id for r in shown])
+    context = {
+        "runs": shown,
+        "blocked_counts": blocked,
+        "page": page,
+        "has_next": len(rows) > PAGE_SIZE,
+    }
     return render(request, "runs.html", context)
 
 
