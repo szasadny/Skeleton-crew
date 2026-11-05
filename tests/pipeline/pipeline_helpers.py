@@ -200,8 +200,19 @@ def command_result(exit_code: int = 0, output: bytes = b"") -> ExecResult:
     )
 
 
-def review_json(verdict: str = "approve", findings: Sequence[dict[str, object]] = ()) -> str:
-    return json.dumps({"verdict": verdict, "summary": "Reviewed.", "findings": list(findings)})
+def review_json(
+    verdict: str = "approve",
+    findings: Sequence[dict[str, object]] = (),
+    missing_docs: Sequence[dict[str, object]] = (),
+) -> str:
+    return json.dumps(
+        {
+            "verdict": verdict,
+            "summary": "Reviewed.",
+            "findings": list(findings),
+            "missing_doc_updates": list(missing_docs),
+        }
+    )
 
 
 def selection_json(

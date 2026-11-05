@@ -160,6 +160,25 @@ async def test_review_changes_then_approve(harness: Harness) -> None:
     assert follow_up.resume_session_id == "worker-session"
 
 
+async def test_missing_doc_update_alone_requests_changes(harness: Harness) -> None:
+    harness.patches = [harness.patch(GREETING), harness.patch({"README.md": "Greets.\n"})]
+    harness.backend.script(Role.WORKER, worker_json(), worker_json())
+    missing: dict[str, object] = {"path": "README.md", "reason": "Does not mention the greeting."}
+    harness.backend.script(
+        Role.REVIEWER, review_json("changes_requested", missing_docs=[missing]), review_json()
+    )
+
+    run_id = await harness.run()
+
+    [task] = await harness.tasks(run_id)
+    assert (task.state, task.review_rounds) == (TaskState.DONE, 1)
+    [first_check, _] = [w for w in harness.gateway.writes if w.action == "set_review_check"]
+    assert first_check.args["success"] is False
+    assert "- [docs] README.md: Does not mention the greeting." in str(first_check.args["summary"])
+    follow_up = harness.backend.prompts(Role.WORKER)[1]
+    assert "- [docs] README.md: Does not mention the greeting." in follow_up.prompt
+
+
 def _snapshot_reviewer_mounts(harness: Harness) -> list[dict[str, str]]:
     seen: list[dict[str, str]] = []
     parse = harness.backend.parse

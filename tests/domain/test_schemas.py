@@ -8,6 +8,7 @@ from skeleton_crew.domain.contest_policy import CheckId
 from skeleton_crew.domain.errors import PolicyViolation
 from skeleton_crew.domain.schemas import (
     MAX_OUTPUT_CHARS,
+    MissingDocUpdate,
     NewIssue,
     RefineResult,
     ReviewFinding,
@@ -28,13 +29,22 @@ def worker(**overrides: Any) -> str:
 
 
 def review(**overrides: Any) -> str:
-    data: dict[str, Any] = {"verdict": "approve", "summary": "Fine.", "findings": []}
+    data: dict[str, Any] = {
+        "verdict": "approve",
+        "summary": "Fine.",
+        "findings": [],
+        "missing_doc_updates": [],
+    }
     data.update(overrides)
     return json.dumps(data)
 
 
 def finding(severity: str = "minor", **overrides: Any) -> dict[str, Any]:
     return {"severity": severity, "message": "m", **overrides}
+
+
+def doc(**overrides: Any) -> dict[str, Any]:
+    return {"path": "docs/usage.md", "reason": "Describes the old flag.", **overrides}
 
 
 def test_minimal_worker_result_parses() -> None:
@@ -157,6 +167,19 @@ def test_models_are_frozen() -> None:
         review(findings=[finding(message="")]),
         review(findings=[finding(message="x" * 501)]),
         review(findings=[finding(extra=1)]),
+        review(missing_doc_updates=[doc()]),
+        review(findings=[finding("minor")], missing_doc_updates=[doc()]),
+        review(missing_doc_updates=None),
+        review(missing_doc_updates=[doc()] * 21),
+        review(verdict="changes_requested", missing_doc_updates=[doc(extra=1)]),
+        review(verdict="changes_requested", missing_doc_updates=[doc(path="a\nb")]),
+        review(verdict="changes_requested", missing_doc_updates=[doc(path="a\rb")]),
+        review(verdict="changes_requested", missing_doc_updates=[doc(path="x" * 301)]),
+        review(verdict="changes_requested", missing_doc_updates=[doc(path="")]),
+        review(verdict="changes_requested", missing_doc_updates=[doc(reason="x" * 501)]),
+        review(verdict="changes_requested", missing_doc_updates=[doc(reason=" ")]),
+        review(verdict="changes_requested", missing_doc_updates=[{"path": "a"}]),
+        review(verdict="changes_requested", missing_doc_updates=["docs/usage.md"]),
     ],
 )
 def test_invalid_review_output_fails_closed(raw: str) -> None:
@@ -173,10 +196,28 @@ def test_invalid_review_output_fails_closed(raw: str) -> None:
         review(verdict="changes_requested", findings=[finding("blocker", path="a", line=1)]),
         review(verdict="scope_too_large", findings=[]),
         review(verdict="scope_too_large", findings=[finding("blocker")]),
+        review(verdict="changes_requested", missing_doc_updates=[doc()]),
+        review(verdict="changes_requested", missing_doc_updates=[doc()] * 20),
+        review(verdict="scope_too_large", missing_doc_updates=[doc()]),
     ],
 )
 def test_valid_review_output_parses(raw: str) -> None:
     assert isinstance(parse_output(ReviewResult, raw), ReviewResult)
+
+
+def test_review_without_missing_doc_updates_fails_closed() -> None:
+    raw = json.dumps({"verdict": "approve", "summary": "Fine.", "findings": []})
+    with pytest.raises(PolicyViolation, match="missing_doc_updates"):
+        parse_output(ReviewResult, raw)
+
+
+def test_review_schema_requires_missing_doc_updates_and_forbids_extra_items() -> None:
+    schema = json.loads(json_schema(ReviewResult))
+    assert "missing_doc_updates" in schema["required"]
+    assert schema["properties"]["missing_doc_updates"]["maxItems"] == 20
+    item = schema["$defs"]["MissingDocUpdate"]
+    assert item["additionalProperties"] is False
+    assert sorted(item["required"]) == ["path", "reason"]
 
 
 def test_refine_result_limits() -> None:
@@ -272,7 +313,15 @@ def test_check_selection_rejects_negative_quota() -> None:
 
 @pytest.mark.parametrize(
     "model",
-    [WorkerResult, ReviewResult, RefineResult, SelectionResult, NewIssue, ReviewFinding],
+    [
+        WorkerResult,
+        ReviewResult,
+        RefineResult,
+        SelectionResult,
+        NewIssue,
+        ReviewFinding,
+        MissingDocUpdate,
+    ],
 )
 def test_json_schema_is_compact_and_forbids_extra(model: type[BaseModel]) -> None:
     schema = json_schema(model)

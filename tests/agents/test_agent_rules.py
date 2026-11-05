@@ -27,6 +27,12 @@ def test_worker_rules_forbid_pushing() -> None:
     assert "`gh`" in text
 
 
+def test_reviewer_rules_require_the_missing_doc_updates_list() -> None:
+    text = default_rules("reviewer")
+    assert "`missing_doc_updates`" in text
+    assert "no missing doc updates" in text
+
+
 def test_unknown_rules_key_is_rejected() -> None:
     with pytest.raises(ValueError, match="unknown rules key"):
         default_rules("../../etc/passwd")

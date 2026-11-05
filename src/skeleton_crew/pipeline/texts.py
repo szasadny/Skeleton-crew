@@ -76,6 +76,8 @@ def review_text(result: ReviewResult) -> str:
     for finding in result.findings:
         where = f"{finding.path}:{finding.line}" if finding.line else finding.path or "general"
         lines.append(f"- [{finding.severity}] {where}: {finding.message}")
+    for doc in result.missing_doc_updates:
+        lines.append(f"- [docs] {doc.path}: {doc.reason}")
     return "\n".join(lines)
 
 
