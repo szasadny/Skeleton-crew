@@ -42,10 +42,11 @@ jobs:
           sudo apt-get install -y fuse3 jq "$deb"
           docker info --format '{{json .Runtimes}}' | grep -q '"sysbox-runc"'
       - run: docker build -t skeleton-crew-agent:latest src/skeleton_crew/runtime/images/agent
-      - run: uv run --no-sync pytest -m docker -q
+      - run: for i in $(seq 10); do echo "== round $i"; uv run --no-sync pytest -m docker -q -x || exit 1; done
       - name: Diagnose
-        if: failure()
+        if: always()
         run: |
+          uname -r
           cat /etc/docker/daemon.json
           docker info
           docker ps -a
