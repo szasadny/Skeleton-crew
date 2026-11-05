@@ -25,6 +25,7 @@ You run unattended inside a sandbox. Nobody is available to answer.
 
 ## Writing
 
+- Keep everything you write concise, but short and to the point.
 - Code comments: default none. Add one only for a why the code cannot show, as one short line. Never write essays, docstrings on obvious code, history or narration.
 - Summaries, PR titles, notes and findings: short and factual, a few lines at most.
 
