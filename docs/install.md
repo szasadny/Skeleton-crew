@@ -101,7 +101,7 @@ The setup command runs in the worker's container before its first session, and e
 
 ## Self-hosted CI
 
-Optionally, Skeleton Crew runs the target repo's GitHub Actions jobs on runners on this VM, so CI costs no Actions minutes. Checks, logs and artifacts still land in GitHub. Only private repositories qualify: a public repo would run fork PR jobs on this host.
+Optionally, Skeleton Crew runs the target repo's GitHub Actions jobs on runners on this VM, so CI costs no Actions minutes. Checks, logs and artifacts still land in GitHub. Only private repositories qualify: a public repo would run fork PR jobs on this host. GitHub's "Require approval for all external contributors" setting would cover that, but checking it needs the App permission Administration: read, which the App deliberately does not have; without that check Skeleton Crew would have to trust the setting blindly.
 
 Each runner is a container with Sysbox and its own Docker, so jobs can use `docker`, `docker compose` and service containers, and two jobs that bind the same port do not collide. After every job the container is recreated from the image with the same registration. Runners never get the GitHub App key, a GitHub token or the Docker socket; their traffic goes through their own egress proxy with its own allowlist.
 
