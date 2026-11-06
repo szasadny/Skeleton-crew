@@ -63,6 +63,12 @@ class ContainerHandle:
 
 
 @dataclass(frozen=True)
+class ContainerInfo:
+    handle: ContainerHandle
+    running: bool
+
+
+@dataclass(frozen=True)
 class ExecResult:
     exit_code: int
     stdout_path: Path | None
@@ -90,6 +96,10 @@ class ContainerRuntime(Protocol):
     async def remove(self, handle: ContainerHandle) -> None: ...
 
     async def remove_all_managed(self) -> int: ...
+
+    async def list_labeled(self, label: str, value: str) -> list[ContainerInfo]: ...
+
+    async def remove_labeled(self, label: str, value: str) -> int: ...
 
     async def health(self, *, image: str, network: str, proxy_container: str) -> list[str]: ...
 
@@ -320,9 +330,23 @@ class DockerRuntime:
         return await asyncio.to_thread(self._remove_all_blocking)
 
     def _remove_all_blocking(self) -> int:
-        containers = self._client.containers.list(
-            all=True, filters={"label": f"{MANAGED_LABEL}=true"}
-        )
+        return self._remove_labeled_blocking(MANAGED_LABEL, "true")
+
+    async def list_labeled(self, label: str, value: str) -> list[ContainerInfo]:
+        return await asyncio.to_thread(self._list_labeled_blocking, label, value)
+
+    def _list_labeled_blocking(self, label: str, value: str) -> list[ContainerInfo]:
+        containers = self._client.containers.list(all=True, filters={"label": f"{label}={value}"})
+        return [
+            ContainerInfo(ContainerHandle(id=str(c.id), name=str(c.name)), c.status == "running")
+            for c in containers
+        ]
+
+    async def remove_labeled(self, label: str, value: str) -> int:
+        return await asyncio.to_thread(self._remove_labeled_blocking, label, value)
+
+    def _remove_labeled_blocking(self, label: str, value: str) -> int:
+        containers = self._client.containers.list(all=True, filters={"label": f"{label}={value}"})
         removed = 0
         for container in containers:
             try:
@@ -353,9 +377,9 @@ class DockerRuntime:
         try:
             self._client.images.get(image)
         except docker.errors.ImageNotFound:
-            return [f"agent image {image} is missing"]
+            return [f"image {image} is missing"]
         except docker.errors.DockerException:
-            return [f"agent image {image} could not be inspected"]
+            return [f"image {image} could not be inspected"]
         return []
 
     def _network_problems(self, network: str) -> list[str]:

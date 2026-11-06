@@ -47,6 +47,9 @@ Each row has exactly one correct place. Putting it anywhere else violates the co
 | Controller-side git work: worker copies, applying patches, diff summaries, reading the repo docs | `runtime/workspace.py` |
 | Pruning expired task directories | `pipeline/retention.py` (which keys expire), `runtime/workspace.py` (safe removal) |
 | Egress allowlist rendering and reload | `runtime/egress.py` |
+| Which repos may use self-hosted runners, runner names, restart backoff, runner status | `domain/runner_policy.py` |
+| Starting, recreating and stopping the CI runner containers; their preflight checks | `pipeline/runner_pool.py` |
+| The CI runner image (actions runner, nested Docker, register and run entrypoint) | `runtime/images/runner/` |
 | Secret scanning of a patch (gitleaks) | `runtime/secret_scan.py` |
 | The agent backend interface and the session runner | `agents/base.py`, `agents/session.py` |
 | A specific agent CLI (argv, env, output parsing, its `BackendSpec`) | `agents/backends/<name>.py`, registered in `agents/registry.py` |
@@ -100,8 +103,12 @@ VM (Ubuntu 24.04 or Debian 12, Docker + Sysbox)
    ├─ caddy         TLS → web UI on the LAN IP
    ├─ controller    FastAPI + APScheduler + SQLite; only holder of the GitHub App key; docker.sock
    ├─ egress-proxy  Squid with a domain allowlist; the only internet route for agent containers
-   └─ agent-*       spawned per session: runtime=sysbox-runc, internal network, non-root, resource limits; handed out only once the entrypoint is ready
+   ├─ runner-proxy  the same image with the runners' own allowlist; the only internet route for runners
+   ├─ agent-*       spawned per session: runtime=sysbox-runc, internal network, non-root, resource limits; handed out only once the entrypoint is ready
+   └─ runner-*      optional self-hosted CI: one container per registered runner, runtime=sysbox-runc, own internal network, recreated after every job
 ```
+
+Self-hosted CI (`pipeline/runner_pool.py`) reconciles every few seconds: while `ci.enabled` is on, the kill switch is off and the repo is private, each runner with a registration in `<data>/runners/runner-<n>/` gets a container that runs one job (`run.sh --once`) and exits; the pool then recreates it from the image. The registration is mounted read-only and copied in, so a job cannot change what the next job starts from. Runners are registered once by hand (`docs/install.md`); the App never creates registration tokens. The kill switch, turning the option off or the repo turning public remove every runner container.
 
 The data directory (`SC_DATA_DIR`) is bind-mounted into the controller at the **same path** as on the host, so the controller can hand host paths to Docker for agent mounts.
 
@@ -143,7 +150,7 @@ every package → core (core → domain only)
 
 ### 4.1 Run flow
 
-1. **Preflight**: a ruleset on the base branch requires a PR plus ≥1 approval, and the App cannot bypass it (without any ruleset only when `allow_unprotected_base_branch` is on); the App has the required permissions, no `workflows` permission and no `administration` write; the agent settings pass `agents/registry.py`; Docker, Sysbox, the agent image and the proxy are healthy; each configured backend has its credential; the required checks can be read, the egress allowlist applied and the repo docs read (§6.3) from a clone of the base branch that the selector reuses. Any failure ends the run as `preflight_failed`. While the kill switch is on, no run starts.
+1. **Preflight**: a ruleset on the base branch requires a PR plus ≥1 approval, and the App cannot bypass it (without any ruleset only when `allow_unprotected_base_branch` is on); the App has the required permissions, no `workflows` permission and no `administration` write; the agent settings pass `agents/registry.py`; Docker, Sysbox, the agent image and the proxy are healthy; each configured backend has its credential; with self-hosted CI on, the repo is private, the runner image, network and proxy are healthy and at least one runner is registered; the required checks can be read, the egress allowlist applied and the repo docs read (§6.3) from a clone of the base branch that the selector reuses. Any failure ends the run as `preflight_failed`. While the kill switch is on, no run starts.
 2. **Candidates**: open issues with the labels that pass the trust rules (`docs/labels.md` § Trust), except issues that also carry `skeleton HITL` (or, for `skeleton`, `skeleton refine`). Issues with an open skeleton PR go to PR maintenance instead. Expired task directories are pruned before this step (§5).
 3. **Selector**: orders candidates up to the daily quota. It escalates only issues that are clearly too large, need an owner decision (with the question and options) or are rejected; every other candidate it does not pick stays queued.
 4. **Worker pool** (≤ `max_parallel_workers`), and in parallel the **refine flow**. PR maintenance jobs (§4.4) take slots before new issues.
@@ -220,8 +227,8 @@ Task directories (`<data>/tasks/<key>/`, transcripts and command logs) of termin
 
 ### 6.1 Configuration
 
-- **Bootstrap** (`.env`, `core/config.py`, prefix `SC_`): target repo `owner/name`, GitHub App id and key path, optional installation id and bot login, agent credentials (`SC_AGENT_CREDENTIALS__<NAME>`, read into `agent_credentials` with lowercase names), UI password hash, session secret, data directory, image, network and egress-proxy names, listen address. Never editable in the UI and never logged.
-- **Runtime** (`domain/settings.py`, edited in the UI): schedule, limits, per-role agent (backend, model, effort, web tools), per-backend options (`backend_options.<backend>.<option>`), label names, base branch, protected paths, `setup_command`, `check_command`, `require_ci`, `allow_unprotected_base_branch`, trusted users, egress allowlist, resource limits, `dry_run`, kill switch. The domain only checks the shape of agent fields; `agents/registry.py` checks them against the backends on save and in preflight. The domain's default agent strings must match a registry backend, which a test enforces.
+- **Bootstrap** (`.env`, `core/config.py`, prefix `SC_`): target repo `owner/name`, GitHub App id and key path, optional installation id and bot login, agent credentials (`SC_AGENT_CREDENTIALS__<NAME>`, read into `agent_credentials` with lowercase names), UI password hash, session secret, data directory, image, network and egress-proxy names (for agents and for runners), listen address. Never editable in the UI and never logged.
+- **Runtime** (`domain/settings.py`, edited in the UI): schedule, limits, per-role agent (backend, model, effort, web tools), per-backend options (`backend_options.<backend>.<option>`), label names, base branch, protected paths, `setup_command`, `check_command`, `require_ci`, `allow_unprotected_base_branch`, trusted users, egress allowlist, resource limits, self-hosted CI (`ci.*`: on/off, runner count, labels, runner allowlist, no-proxy hosts, runner resource limits), `dry_run`, kill switch. The domain only checks the shape of agent fields; `agents/registry.py` checks them against the backends on save and in preflight. The domain's default agent strings must match a registry backend, which a test enforces.
 
 ### 6.2 Agent backends
 
@@ -262,7 +269,7 @@ Before merging, check:
 
 - [ ] No GitHub call outside `github/gateway.py`
 - [ ] No GitHub write without a `domain/` policy check and an audit event
-- [ ] No credential passed into a container except the backend's model credential
+- [ ] No credential passed into a container except the backend's model credential (agents) or the runner's own registration (CI runners)
 - [ ] No git command run by the controller in an agent-writable directory
 - [ ] No I/O in `domain/`
 - [ ] Agent output parsed only through `domain/schemas.py`

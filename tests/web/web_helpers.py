@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from fake_control import FakeRunControl
+from fake_control import FakeRunControl, FakeRunnerControl
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -87,13 +87,18 @@ async def open_web(
     data_dir: Path,
     sessionmaker: async_sessionmaker[AsyncSession],
     controller: FakeRunControl | None = None,
+    runners: FakeRunnerControl | None = None,
     **config_overrides: Any,
 ) -> AsyncIterator[Web]:
     config = make_config(data_dir, **config_overrides)
     control = controller or FakeRunControl()
     scheduler = RunScheduler(_noop)
     app = create_app(
-        config=config, sessionmaker=sessionmaker, controller=control, scheduler=scheduler
+        config=config,
+        sessionmaker=sessionmaker,
+        controller=control,
+        scheduler=scheduler,
+        runners=runners or FakeRunnerControl(),
     )
     clock = FakeClock()
     app.state.web.throttle.clock = clock

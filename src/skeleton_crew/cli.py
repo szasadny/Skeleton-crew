@@ -20,6 +20,7 @@ from skeleton_crew.github.write_guard import AuditSink
 from skeleton_crew.pipeline.deps import PipelineDeps, audit_sink
 from skeleton_crew.pipeline.run_controller import RunController
 from skeleton_crew.pipeline.run_setup import preflight
+from skeleton_crew.pipeline.runner_pool import RunnerPool
 from skeleton_crew.runtime.containers import DockerRuntime
 from skeleton_crew.runtime.secret_scan import scan_patch
 from skeleton_crew.scheduler.scheduler import RunScheduler
@@ -32,7 +33,14 @@ def _now() -> datetime:
 
 
 async def _open_database(config: BootstrapConfig) -> AsyncEngine:
-    for directory in (config.data_dir, config.tasks_dir, config.egress_allowlist_path.parent):
+    directories = (
+        config.data_dir,
+        config.tasks_dir,
+        config.egress_allowlist_path.parent,
+        config.runners_dir,
+        config.runner_allowlist_path.parent,
+    )
+    for directory in directories:
         directory.mkdir(parents=True, exist_ok=True)
     engine = make_engine(config.db_path)
     await run_migrations(engine)
@@ -80,15 +88,23 @@ async def _serve(config: BootstrapConfig) -> None:
         engine = await _open_database(config)
         stack.push_async_callback(engine.dispose)
         sessionmaker = make_sessionmaker(engine)
-        controller = RunController(await _build_deps(config, sessionmaker))
+        deps = await _build_deps(config, sessionmaker)
+        runners = RunnerPool(deps)
+        controller = RunController(deps, runners)
         await controller.reconcile_on_startup()
+        runners.start()
+        stack.push_async_callback(runners.close)
 
         async def scheduled_run() -> int | None:
             return await controller.start("schedule")
 
         scheduler = RunScheduler(scheduled_run)
         app = create_app(
-            config=config, sessionmaker=sessionmaker, controller=controller, scheduler=scheduler
+            config=config,
+            sessionmaker=sessionmaker,
+            controller=controller,
+            scheduler=scheduler,
+            runners=runners,
         )
         # Only Caddy can reach the controller (it is not published), so its forwarded IP is trusted.
         server = uvicorn.Server(

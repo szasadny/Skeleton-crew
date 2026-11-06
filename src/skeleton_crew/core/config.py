@@ -31,6 +31,11 @@ class BootstrapConfig(BaseSettings):
     egress_proxy_url: str = "http://egress-proxy:3128"
     egress_proxy_container: str = "skeleton-crew-egress-proxy"
     egress_allowlist_file: Path | None = None
+    runner_image: str = "skeleton-crew-runner:latest"
+    runner_network: str = "skeleton-crew-runners"
+    runner_proxy_url: str = "http://runner-proxy:3128"
+    runner_proxy_container: str = "skeleton-crew-runner-proxy"
+    runner_allowlist_file: Path | None = None
     host: str = "0.0.0.0"  # noqa: S104 -- the controller runs in a container behind Caddy
     port: int = 8080
     insecure_cookies: bool = False
@@ -91,6 +96,14 @@ class BootstrapConfig(BaseSettings):
     @property
     def egress_allowlist_path(self) -> Path:
         return self.egress_allowlist_file or self.data_dir / "egress" / "allowlist.txt"
+
+    @property
+    def runners_dir(self) -> Path:
+        return self.data_dir / "runners"
+
+    @property
+    def runner_allowlist_path(self) -> Path:
+        return self.runner_allowlist_file or self.data_dir / "runner-egress" / "allowlist.txt"
 
     def secret_values(self) -> list[str]:
         secrets = [*self.agent_credentials.values(), self.ui_password_hash, self.session_secret]

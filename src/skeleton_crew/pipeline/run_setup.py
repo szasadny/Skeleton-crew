@@ -28,6 +28,7 @@ from skeleton_crew.github.preflight import check_repository
 from skeleton_crew.github.trust import trusted_issues
 from skeleton_crew.github.write_guard import AuditSink
 from skeleton_crew.pipeline.deps import PipelineDeps
+from skeleton_crew.pipeline.runner_pool import runner_problems
 from skeleton_crew.runtime.egress import apply_allowlist
 from skeleton_crew.runtime.workspace import read_repo_docs, task_paths
 from skeleton_crew.store import rules_store, runs_store
@@ -102,6 +103,7 @@ async def _environment_problems(
             network=config.agent_network,
             proxy_container=config.egress_proxy_container,
         )
+        problems += [p for p in await runner_problems(deps, settings, gw) if p not in problems]
     except Exception as exc:
         log.exception("preflight check failed")
         return [*problems, f"preflight check failed: {type(exc).__name__}"]

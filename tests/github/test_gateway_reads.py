@@ -451,3 +451,13 @@ def test_format_job_logs_respects_budget() -> None:
     for max_chars in (0, 5, 30, 100, 1000):
         assert len(format_job_logs(logs, max_chars)) <= max_chars
     assert format_job_logs(logs, 1000).count("== job") == 3
+
+
+@respx.mock
+@pytest.mark.parametrize(("private", "expected"), [(True, True), (False, False), ("yes", False)])
+async def test_repo_is_private_only_for_a_literal_true(private: object, expected: bool) -> None:
+    respx.get(f"{API}/repos/o/r").mock(
+        return_value=httpx.Response(200, json={"id": 1, "private": private})
+    )
+
+    assert await make_gateway(AuditLog()).repo_is_private() is expected

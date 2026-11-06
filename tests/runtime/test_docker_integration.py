@@ -12,6 +12,7 @@ from skeleton_crew.runtime.containers import (
     SANDBOX_RUNTIME,
     AgentContainerSpec,
     ContainerHandle,
+    ContainerStartError,
     DockerRuntime,
     Mount,
 )
@@ -19,6 +20,7 @@ from skeleton_crew.runtime.containers import (
 pytestmark = pytest.mark.docker
 
 IMAGE = "skeleton-crew-agent:latest"
+RUNNER_IMAGE = "skeleton-crew-runner:latest"
 
 
 @pytest.fixture
@@ -117,3 +119,27 @@ async def test_remove_all_managed_cleans_up(started: tuple[DockerRuntime, Contai
     runtime, _ = started
     assert await runtime.remove_all_managed() >= 1
     await asyncio.sleep(0)
+
+
+async def test_unregistered_runner_never_becomes_ready(
+    client: DockerClient, network: str, tmp_path: Path
+) -> None:
+    try:
+        client.images.get(RUNNER_IMAGE)
+    except docker.errors.ImageNotFound:
+        pytest.fail(f"build {RUNNER_IMAGE} before running the docker tests")
+    config = tmp_path / "runner-1"
+    config.mkdir()
+    label = f"sc-test-{uuid.uuid4().hex[:8]}"
+    runtime = DockerRuntime(client)
+
+    with pytest.raises(ContainerStartError, match="stopped during startup"):
+        await runtime.start(
+            AgentContainerSpec(
+                name=label, image=RUNNER_IMAGE, network=network,
+                mounts=[Mount(config, "/runner-config", read_only=True)], env={},
+                cpus=1, memory_gb=1, pids=256, labels={"skeleton-crew.test": label},
+            )
+        )  # fmt: skip
+
+    assert await runtime.list_labeled("skeleton-crew.test", label) == []

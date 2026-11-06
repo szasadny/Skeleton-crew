@@ -73,7 +73,15 @@ Expected: the task's transcripts show `worker-1` ending with `hook_stopped` and 
 
 Wait until an issue shows up in `gh issue list` before clicking **Run now**: GitHub's issue search lags a few seconds behind issue creation.
 
-When all six sections pass, the install is ready for a real repository.
+## 7. Self-hosted CI (optional)
+
+1. Register two runners and enable them on the CI page (`install.md` § Self-hosted CI). Point the workflow at them, e.g. with the repository variable `CI_RUNNER`.
+2. Check that a runner holds no GitHub credential: `sudo docker exec skeleton-crew-runner-1 sh -c 'env | grep -ci token; ls /var/run/docker.sock /etc/skeleton-crew'` prints `0` and two "No such file" errors.
+3. Label a small issue `skeleton` and click **Run now**.
+
+Expected: GitHub shows the PR's checks running on `skeleton-crew-runner-*`, the task passes CI as usual, and after each job the runner is idle again in GitHub without a new registration. Two jobs with the same service port run side by side. Engaging the kill switch leaves no `skeleton-crew-runner-*` container within about 10 seconds.
+
+When all sections pass, the install is ready for a real repository.
 
 ## Known dependency debt
 

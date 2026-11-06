@@ -309,6 +309,26 @@ async def test_remove_all_managed_filters_by_label(client: MagicMock) -> None:
     )
 
 
+async def test_list_labeled_reports_running_state(client: MagicMock) -> None:
+    up, down = MagicMock(id="a", status="running"), MagicMock(id="b", status="exited")
+    up.name, down.name = "up", "down"
+    client.containers.list.return_value = [up, down]
+
+    infos = await DockerRuntime(client).list_labeled("role", "runner")
+
+    assert [(i.handle.id, i.handle.name, i.running) for i in infos] == [
+        ("a", "up", True),
+        ("b", "down", False),
+    ]
+    client.containers.list.assert_called_once_with(all=True, filters={"label": "role=runner"})
+
+
+async def test_remove_labeled_removes_only_that_label(client: MagicMock) -> None:
+    client.containers.list.return_value = [MagicMock(), MagicMock()]
+    assert await DockerRuntime(client).remove_labeled("role", "runner") == 2
+    client.containers.list.assert_called_once_with(all=True, filters={"label": "role=runner"})
+
+
 def healthy(client: MagicMock) -> None:
     client.info.return_value = {"Runtimes": {"runc": {}, "sysbox-runc": {}}}
     client.networks.get.return_value.attrs = {"Internal": True}
@@ -338,7 +358,7 @@ async def test_health_reports_every_problem(client: MagicMock) -> None:
     client.containers.get.return_value.status = "exited"
     assert await health(client) == [
         "docker runtime sysbox-runc is not installed",
-        "agent image img is missing",
+        "image img is missing",
         "network net is not internal",
         "egress proxy proxy is not running",
     ]

@@ -1,7 +1,7 @@
 import asyncio
 from pathlib import Path
 
-from fake_control import FakeRunControl
+from fake_control import FakeRunControl, FakeRunnerControl
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from web_helpers import make_config
 
@@ -29,6 +29,7 @@ async def test_lifespan_starts_scheduler_from_stored_settings_and_stops_it(
         sessionmaker=sessionmaker,
         controller=FakeRunControl(),
         scheduler=scheduler,
+        runners=FakeRunnerControl(),
     )
     async with app.router.lifespan_context(app):
         assert scheduler.running
@@ -45,6 +46,7 @@ def test_api_docs_are_disabled(tmp_path: Path) -> None:
         sessionmaker=async_sessionmaker(),
         controller=FakeRunControl(),
         scheduler=RunScheduler(_noop),
+        runners=FakeRunnerControl(),
     )
     assert app.openapi_url is None
     assert app.docs_url is None

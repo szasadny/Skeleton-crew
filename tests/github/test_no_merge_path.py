@@ -104,6 +104,7 @@ def test_gateway_exposes_no_merge_like_method() -> None:
         "branch_rules",
         "ruleset_bypass",
         "installation_permissions",
+        "repo_is_private",
         "change_labels",
         "comment",
         "create_hitl_issue",

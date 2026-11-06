@@ -119,6 +119,7 @@ class FakeGitHubGateway:
         ]
         self.ruleset_bypasses: dict[int, str] = {1: "never"}
         self.installation_perms: dict[str, str] = dict(REQUIRED_PERMISSIONS)
+        self.private = True
         self.failures: dict[str, Exception] = {}
         self.writes: list[WriteRecord] = []
         self.audit_events: list[AuditRecord] = []
@@ -241,6 +242,10 @@ class FakeGitHubGateway:
     async def installation_permissions(self) -> dict[str, str]:
         self._maybe_fail("installation_permissions")
         return dict(self.installation_perms)
+
+    async def repo_is_private(self) -> bool:
+        self._maybe_fail("repo_is_private")
+        return self.private
 
     async def change_labels(self, change: LabelChange) -> None:
         async def perform() -> None:

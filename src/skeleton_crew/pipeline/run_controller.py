@@ -35,6 +35,7 @@ from skeleton_crew.pipeline.run_setup import (
     preflight,
     remaining_quotas,
 )
+from skeleton_crew.pipeline.runner_pool import RunnerPool
 from skeleton_crew.pipeline.selector import select_issues
 from skeleton_crew.pipeline.texts import INTERRUPTED_COMMENT, decision_reason
 from skeleton_crew.pipeline.worker_flow import run_worker
@@ -50,8 +51,9 @@ type Outcome = tuple[RunState, str | None]
 
 
 class RunController:
-    def __init__(self, deps: PipelineDeps) -> None:
+    def __init__(self, deps: PipelineDeps, runners: RunnerPool | None = None) -> None:
         self._deps = deps
+        self._runners = runners
         self._lock = asyncio.Lock()
         self._task: asyncio.Task[None] | None = None
 
@@ -86,6 +88,8 @@ class RunController:
                 task.cancel()
                 with suppress(asyncio.CancelledError):
                     await task
+            if self._runners is not None:
+                await self._runners.stop()
             await self._remove_containers()
             await self._abort_leftovers(KILLED_NOTE)
 
