@@ -1,4 +1,6 @@
 import json
+import shutil
+import subprocess
 from dataclasses import replace
 from pathlib import Path
 
@@ -27,10 +29,12 @@ def _value_after(argv: list[str], flag: str) -> str:
 
 
 @pytest.mark.parametrize("mode", list(AuthMode))
-def test_command_passes_prompt_as_one_argument(mode: AuthMode) -> None:
+def test_command_reads_the_prompt_file_on_stdin(mode: AuthMode) -> None:
     prompt = "Fix it; $(rm -rf /) 'q' \"qq\"\nsecond line"
     argv = _backend(mode).command(make_request(prompt=prompt, timeout_s=1800.5))
-    assert argv[:3] == ["claude", "-p", prompt]
+    assert argv[:2] == ["sh", "-c"]
+    assert argv[3:6] == ["sh", "/skeleton-in/prompt.md", "-p"]
+    assert not any(prompt in arg for arg in argv)
     assert "timeout" not in argv
     assert _value_after(argv, "--output-format") == "stream-json"
     assert "--verbose" in argv
@@ -96,6 +100,32 @@ def test_credential_problems_per_auth_mode() -> None:
     assert "SC_AGENT_CREDENTIALS__CLAUDE_OAUTH_TOKEN" in sub_problem
     [api_problem] = _backend(AuthMode.API_KEY, key=SecretStr("  ")).credential_problems()
     assert "SC_AGENT_CREDENTIALS__ANTHROPIC_API_KEY" in api_problem
+
+
+def test_large_prompt_reaches_claude_on_stdin(tmp_path: Path) -> None:
+    sh = shutil.which("sh")
+    if sh is None:
+        pytest.skip("sh not installed")
+    prompt_file, claude = tmp_path / "prompt.md", tmp_path / "claude"
+    prompt_file.write_text("x" * 300_000 + " $(touch pwned)")
+    claude.write_text('#!/bin/sh\nprintf "%s\\n" "$*"; wc -c\n')
+    claude.chmod(0o755)
+    req = replace(make_request(), prompt_path_in_container=str(prompt_file))
+    argv = _backend(AuthMode.SUBSCRIPTION).command(req)
+
+    result = subprocess.run(  # noqa: S603
+        argv,
+        env={"PATH": f"{tmp_path}:/usr/bin:/bin"},
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    args, size = result.stdout.splitlines()
+    assert args.startswith("-p --output-format stream-json")
+    assert int(size) == 300_015
+    assert not (tmp_path / "pwned").exists()
 
 
 @pytest.mark.parametrize("mode", list(AuthMode))

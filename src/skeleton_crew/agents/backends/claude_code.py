@@ -60,6 +60,8 @@ _CREDENTIALS = {
     AuthMode.API_KEY: ("anthropic_api_key", "ANTHROPIC_API_KEY"),
 }
 _BASE_ENV = {"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "DISABLE_AUTOUPDATER": "1"}
+# On stdin, because Linux caps a single argument at 128 KiB and prompts can be larger.
+_PROMPT_FROM_STDIN = 'prompt="$1"; shift; exec claude "$@" < "$prompt"'
 _SUBTYPE_RE = re.compile(r"^[a-z_]{1,40}$")
 # The id is later passed to --resume, so it must never look like an option.
 _SESSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$")
@@ -127,9 +129,12 @@ class ClaudeCodeBackend:
 
     def command(self, req: SessionRequest) -> list[str]:
         argv = [
-            "claude",
+            "sh",
+            "-c",
+            _PROMPT_FROM_STDIN,
+            "sh",
+            req.prompt_path_in_container,
             "-p",
-            req.prompt,
             "--output-format",
             "stream-json",
             "--verbose",

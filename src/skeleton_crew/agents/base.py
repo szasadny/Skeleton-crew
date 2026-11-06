@@ -37,6 +37,7 @@ class SessionRequest:
     timeout_s: float
     json_schema: str
     rules_path_in_container: str
+    prompt_path_in_container: str
     cwd: str
     resume_session_id: str | None = None
     max_budget_usd: float | None = None

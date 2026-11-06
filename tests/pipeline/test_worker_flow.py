@@ -273,6 +273,7 @@ def _snapshot_reviewer_mounts(harness: Harness) -> list[dict[str, str]]:
                     "app.py": (workspace / "app.py").read_text(),
                     "inbox": " ".join(sorted(p.name for p in inbox.iterdir())),
                     "since": since.read_text() if since.exists() else "",
+                    "prompt": (inbox / "prompt.md").read_text(),
                 }
             )
         return parse(stdout_path, exit_code, timed_out)
@@ -300,9 +301,10 @@ async def test_second_review_resumes_the_reviewer_in_the_same_container(harness:
     assert second.resume_session_id == "review-session"
     assert second.prompt.startswith("# Task: review the updated change")
     assert [(snap["app.py"], snap["inbox"]) for snap in seen] == [
-        (GREETING["app.py"], "changes.diff rules.md"),
-        ("print(1)\n", "changes.diff rules.md since-review.diff"),
+        (GREETING["app.py"], "changes.diff prompt.md rules.md"),
+        ("print(1)\n", "changes.diff prompt.md rules.md since-review.diff"),
     ]
+    assert [snap["prompt"] for snap in seen] == [first.prompt, second.prompt]
     assert not harness.runtime.running
 
 
