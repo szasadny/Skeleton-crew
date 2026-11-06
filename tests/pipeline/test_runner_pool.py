@@ -140,6 +140,11 @@ async def test_running_runner_reports_idle_or_busy(harness: Harness, pool: Runne
     assert len(runner_starts(harness)) == 1
 
 
+def test_busy_check_matches_the_process_name_not_command_lines() -> None:
+    assert "-x" in BUSY_ARGV
+    assert "-f" not in BUSY_ARGV
+
+
 async def test_exited_runner_is_recreated_from_the_image(
     harness: Harness, pool: RunnerPool, clock: Clock
 ) -> None:

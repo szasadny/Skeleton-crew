@@ -33,7 +33,8 @@ CONTAINER_PREFIX = "skeleton-crew-"
 CONFIG_MOUNT = "/runner-config"
 REGISTRATION_FILE = ".runner"
 LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
-BUSY_ARGV = ("pgrep", "-f", "Runner.Worker")
+# By process name: the exec's own timeout wrapper has "Runner.Worker" in its command line.
+BUSY_ARGV = ("pgrep", "-x", "Runner.Worker")
 TICK_S = 5.0
 ELIGIBILITY_TTL_S = 600.0
 _EXEC_TIMEOUT_S = 10.0
