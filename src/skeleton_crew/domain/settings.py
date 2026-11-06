@@ -211,6 +211,7 @@ class SelfHostedCi(_Frozen):
         "codeload.github.com",
         ".actions.githubusercontent.com",
         "objects.githubusercontent.com",
+        "raw.githubusercontent.com",
         "release-assets.githubusercontent.com",
         "ghcr.io",
         "pkg-containers.githubusercontent.com",

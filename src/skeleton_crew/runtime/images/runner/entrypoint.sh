@@ -36,8 +36,9 @@ setup_proxy() {
     export HTTPS_PROXY="$url" HTTP_PROXY="$url" https_proxy="$url" http_proxy="$url"
     export NO_PROXY="${NO_PROXY:-localhost,127.0.0.1,::1}" no_proxy="${NO_PROXY:-localhost,127.0.0.1,::1}"
     install -d -o runner -g runner -m 0700 /home/runner/.docker
+    # HTTPS only: plain HTTP in job containers is local traffic, and BusyBox wget ignores no_proxy.
     jq -n --arg proxy "$url" --arg bypass "$NO_PROXY" \
-        '{proxies: {default: {httpProxy: $proxy, httpsProxy: $proxy, noProxy: $bypass}}}' \
+        '{proxies: {default: {httpsProxy: $proxy, noProxy: $bypass}}}' \
         > /home/runner/.docker/config.json
     chown runner:runner /home/runner/.docker/config.json
 }

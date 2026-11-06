@@ -125,7 +125,7 @@ Each runner is a container with Sysbox and its own Docker, so jobs can use `dock
 
 Skeleton Crew never edits workflows. A workflow opts in with `runs-on` and the label, and chooses its own fallback, for example `runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}` with the repository variable `CI_RUNNER=skeleton-crew`.
 
-The image has git, curl, jq, gh, Python, build tools, Docker and passwordless sudo, but far less than GitHub's hosted images. Actions such as `setup-node` and `setup-uv` download their tools. Hosts a job needs go on the CI page's runner allowlist; denied hosts show in `sudo docker logs skeleton-crew-runner-proxy`. Containers a job starts get the proxy too; list the hosts they reach directly (e.g. docker compose service names) under **No proxy**.
+The image has git, curl, jq, gh, Python, build tools, Docker and passwordless sudo, but far less than GitHub's hosted images. Actions such as `setup-node` and `setup-uv` download their tools. Hosts a job needs go on the CI page's runner allowlist; denied hosts show in `sudo docker logs skeleton-crew-runner-proxy`. Containers a job starts get the HTTPS proxy too, but not an HTTP one, so plain-HTTP downloads from the internet fail inside them; list the hosts they reach directly over HTTPS (e.g. docker compose service names) under **No proxy**. Prefer exact hosts over wildcards for storage domains (`*.r2.cloudflarestorage.com`, `*.blob.core.windows.net`): a wildcard lets a job send data to any bucket.
 
 ### Maintenance
 
