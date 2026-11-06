@@ -9,12 +9,14 @@ PUBLIC_REPO_PROBLEM = (
     "self-hosted CI is only available for private repositories: "
     "jobs from fork pull requests would run on this host"
 )
+STANDBY_REASON = "no Skeleton Crew task waits for CI"
 
 
 class RunnerStatus(StrEnum):
     IDLE = "idle"
     BUSY = "busy"
     STARTING = "starting"
+    STANDBY = "standby"
     OFFLINE = "offline"
     NOT_REGISTERED = "not registered"
 

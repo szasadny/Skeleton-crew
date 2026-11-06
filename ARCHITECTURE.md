@@ -49,7 +49,7 @@ Each row has exactly one correct place. Putting it anywhere else violates the co
 | Egress allowlist rendering and reload | `runtime/egress.py` |
 | Which repos may use self-hosted runners, runner names, restart backoff, runner status | `domain/runner_policy.py` |
 | Starting, recreating and stopping the CI runner containers; their preflight checks | `pipeline/runner_pool.py` |
-| The CI runner image (actions runner, nested Docker, register and run entrypoint) | `runtime/images/runner/` |
+| The CI runner image (actions runner, nested Docker, register and run entrypoint, the job-started hook that refuses non-skeleton branches) | `runtime/images/runner/` |
 | Secret scanning of a patch (gitleaks) | `runtime/secret_scan.py` |
 | The agent backend interface and the session runner | `agents/base.py`, `agents/session.py` |
 | A specific agent CLI (argv, env, output parsing, its `BackendSpec`) | `agents/backends/<name>.py`, registered in `agents/registry.py` |
@@ -105,10 +105,10 @@ VM (Ubuntu 24.04 or Debian 12, Docker + Sysbox)
    ├─ egress-proxy  Squid with a domain allowlist; the only internet route for agent containers
    ├─ runner-proxy  the same image with the runners' own allowlist; the only internet route for runners
    ├─ agent-*       spawned per session: runtime=sysbox-runc, internal network, non-root, resource limits; handed out only once the entrypoint is ready
-   └─ runner-*      optional self-hosted CI: one container per registered runner, runtime=sysbox-runc, own internal network, recreated after every job
+   └─ runner-*      optional self-hosted CI: one container per registered runner while a task waits for CI, runtime=sysbox-runc, own internal network, recreated after every job
 ```
 
-Self-hosted CI (`pipeline/runner_pool.py`) reconciles every few seconds: while `ci.enabled` is on, the kill switch is off and the repo is private, each runner with a registration in `<data>/runners/runner-<n>/` gets a container that runs one job (`run.sh --once`) and exits; the pool then recreates it from the image. The registration is mounted read-only and copied in, so a job cannot change what the next job starts from. Runners are registered once by hand (`docs/install.md`); the App never creates registration tokens. The kill switch, turning the option off or the repo turning public remove every runner container.
+Self-hosted CI (`pipeline/runner_pool.py`) reconciles every few seconds. Runners run only when `ci.enabled` is on, the kill switch is off, the repo is private and at least one worker task of a live (not dry) run is `AWAITING_CI`. Then each runner with a registration in `<data>/runners/runner-<n>/` gets a container that runs one job (`run.sh --once`) and exits, and the pool recreates it from the image. Otherwise no runner container exists: the pool shows `standby` when only the demand is missing and `offline` with the reason otherwise. The registration is mounted read-only and copied in, so a job cannot change what the next job starts from. Before every job, the image's job-started hook fails any job whose branch does not start with `domain/branch_policy.BRANCH_PREFIX` (passed in as `SC_BRANCH_PREFIX`), so the runners only run Skeleton Crew's own pull requests. Runners are registered once by hand (`docs/install.md`); the App never creates registration tokens.
 
 The data directory (`SC_DATA_DIR`) is bind-mounted into the controller at the **same path** as on the host, so the controller can hand host paths to Docker for agent mounts.
 
@@ -171,7 +171,7 @@ QUEUED ───────→ PREPARING ──→ CODING ──→ POLICY_CHEC
 any non-terminal state → ESCALATED (ESCALATE) | FAILED (ERROR) | ABORTED (ABORT)
 ```
 
-While a task is `AWAITING_CI` its container stays alive, but no session runs, so waiting costs no tokens. CI counts as passed only when every GitHub Actions workflow run for the commit has completed and every check the base-branch ruleset requires has reported green; a required check that never appears ends in the CI timeout. If nothing reports within `ci_grace_minutes`, the task escalates when `require_ci` is on and goes to review otherwise. A CI failure or a review finding resumes the same agent session. A failed `check_command` fires `CHECK_FAILED` and counts against `max_ci_rounds`; a policy violation fires `POLICY_FAILED` and counts against `max_review_rounds`. A clean merge of the base into a continued branch has no coding step: it goes from `CODING` straight to `POLICY_CHECK`.
+While a task is `AWAITING_CI` its container stays alive, but no session runs, so waiting costs no tokens. With self-hosted CI on, this state is what starts the runners (§2). CI counts as passed only when every GitHub Actions workflow run for the commit has completed and every check the base-branch ruleset requires has reported green; a required check that never appears ends in the CI timeout. If nothing reports within `ci_grace_minutes`, the task escalates when `require_ci` is on and goes to review otherwise. A CI failure or a review finding resumes the same agent session. A failed `check_command` fires `CHECK_FAILED` and counts against `max_ci_rounds`; a policy violation fires `POLICY_FAILED` and counts against `max_review_rounds`. A clean merge of the base into a continued branch has no coding step: it goes from `CODING` straight to `POLICY_CHECK`.
 
 ### 4.3 From agent work to PR
 

@@ -75,11 +75,12 @@ Wait until an issue shows up in `gh issue list` before clicking **Run now**: Git
 
 ## 7. Self-hosted CI (optional)
 
-1. Register two runners and enable them on the CI page (`install.md` § Self-hosted CI). Point the workflow at them, e.g. with the repository variable `CI_RUNNER`.
-2. Check that a runner holds no GitHub credential: `sudo docker exec skeleton-crew-runner-1 sh -c 'env | grep -ci token; ls /var/run/docker.sock /etc/skeleton-crew'` prints `0` and two "No such file" errors.
-3. Label a small issue `skeleton` and click **Run now**.
+1. Register two runners, enable them on the CI page and route skeleton PRs to them (`install.md` § Self-hosted CI). Without a run, the CI page shows both as `standby`, and `sudo docker ps --filter name=skeleton-crew-runner` lists nothing.
+2. Label a small issue `skeleton` and click **Run now**.
+3. While the task is `awaiting_ci`, check that a runner holds no GitHub credential: `sudo docker exec skeleton-crew-runner-1 sh -c 'env | grep -ci token; docker ps -q | wc -l'` prints `0` twice. The socket inside belongs to the runner's own Docker, which runs nothing between jobs.
+4. In the same runner, check that the branch check refuses other jobs: `sudo docker exec -e GITHUB_REF_NAME=main skeleton-crew-runner-1 /usr/local/bin/job-started.sh` prints a `::error title=Not a Skeleton Crew job::` line and exits with 1.
 
-Expected: GitHub shows the PR's checks running on `skeleton-crew-runner-*`, the task passes CI as usual, and after each job the runner is idle again in GitHub without a new registration. Two jobs with the same service port run side by side. Engaging the kill switch leaves no `skeleton-crew-runner-*` container within about 10 seconds.
+Expected: runner containers start only once the task waits for CI, and GitHub shows the PR's checks running on `skeleton-crew-runner-*`. The task passes CI as usual. After each job the runner is recreated without a new registration, and once CI is done the runners are `standby` again with no containers left. Two jobs with the same service port run side by side. Engaging the kill switch while the task waits for CI leaves no `skeleton-crew-runner-*` container within about 10 seconds.
 
 When all sections pass, the install is ready for a real repository.
 

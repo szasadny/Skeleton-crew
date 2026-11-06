@@ -86,6 +86,12 @@ async def test_ci_page_shows_runner_status(web: Web) -> None:
     assert "kill switch is engaged" in html
 
 
+async def test_ci_page_shows_how_to_route_only_skeleton_prs(web: Web) -> None:
+    html = (await web.client.get("/ci")).text
+
+    assert "${{ startsWith(github.head_ref, 'skeleton/') &amp;&amp; vars.CI_RUNNER" in html
+
+
 async def test_ci_post_without_csrf_is_refused(web: Web) -> None:
     response = await web.client.post("/ci", data=_form())
 

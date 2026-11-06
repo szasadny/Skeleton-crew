@@ -193,6 +193,20 @@ async def count_worker_tasks_since(
     return int(await session.scalar(query) or 0)
 
 
+async def awaiting_ci_count(session: AsyncSession) -> int:
+    query = (
+        select(func.count())
+        .select_from(WorkerTask)
+        .join(Run, Run.id == WorkerTask.run_id)
+        .where(
+            WorkerTask.state == TaskState.AWAITING_CI,
+            Run.state == RunState.RUNNING,
+            Run.dry_run.is_(False),
+        )
+    )
+    return int(await session.scalar(query) or 0)
+
+
 async def last_pushed_task(session: AsyncSession, issue_number: int) -> WorkerTask | None:
     query = (
         select(WorkerTask)

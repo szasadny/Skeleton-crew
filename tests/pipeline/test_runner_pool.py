@@ -5,9 +5,11 @@ from fake_runtime import argv_starts_with, ok
 from pipeline_helpers import Harness
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from skeleton_crew.domain.branch_policy import BRANCH_PREFIX
 from skeleton_crew.domain.errors import PolicyViolation
-from skeleton_crew.domain.runner_policy import PUBLIC_REPO_PROBLEM, RunnerStatus
+from skeleton_crew.domain.runner_policy import PUBLIC_REPO_PROBLEM, STANDBY_REASON, RunnerStatus
 from skeleton_crew.domain.settings import SelfHostedCi
+from skeleton_crew.domain.task_state import TaskState
 from skeleton_crew.pipeline.run_controller import RunController
 from skeleton_crew.pipeline.run_setup import preflight
 from skeleton_crew.pipeline.runner_pool import (
@@ -24,6 +26,7 @@ from skeleton_crew.runtime.containers import (
     ContainerStartError,
     ExecResult,
 )
+from skeleton_crew.store import runs_store
 
 NOT_BUSY = ExecResult(1, None, b"", b"", timed_out=False)
 
@@ -50,8 +53,26 @@ def clock() -> Clock:
     return Clock()
 
 
+async def wait_for_ci(harness: Harness, *, dry_run: bool = False) -> int:
+    async with harness.sessionmaker.begin() as session:
+        run = await runs_store.create_run(session, "manual", dry_run=dry_run)
+        task = await runs_store.add_worker_task(session, run.id, 1, "a")
+        await runs_store.update_worker_task(session, task.id, state=TaskState.AWAITING_CI)
+        return task.id
+
+
+async def set_state(harness: Harness, task_id: int, state: TaskState) -> None:
+    async with harness.sessionmaker.begin() as session:
+        await runs_store.update_worker_task(session, task_id, state=state)
+
+
 @pytest.fixture
-def pool(harness: Harness, clock: Clock) -> RunnerPool:
+async def waiting_task(harness: Harness) -> int:
+    return await wait_for_ci(harness)
+
+
+@pytest.fixture
+def pool(harness: Harness, clock: Clock, waiting_task: int) -> RunnerPool:
     return RunnerPool(harness.deps(), monotonic=clock)
 
 
@@ -138,6 +159,53 @@ async def test_running_runner_reports_idle_or_busy(harness: Harness, pool: Runne
     assert (await tick(harness, pool))["runner-1"] is RunnerStatus.IDLE
     assert (await tick(harness, pool))["runner-1"] is RunnerStatus.BUSY
     assert len(runner_starts(harness)) == 1
+
+
+async def test_no_task_waiting_for_ci_means_standby(
+    harness: Harness, pool: RunnerPool, waiting_task: int
+) -> None:
+    register(harness, "runner-1")
+    await set_state(harness, waiting_task, TaskState.REVIEWING)
+
+    states = await tick(harness, pool)
+
+    assert states == {"runner-1": RunnerStatus.STANDBY, "runner-2": RunnerStatus.NOT_REGISTERED}
+    assert pool.statuses()[0].reason == STANDBY_REASON
+    assert runner_starts(harness) == []
+
+
+async def test_runners_start_when_a_task_waits_and_go_when_it_stops(
+    harness: Harness, pool: RunnerPool, waiting_task: int
+) -> None:
+    register(harness, "runner-1")
+    await set_state(harness, waiting_task, TaskState.CODING)
+    await tick(harness, pool)
+    await set_state(harness, waiting_task, TaskState.AWAITING_CI)
+
+    assert (await tick(harness, pool))["runner-1"] is RunnerStatus.STARTING
+    assert harness.runtime.running
+
+    await set_state(harness, waiting_task, TaskState.REVIEWING)
+
+    assert (await tick(harness, pool))["runner-1"] is RunnerStatus.STANDBY
+    assert harness.runtime.running == {}
+
+
+async def test_dry_run_task_starts_no_runner(harness: Harness, clock: Clock) -> None:
+    register(harness, "runner-1")
+    await wait_for_ci(harness, dry_run=True)
+
+    await tick(harness, RunnerPool(harness.deps(), monotonic=clock))
+
+    assert runner_starts(harness) == []
+
+
+async def test_runner_gets_the_skeleton_branch_prefix(harness: Harness, pool: RunnerPool) -> None:
+    register(harness, "runner-1")
+
+    await tick(harness, pool)
+
+    assert runner_starts(harness)[0].env["SC_BRANCH_PREFIX"] == BRANCH_PREFIX
 
 
 def test_busy_check_matches_the_process_name_not_command_lines() -> None:
@@ -260,7 +328,9 @@ async def test_runners_above_the_count_are_removed(harness: Harness, pool: Runne
     assert [h.name for h in harness.runtime.running.values()] == ["skeleton-crew-runner-1"]
 
 
-async def test_kill_stops_runners_and_the_loop_keeps_them_down(harness: Harness) -> None:
+async def test_kill_stops_runners_and_the_loop_keeps_them_down(
+    harness: Harness, waiting_task: int
+) -> None:
     register(harness, "runner-1")
     pool = RunnerPool(harness.deps())
     controller = RunController(harness.deps(), pool)

@@ -4,6 +4,7 @@ from typing import Any
 from fastapi import APIRouter, Request
 from fastapi.responses import Response
 
+from skeleton_crew.domain.branch_policy import BRANCH_PREFIX
 from skeleton_crew.domain.settings import SelfHostedCi
 from skeleton_crew.web.forms import Kind, SettingsPage, number_specs
 from skeleton_crew.web.state import get_state
@@ -20,6 +21,7 @@ def _live(request: Request) -> Mapping[str, Any]:
         "repo_url": f"https://github.com/{state.config.repo}",
         "runners_dir": state.config.runners_dir,
         "runner_image": state.config.runner_image,
+        "branch_prefix": BRANCH_PREFIX,
     }
 
 

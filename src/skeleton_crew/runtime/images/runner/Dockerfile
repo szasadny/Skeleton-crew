@@ -7,7 +7,8 @@ ARG GH_SHA256=e3bafef96328d1a67de3a968bdfe1cc2ffd58cf6aba8b5e201356897ed06bb3d
 ARG DOCKER_GPG_FINGERPRINT=9DC858229FC7DD38854AE2D88D81803C0EBFCD88
 
 ENV DEBIAN_FRONTEND=noninteractive \
-    RUNNER_DIR=/home/runner/actions-runner
+    RUNNER_DIR=/home/runner/actions-runner \
+    ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/bin/job-started.sh
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
@@ -50,6 +51,6 @@ RUN install -d -o runner -g runner "${RUNNER_DIR}" \
     && "${RUNNER_DIR}/bin/installdependencies.sh" \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --chmod=0755 entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY --chmod=0755 entrypoint.sh job-started.sh /usr/local/bin/
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

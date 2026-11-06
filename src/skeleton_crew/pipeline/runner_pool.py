@@ -6,7 +6,10 @@ from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
+from skeleton_crew.domain.branch_policy import BRANCH_PREFIX
 from skeleton_crew.domain.runner_policy import (
+    PUBLIC_REPO_PROBLEM,
+    STANDBY_REASON,
     RunnerState,
     RunnerStatus,
     eligibility_problem,
@@ -26,7 +29,7 @@ from skeleton_crew.runtime.containers import (
     Mount,
 )
 from skeleton_crew.runtime.egress import apply_allowlist
-from skeleton_crew.store import settings_store
+from skeleton_crew.store import runs_store, settings_store
 
 RUNNER_ROLE = "runner"
 CONTAINER_PREFIX = "skeleton-crew-"
@@ -66,7 +69,11 @@ def registered_runners(deps: PipelineDeps, settings: AppSettings) -> list[str]:
 
 def runner_env(proxy_url: str, no_proxy: Sequence[str]) -> dict[str, str]:
     bypass = ",".join(dict.fromkeys([*LOCAL_HOSTS, *no_proxy]))
-    return proxy_env(proxy_url) | {"NO_PROXY": bypass, "no_proxy": bypass}
+    return proxy_env(proxy_url) | {
+        "NO_PROXY": bypass,
+        "no_proxy": bypass,
+        "SC_BRANCH_PREFIX": BRANCH_PREFIX,
+    }
 
 
 def runner_spec(deps: PipelineDeps, settings: AppSettings, runner: str) -> AgentContainerSpec:
@@ -108,6 +115,12 @@ async def runner_problems(deps: PipelineDeps, settings: AppSettings, gw: Gateway
     if not registered_runners(deps, settings):
         problems.append("self-hosted CI is on, but no runner is registered")
     return problems
+
+
+def _standby(runner: str, *, registered: bool) -> RunnerState:
+    if registered:
+        return RunnerState(runner, RunnerStatus.STANDBY, STANDBY_REASON)
+    return RunnerState(runner, RunnerStatus.NOT_REGISTERED)
 
 
 class RunnerPool:
@@ -155,26 +168,36 @@ class RunnerPool:
         async with self._lock:
             async with self._deps.sessionmaker() as session:
                 settings = await settings_store.load_settings(session)
+                demand = await runs_store.awaiting_ci_count(session)
             names = runner_names(settings.ci.runners)
             blocker = await self._blocker(settings)
             if blocker is not None:
-                await self._remove_all()
-                self._slots.clear()
                 shown = names if settings.ci.enabled else []
-                self._states = [RunnerState(n, RunnerStatus.OFFLINE, blocker) for n in shown]
-                return
-            await self._apply_allowlist(settings)
-            containers = {
-                info.handle.name: info
-                for info in await self._deps.runtime.list_labeled(ROLE_LABEL, RUNNER_ROLE)
-            }
-            wanted = {container_name(n) for n in names}
-            for name, info in containers.items():
-                if name not in wanted:
-                    await self._deps.runtime.remove(info.handle)
-            self._states = [
-                await self._reconcile(settings, n, containers.get(container_name(n))) for n in names
-            ]
+                await self._park([RunnerState(n, RunnerStatus.OFFLINE, blocker) for n in shown])
+            elif demand == 0:
+                registered = registered_runners(self._deps, settings)
+                await self._park([_standby(n, registered=n in registered) for n in names])
+            else:
+                await self._apply_allowlist(settings)
+                await self._run(settings, names)
+
+    async def _park(self, states: list[RunnerState]) -> None:
+        await self._remove_all()
+        self._slots.clear()
+        self._states = states
+
+    async def _run(self, settings: AppSettings, names: list[str]) -> None:
+        containers = {
+            info.handle.name: info
+            for info in await self._deps.runtime.list_labeled(ROLE_LABEL, RUNNER_ROLE)
+        }
+        wanted = {container_name(n) for n in names}
+        for name, info in containers.items():
+            if name not in wanted:
+                await self._deps.runtime.remove(info.handle)
+        self._states = [
+            await self._reconcile(settings, n, containers.get(container_name(n))) for n in names
+        ]
 
     async def _blocker(self, settings: AppSettings) -> str | None:
         if not settings.ci.enabled:
@@ -185,13 +208,11 @@ class RunnerPool:
         if self._eligibility is not None and now - self._eligibility[0] <= ELIGIBILITY_TTL_S:
             return self._eligibility[1]
         gw = self._deps.gateway_factory(settings, audit_sink(self._deps.sessionmaker, None))
-        try:
-            private = await gw.repo_is_private()
-        except Exception as exc:
-            self._eligibility = None
-            return f"cannot read the repository visibility: {type(exc).__name__}"
-        self._eligibility = (now, eligibility_problem(private=private))
-        return self._eligibility[1]
+        problem = await visibility_problem(gw)
+        # Only a definite answer is cached; a failed read is retried on the next tick.
+        definite = problem in (None, PUBLIC_REPO_PROBLEM)
+        self._eligibility = (now, problem) if definite else None
+        return problem
 
     async def _apply_allowlist(self, settings: AppSettings) -> None:
         domains = frozenset(settings.ci.egress_allowlist)
