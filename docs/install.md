@@ -99,6 +99,62 @@ The agent image ships [mise](https://mise.jdx.dev), so a repo can get the langua
 
 The setup command runs in the worker's container before its first session, and everything it leaves behind stays available to the worker. That includes containers on the container's own Docker, so it can start services the repo's tests need, e.g. `docker compose -f docker-compose.test.yml up -d --wait db`. Image pulls need `registry-1.docker.io`, `auth.docker.io` and `production.cloudfront.docker.com` in the allowlist (the default). Allowlist changes take effect at the start of the next run.
 
+## Self-hosted CI
+
+Optionally, Skeleton Crew runs the CI of its own pull requests on runners on this VM, so that CI costs no Actions minutes. Checks, logs and artifacts still land in GitHub. The option is off by default and only you turn it on, on the CI page.
+
+The runners belong to Skeleton Crew alone:
+
+- **Only while needed.** A runner container exists only while a task of a live run waits for CI (`awaiting_ci`); dry runs never start one. Outside that, GitHub shows the runners as offline. That is expected.
+- **Only Skeleton Crew's jobs.** Before every job, the runner checks the branch (`github.head_ref` for pull requests, otherwise the pushed branch). If the branch does not start with `skeleton/`, the job fails at once with: *Not a Skeleton Crew job: These self-hosted runners only run jobs that Skeleton Crew sent …*, and the fix below.
+- **Only private repositories.** A public repo would run jobs of fork PRs on this host. GitHub's "Require approval for all external contributors" setting would cover that, but checking it needs the App permission Administration: read, which the App deliberately does not have. Without that check, Skeleton Crew would have to trust the setting blindly.
+
+Each runner is a container with Sysbox and its own Docker, so jobs can use `docker`, `docker compose` and service containers, and two jobs that bind the same port do not collide. After every job the container is recreated from the image with the same registration. Runners never get the GitHub App key, a GitHub token or the host's Docker socket. Their traffic goes through their own egress proxy with its own allowlist.
+
+### Register the runners (once)
+
+1. In the target repo, open Settings → Actions → Runners → New self-hosted runner and copy the registration token. It is valid for one hour, and one token can register several runners.
+2. On the VM, do this for each runner `runner-1` … `runner-<n>` (`<n>` is the count on the CI page):
+
+   ```sh
+   sudo install -d -o 1000 -g 1000 /var/lib/skeleton-crew/runners/runner-1
+   sudo docker run --rm -v /var/lib/skeleton-crew/runners/runner-1:/runner-config \
+     skeleton-crew-runner:latest register \
+     --url https://github.com/<owner>/<repo> --token <token> \
+     --labels skeleton-crew --name skeleton-crew-runner-1
+   ```
+
+   This runs `config.sh --unattended --disableupdate` and writes `.runner`, `.credentials` and `.credentials_rsaparams` to that directory. Treat these files as a secret: they are the runner's identity. Use the same labels as on the CI page.
+3. On the CI page, enable **Run self-hosted runners**. The runners show `standby` until a task waits for CI.
+
+### Route Skeleton Crew's pull requests to them
+
+Skeleton Crew never edits workflows, so the target repo routes its own jobs. Send only Skeleton Crew's pull requests to these runners and everything else to GitHub:
+
+```yaml
+runs-on: ${{ startsWith(github.head_ref, 'skeleton/') && vars.CI_RUNNER || 'ubuntu-latest' }}
+```
+
+Set the repository variable `CI_RUNNER` to `skeleton-crew` (the label). `github.head_ref` is set only for pull requests, so pushes, manual runs and people's pull requests stay on GitHub. A job that is routed here anyway fails with the message above instead of running.
+
+Jobs wait in GitHub's queue until a runner is online, and GitHub fails a queued job after 24 hours. Skeleton Crew cannot fail such a job sooner, because no runner exists to pick it up. That can happen to a re-run of a skeleton PR's CI outside a run, or while the VM is off. Re-run it while Skeleton Crew waits for that CI, or let it expire.
+
+### The runner image and egress
+
+The image has git, curl, jq, gh, Python, build tools, Docker and passwordless sudo, but far less than GitHub's hosted images. Actions such as `setup-node` and `setup-uv` download their tools. Add the hosts a job needs to the runner allowlist on the CI page; denied hosts show in `sudo docker logs skeleton-crew-runner-proxy`.
+
+Containers a job starts get the HTTPS proxy too, but no HTTP proxy, so plain-HTTP downloads from the internet fail inside them. List the hosts they reach directly (e.g. docker compose service names) under **No proxy**.
+
+Prefer exact hosts over wildcards for storage domains (`*.r2.cloudflarestorage.com`, `*.blob.core.windows.net`): a wildcard lets a job send data to any bucket.
+
+### Maintenance
+
+- **Updates**: runners do not update themselves. GitHub stops sending jobs to a runner that is too old, so pull and rerun `sudo scripts/install.sh` regularly; the image pins the runner version.
+- **Expired registrations**: GitHub removes a runner that has not connected for 14 days. Since runners only connect during runs, this happens after 14 days without a live run that waits for CI. The CI page then shows the runner offline with "check its registration". Delete its directory and register it again.
+- **Kill switch and off**: both remove the runner containers within seconds, and no new ones start.
+- **Deregister**: remove the runner in Settings → Actions → Runners, then delete its directory under `/var/lib/skeleton-crew/runners/`. If a registration may have leaked, do this at once and register a new one.
+- **Sizing**: each runner is capped at the CI page's `cpus` and `memory_gb`, on top of the agent containers (see Sizing above).
+
 ## Labels
 
 How the `skeleton`, `skeleton refine` and `skeleton HITL` labels work: [labels.md](labels.md).

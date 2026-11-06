@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from skeleton_crew.core.config import BootstrapConfig
 from skeleton_crew.scheduler.scheduler import RunScheduler
-from skeleton_crew.web.ports import RunControl
+from skeleton_crew.web.ports import RunControl, RunnerControl
 from skeleton_crew.web.security import LoginThrottle
 
 
@@ -15,6 +15,7 @@ class WebState:
     sessionmaker: async_sessionmaker[AsyncSession]
     controller: RunControl
     scheduler: RunScheduler
+    runners: RunnerControl
     throttle: LoginThrottle
 
 

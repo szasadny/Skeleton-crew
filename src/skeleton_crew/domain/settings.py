@@ -39,6 +39,12 @@ _EFFORT_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 _OPTION_VALUE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$")
 _MAX_OPTIONS = 20
 _LOGIN_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(\[bot\])?$")
+_RUNNER_LABEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
+_MAX_RUNNER_LABELS = 10
+_NO_PROXY_RE = re.compile(r"^\.?[A-Za-z0-9:][A-Za-z0-9.:/_-]{0,252}$")
+_MAX_NO_PROXY = 50
+# Exact Actions storage hosts, so the runners get no wildcard into arbitrary Azure storage accounts.
+_ACTIONS_RESULTS_HOSTS = tuple(f"productionresultssa{n}.blob.core.windows.net" for n in range(20))
 
 
 class _Frozen(BaseModel):
@@ -166,15 +172,25 @@ class RepoPolicy(_Frozen):
         return value
 
 
+def _domains(value: tuple[str, ...]) -> tuple[str, ...]:
+    for domain in value:
+        if not _DOMAIN_RE.fullmatch(domain):
+            raise ValueError(f"invalid domain: {domain}")
+    return value
+
+
+_PACKAGE_HOSTS = (
+    "pypi.org",
+    "files.pythonhosted.org",
+    "registry.npmjs.org",
+    "registry-1.docker.io",
+    "auth.docker.io",
+    "production.cloudfront.docker.com",
+)
+
+
 class RuntimeLimits(_Frozen):
-    egress_allowlist: tuple[str, ...] = (
-        "pypi.org",
-        "files.pythonhosted.org",
-        "registry.npmjs.org",
-        "registry-1.docker.io",
-        "auth.docker.io",
-        "production.cloudfront.docker.com",
-    )
+    egress_allowlist: tuple[str, ...] = _PACKAGE_HOSTS
     cpus: float = Field(default=2.0, gt=0, le=64)
     memory_gb: float = Field(default=4.0, gt=0, le=256)
     pids: int = Field(default=2048, ge=128, le=65_536)
@@ -182,10 +198,55 @@ class RuntimeLimits(_Frozen):
     @field_validator("egress_allowlist")
     @classmethod
     def _valid_domains(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        for domain in value:
-            if not _DOMAIN_RE.fullmatch(domain):
-                raise ValueError(f"invalid domain: {domain}")
+        return _domains(value)
+
+
+class SelfHostedCi(_Frozen):
+    enabled: bool = False
+    runners: int = Field(default=2, ge=1, le=10)
+    labels: tuple[str, ...] = ("skeleton-crew",)
+    egress_allowlist: tuple[str, ...] = (
+        "github.com",
+        "api.github.com",
+        "codeload.github.com",
+        ".actions.githubusercontent.com",
+        "objects.githubusercontent.com",
+        "raw.githubusercontent.com",
+        "release-assets.githubusercontent.com",
+        "ghcr.io",
+        "pkg-containers.githubusercontent.com",
+        *_ACTIONS_RESULTS_HOSTS,
+        *_PACKAGE_HOSTS,
+    )
+    no_proxy: tuple[str, ...] = ()
+    cpus: float = Field(default=2.0, gt=0, le=64)
+    memory_gb: float = Field(default=4.0, gt=0, le=256)
+    pids: int = Field(default=4096, ge=128, le=65_536)
+
+    @field_validator("no_proxy")
+    @classmethod
+    def _valid_no_proxy(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if len(value) > _MAX_NO_PROXY:
+            raise ValueError(f"at most {_MAX_NO_PROXY} no-proxy hosts")
+        for host in value:
+            if not _NO_PROXY_RE.fullmatch(host):
+                raise ValueError(f"invalid no-proxy host: {host}")
         return value
+
+    @field_validator("labels")
+    @classmethod
+    def _valid_labels(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if not value or len(value) > _MAX_RUNNER_LABELS:
+            raise ValueError(f"give 1-{_MAX_RUNNER_LABELS} runner labels")
+        for runner_label in value:
+            if not _RUNNER_LABEL_RE.fullmatch(runner_label):
+                raise ValueError(f"invalid runner label: {runner_label}")
+        return value
+
+    @field_validator("egress_allowlist")
+    @classmethod
+    def _valid_domains(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return _domains(value)
 
 
 class AppSettings(_Frozen):
@@ -196,6 +257,7 @@ class AppSettings(_Frozen):
     labels: LabelNames = LabelNames()
     repo: RepoPolicy = RepoPolicy()
     runtime: RuntimeLimits = RuntimeLimits()
+    ci: SelfHostedCi = SelfHostedCi()
     dry_run: bool = True
     kill_switch: bool = False
 

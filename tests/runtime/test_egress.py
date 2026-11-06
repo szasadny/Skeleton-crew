@@ -133,7 +133,15 @@ def test_agent_image_pins_mise_by_version_and_checksum() -> None:
     assert "mise/releases/latest" not in dockerfile
 
 
-@pytest.mark.parametrize("script", ["agent/entrypoint.sh", "egress-proxy/entrypoint.sh"])
+@pytest.mark.parametrize(
+    "script",
+    [
+        "agent/entrypoint.sh",
+        "egress-proxy/entrypoint.sh",
+        "runner/entrypoint.sh",
+        "runner/job-started.sh",
+    ],
+)
 def test_entrypoints_are_valid_bash(script: str) -> None:
     bash = shutil.which("bash")
     if bash is None:

@@ -6,6 +6,7 @@ from pathlib import Path
 from skeleton_crew.runtime.containers import (
     AgentContainerSpec,
     ContainerHandle,
+    ContainerInfo,
     ExecResult,
     check_env,
     check_spec,
@@ -49,6 +50,8 @@ class FakeRuntime:
     removed: list[ContainerHandle] = field(default_factory=list)
     execs: list[ExecCall] = field(default_factory=list)
     running: dict[str, ContainerHandle] = field(default_factory=dict)
+    labels: dict[str, Mapping[str, str]] = field(default_factory=dict)
+    exited: set[str] = field(default_factory=set)
     _script: list[_Entry] = field(default_factory=list)
 
     def script(
@@ -61,6 +64,7 @@ class FakeRuntime:
         self.started.append(spec)
         handle = ContainerHandle(id=f"fake-{len(self.started)}", name=spec.name)
         self.running[handle.id] = handle
+        self.labels[handle.id] = dict(spec.labels)
         return handle
 
     async def exec(
@@ -100,6 +104,22 @@ class FakeRuntime:
         for handle in handles:
             await self.remove(handle)
         return len(handles)
+
+    async def list_labeled(self, label: str, value: str) -> list[ContainerInfo]:
+        return [
+            ContainerInfo(handle, handle.id not in self.exited)
+            for handle in self.running.values()
+            if self.labels.get(handle.id, {}).get(label) == value
+        ]
+
+    async def remove_labeled(self, label: str, value: str) -> int:
+        infos = await self.list_labeled(label, value)
+        for info in infos:
+            await self.remove(info.handle)
+        return len(infos)
+
+    def exit(self, handle: ContainerHandle) -> None:
+        self.exited.add(handle.id)
 
     async def health(self, *, image: str, network: str, proxy_container: str) -> list[str]:
         return list(self.health_problems)

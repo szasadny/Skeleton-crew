@@ -11,8 +11,8 @@ from starlette.middleware.sessions import SessionMiddleware
 from skeleton_crew.core.config import BootstrapConfig
 from skeleton_crew.scheduler.scheduler import RunScheduler
 from skeleton_crew.store.settings_store import load_settings
-from skeleton_crew.web.ports import RunControl
-from skeleton_crew.web.routes import agents, audit, auth, dashboard, limits, repo, rules, runs
+from skeleton_crew.web.ports import RunControl, RunnerControl
+from skeleton_crew.web.routes import agents, audit, auth, ci, dashboard, limits, repo, rules, runs
 from skeleton_crew.web.routes import schedule as schedule_page
 from skeleton_crew.web.security import (
     LOGIN_PATH,
@@ -25,7 +25,7 @@ from skeleton_crew.web.security import (
 from skeleton_crew.web.state import WebState, get_state
 
 _STATIC_DIR = Path(__file__).parent / "static"
-_ROUTERS = (auth, dashboard, schedule_page, limits, agents, repo, rules, runs, audit)
+_ROUTERS = (auth, dashboard, schedule_page, limits, agents, repo, ci, rules, runs, audit)
 
 
 async def _guard(request: Request) -> None:
@@ -44,6 +44,7 @@ def create_app(
     sessionmaker: async_sessionmaker[AsyncSession],
     controller: RunControl,
     scheduler: RunScheduler,
+    runners: RunnerControl,
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -62,7 +63,7 @@ def create_app(
         redoc_url=None,
         openapi_url=None,
     )
-    app.state.web = WebState(config, sessionmaker, controller, scheduler, LoginThrottle())
+    app.state.web = WebState(config, sessionmaker, controller, scheduler, runners, LoginThrottle())
     app.add_exception_handler(LoginRequired, _login_required)
     for module in _ROUTERS:
         app.include_router(module.router)

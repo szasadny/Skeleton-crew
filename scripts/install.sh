@@ -103,10 +103,13 @@ prepare_data_dir() {
 	data_dir="$(env_value SC_DATA_DIR)"
 	data_dir="${data_dir:-/var/lib/skeleton-crew}"
 	install -d -m 0750 -o "$APP_UID" -g "$APP_UID" "$data_dir" "$data_dir/tasks"
-	install -d -m 0755 -o "$APP_UID" -g "$APP_UID" "$data_dir/egress"
-	if [[ ! -f $data_dir/egress/allowlist.txt ]]; then
-		install -m 0644 -o "$APP_UID" -g "$APP_UID" /dev/null "$data_dir/egress/allowlist.txt"
-	fi
+	install -d -m 0750 -o "$APP_UID" -g "$APP_UID" "$data_dir/runners"
+	for egress in egress runner-egress; do
+		install -d -m 0755 -o "$APP_UID" -g "$APP_UID" "$data_dir/$egress"
+		if [[ ! -f $data_dir/$egress/allowlist.txt ]]; then
+			install -m 0644 -o "$APP_UID" -g "$APP_UID" /dev/null "$data_dir/$egress/allowlist.txt"
+		fi
+	done
 }
 
 is_configured() {

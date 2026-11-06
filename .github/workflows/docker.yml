@@ -57,6 +57,7 @@ jobs:
           sudo apt-get install -y fuse3 jq "$deb"
           docker info --format '{{json .Runtimes}}' | grep -q '"sysbox-runc"'
       - run: docker build -t skeleton-crew-agent:latest src/skeleton_crew/runtime/images/agent
+      - run: docker build -t skeleton-crew-runner:latest src/skeleton_crew/runtime/images/runner
       - run: uv run --no-sync pytest -m docker -q
 
   record:

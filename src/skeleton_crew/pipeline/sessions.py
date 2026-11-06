@@ -22,6 +22,7 @@ AGENT_USER = "agent"
 WORKSPACE = "/workspace"
 INBOX = "/skeleton-in"
 RULES_FILE = "rules.md"
+PROMPT_FILE = "prompt.md"
 TASK_LABEL = "skeleton-crew.task"
 ROLE_LABEL = "skeleton-crew.role"
 _STDERR_TAIL_CHARS = 4000
@@ -32,6 +33,7 @@ log = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class Sandbox:
     handle: ContainerHandle
+    inbox: Path
     transcripts: Path
 
 
@@ -106,7 +108,7 @@ async def start_sandbox(
     spec = container_spec(
         ctx, task_key=task_key, role=role, workspace=workspace, writable=writable, inbox=inbox
     )
-    return Sandbox(await ctx.deps.runtime.start(spec), transcripts)
+    return Sandbox(await ctx.deps.runtime.start(spec), inbox, transcripts)
 
 
 def container_executor(ctx: RunContext, handle: ContainerHandle) -> Executor:
@@ -165,6 +167,7 @@ async def run_agent[T: BaseModel](
         timeout_s=limits.session_timeout_minutes * 60.0,
         json_schema=schema,
         rules_path_in_container=f"{INBOX}/{RULES_FILE}",
+        prompt_path_in_container=f"{INBOX}/{PROMPT_FILE}",
         cwd=WORKSPACE,
         resume_session_id=resume_session_id,
         max_budget_usd=limits.max_budget_usd_per_session,
@@ -182,6 +185,9 @@ async def run_agent[T: BaseModel](
 
 
 async def _session(ctx: RunContext, sandbox: Sandbox, request: SessionRequest) -> SessionOutcome:
+    await asyncio.to_thread(
+        update_inbox, sandbox.inbox, {PROMPT_FILE: request.prompt.encode("utf-8")}
+    )
     return await run_session(
         ctx.backends[request.agent.backend],
         container_executor(ctx, sandbox.handle),

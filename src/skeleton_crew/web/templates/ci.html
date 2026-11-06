@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}CI{% endblock %}
+{% block content %}
+<h1>Self-hosted CI</h1>
+<p>Runs the CI of Skeleton Crew's own pull requests on runners on this host, only while a task of a live run waits for CI. Jobs for any branch not starting with <code>{{ branch_prefix }}</code> fail with an explanation. Private repositories only. Skeleton Crew never changes workflows; route its pull requests here with:</p>
+<pre class="block">runs-on: ${{ '{{' }} startsWith(github.head_ref, '{{ branch_prefix }}') &amp;&amp; vars.CI_RUNNER || 'ubuntu-latest' {{ '}}' }}</pre>
+<p>with the repository variable <code>CI_RUNNER</code> set to one of the labels below. See docs/install.md.</p>
+
+<h2>Runners</h2>
+{% if runners %}
+<table>
+  <thead><tr><th>Runner</th><th>Status</th><th>Detail</th></tr></thead>
+  <tbody>
+  {% for runner in runners %}
+  <tr><td>{{ runner.name }}</td><td>{{ runner.status.value }}</td><td>{{ runner.reason }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>Self-hosted CI is off.</p>
+{% endif %}
+
+<h2>Register a runner</h2>
+<p>Once per runner, with a registration token from the repository's Settings → Actions → Runners → New self-hosted runner. See docs/install.md.</p>
+<pre class="block">sudo install -d -o 1000 -g 1000 {{ runners_dir }}/runner-1
+sudo docker run --rm -v {{ runners_dir }}/runner-1:/runner-config {{ runner_image }} \
+  register --url {{ repo_url }} --token &lt;token&gt; \
+  --labels {{ (values.get("ci.labels") or []) | join(",") }} --name skeleton-crew-runner-1</pre>
+
+{{ m.general_errors(errors) }}
+<form method="post" action="/ci">
+  {{ m.csrf() }}
+  <fieldset>
+    <legend>Settings</legend>
+    {{ m.checkbox("ci.enabled", "Run self-hosted runners", values, errors) }}
+    {{ m.lines("ci.labels", "Labels", values, errors, "The labels the runners were registered with, one per line.") }}
+    {{ m.lines("ci.egress_allowlist", "Runner egress allowlist", values, errors, "One domain per line. A leading dot allows subdomains. Separate from the agent allowlist.") }}
+    {{ m.lines("ci.no_proxy", "No proxy", values, errors, "Hosts jobs and their containers reach directly, one per line, e.g. docker compose service names. localhost is always included.") }}
+    <div class="grid">
+      {% for spec in numbers %}{{ m.number(spec, values, errors) }}{% endfor %}
+    </div>
+  </fieldset>
+  <button type="submit">Save</button>
+</form>
+{% endblock %}

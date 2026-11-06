@@ -24,6 +24,7 @@ NAV = (
     ("/limits", "Limits", "/limits"),
     ("/agents", "Agents", "/agents"),
     ("/repo", "Repo", "/repo"),
+    ("/ci", "CI", "/ci"),
     ("/rules/common", "Rules", "/rules"),
     ("/runs", "Runs", "/runs"),
     ("/audit", "Audit", "/audit"),

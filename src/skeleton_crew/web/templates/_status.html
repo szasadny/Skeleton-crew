@@ -3,6 +3,7 @@
   <dt>State</dt><dd>{{ "Running" if running else "Idle" }}</dd>
   <dt>Next scheduled run</dt><dd>{{ next_run | dt if next_run else "Not scheduled" }}</dd>
   <dt>Dry run</dt><dd>{{ "On" if settings.dry_run else "Off" }}</dd>
+  {% if settings.ci.enabled %}<dt>CI runners</dt><dd><a href="/ci">{% for status, count in runners %}{{ count }} {{ status }}{% if not loop.last %}, {% endif %}{% else %}none{% endfor %}</a></dd>{% endif %}
   <dt>Kill switch</dt><dd{% if settings.kill_switch %} class="danger"{% endif %}>{{ "Engaged" if settings.kill_switch else "Off" }}</dd>
 </dl>
 <div class="actions">

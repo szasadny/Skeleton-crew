@@ -25,7 +25,7 @@ async def test_successful_session_returns_structured_output(tmp_path: Path) -> N
     assert outcome.ok
     assert outcome.structured_output == '{"status": "done"}'
     [call] = executor.calls
-    assert call.argv[:2] == ["claude", "-p"]
+    assert call.argv[5] == "-p"
     assert call.env["CLAUDE_CODE_OAUTH_TOKEN"] == _TOKEN
     assert call.cwd == "/workspace"
     assert call.timeout_s == make_request().timeout_s

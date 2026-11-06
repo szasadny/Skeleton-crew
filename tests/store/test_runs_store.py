@@ -150,6 +150,20 @@ async def test_last_pushed_task_ignores_dry_runs_and_unpushed_tasks(session: Asy
     assert await runs_store.last_pushed_task(session, 6) is None
 
 
+async def test_awaiting_ci_count_only_counts_live_running_runs(session: AsyncSession) -> None:
+    live = await runs_store.create_run(session, "manual", dry_run=False)
+    dry = await runs_store.create_run(session, "manual", dry_run=True)
+    finished = await runs_store.create_run(session, "manual", dry_run=False)
+    for run_id in (live.id, live.id, dry.id, finished.id):
+        task = await runs_store.add_worker_task(session, run_id, 1, "a")
+        await runs_store.update_worker_task(session, task.id, state=TaskState.AWAITING_CI)
+    coding = await runs_store.add_worker_task(session, live.id, 2, "b")
+    await runs_store.update_worker_task(session, coding.id, state=TaskState.CODING)
+    await runs_store.finish_run(session, finished.id, RunState.FAILED)
+
+    assert await runs_store.awaiting_ci_count(session) == 2
+
+
 async def test_expired_ids_only_cover_listed_old_terminal_rows(session: AsyncSession) -> None:
     run = await runs_store.create_run(session, "manual", dry_run=False)
     live = await runs_store.create_run(session, "manual", dry_run=False)

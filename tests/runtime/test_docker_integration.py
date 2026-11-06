@@ -6,12 +6,15 @@ from pathlib import Path
 import docker.errors
 import pytest
 from docker.client import DockerClient, from_env
+from docker.models.images import Image
 
+from skeleton_crew.domain.branch_policy import BRANCH_PREFIX
 from skeleton_crew.runtime.containers import (
     READY_FILE,
     SANDBOX_RUNTIME,
     AgentContainerSpec,
     ContainerHandle,
+    ContainerStartError,
     DockerRuntime,
     Mount,
 )
@@ -19,6 +22,8 @@ from skeleton_crew.runtime.containers import (
 pytestmark = pytest.mark.docker
 
 IMAGE = "skeleton-crew-agent:latest"
+RUNNER_IMAGE = "skeleton-crew-runner:latest"
+HOOK = "/usr/local/bin/job-started.sh"
 
 
 @pytest.fixture
@@ -117,3 +122,48 @@ async def test_remove_all_managed_cleans_up(started: tuple[DockerRuntime, Contai
     runtime, _ = started
     assert await runtime.remove_all_managed() >= 1
     await asyncio.sleep(0)
+
+
+@pytest.fixture
+def runner_image(client: DockerClient) -> Image:
+    try:
+        return client.images.get(RUNNER_IMAGE)
+    except docker.errors.ImageNotFound:
+        pytest.fail(f"build {RUNNER_IMAGE} before running the docker tests")
+
+
+async def test_unregistered_runner_never_becomes_ready(
+    client: DockerClient, network: str, tmp_path: Path, runner_image: Image
+) -> None:
+    config = tmp_path / "runner-1"
+    config.mkdir()
+    label = f"sc-test-{uuid.uuid4().hex[:8]}"
+    runtime = DockerRuntime(client)
+    spec = AgentContainerSpec(
+        name=label,
+        image=RUNNER_IMAGE,
+        network=network,
+        mounts=[Mount(config, "/runner-config", read_only=True)],
+        env={},
+        cpus=1,
+        memory_gb=1,
+        pids=256,
+        labels={"skeleton-crew.test": label},
+    )
+
+    with pytest.raises(ContainerStartError, match="stopped during startup"):
+        await runtime.start(spec)
+
+    assert await runtime.list_labeled("skeleton-crew.test", label) == []
+
+
+def test_runner_image_refuses_non_skeleton_jobs(client: DockerClient, runner_image: Image) -> None:
+    assert f"ACTIONS_RUNNER_HOOK_JOB_STARTED={HOOK}" in runner_image.attrs["Config"]["Env"]
+
+    def hook(branch: str) -> None:
+        env = {"SC_BRANCH_PREFIX": BRANCH_PREFIX, "GITHUB_REF_NAME": branch}
+        client.containers.run(RUNNER_IMAGE, entrypoint=HOOK, environment=env, remove=True)
+
+    hook("skeleton/1-x")
+    with pytest.raises(docker.errors.ContainerError):
+        hook("main")

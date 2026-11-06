@@ -133,6 +133,7 @@ class SettingsPage:
     context: Mapping[str, Any] = field(default_factory=dict)
     on_saved: Callable[[Request, AppSettings], None] | None = None
     check: Callable[[AppSettings], dict[str, list[str]]] | None = None
+    live_context: Callable[[Request], Mapping[str, Any]] | None = None
 
     def _render(
         self,
@@ -141,7 +142,8 @@ class SettingsPage:
         errors: Mapping[str, list[str]],
         status_code: int = 200,
     ) -> Response:
-        context = {**self.context, "values": values, "errors": errors}
+        live = self.live_context(request) if self.live_context is not None else {}
+        context = {**self.context, **live, "values": values, "errors": errors}
         return render(request, self.template, context, status_code)
 
     async def show(self, request: Request) -> Response:

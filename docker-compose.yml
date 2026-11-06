@@ -23,6 +23,7 @@ services:
           create_host_path: false
     depends_on:
       - egress-proxy
+      - runner-proxy
     restart: unless-stopped
 
   egress-proxy:
@@ -34,6 +35,20 @@ services:
     networks:
       - agents
       - egress
+    restart: unless-stopped
+
+  runner-proxy:
+    # Same image as egress-proxy, with the runners' own allowlist.
+    image: skeleton-crew-egress-proxy:latest
+    pull_policy: never
+    container_name: skeleton-crew-runner-proxy
+    volumes:
+      - ${SC_DATA_DIR:-/var/lib/skeleton-crew}/runner-egress:/etc/squid/allowlist:ro
+    networks:
+      - runners
+      - egress
+    depends_on:
+      - egress-proxy
     restart: unless-stopped
 
   caddy:
@@ -57,9 +72,18 @@ services:
     build: src/skeleton_crew/runtime/images/agent
     image: skeleton-crew-agent:latest
 
+  runner-image:
+    profiles:
+      - build
+    build: src/skeleton_crew/runtime/images/runner
+    image: skeleton-crew-runner:latest
+
 networks:
   agents:
     name: skeleton-crew-agents
+    internal: true
+  runners:
+    name: skeleton-crew-runners
     internal: true
   egress: {}
 
