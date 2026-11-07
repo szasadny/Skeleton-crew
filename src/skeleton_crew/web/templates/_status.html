@@ -31,13 +31,16 @@
     <input type="hidden" name="enabled" value="{{ 'off' if settings.dry_run else 'on' }}">
     <button type="submit" class="secondary big">{{ "Disable dry run" if settings.dry_run else "Enable dry run" }}</button>
   </form>
+  {% if settings.kill_switch %}
   <div class="hazard">
-    {% if settings.kill_switch %}
     <form method="post" action="/actions/release">{{ m.csrf() }}<button type="submit" class="secondary big">Release kill switch</button></form>
-    {% else %}
-    <form method="post" action="/actions/kill">{{ m.csrf() }}<button type="submit" class="danger big">Kill switch</button></form>
-    {% endif %}
   </div>
+  {% else %}
+  {# hx-preserve keeps broken glass across status polls. #}
+  <div class="hazard" id="kill-switch" hx-preserve data-break-glass>
+    <form method="post" action="/actions/kill">{{ m.csrf() }}<button type="submit" class="danger big">Kill switch</button></form>
+  </div>
+  {% endif %}
 </section>
 
 <div class="split">

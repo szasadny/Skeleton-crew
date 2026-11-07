@@ -50,7 +50,7 @@ Click **Run now**. Expected:
 
 ## 4. Kill switch
 
-Start a run with two workers, click **Kill switch** while they work.
+Start a run with two workers, break the glass and click **Kill switch** while they work.
 
 Expected: `docker ps` shows no `skeleton-crew.managed` containers within ~10 s. Tasks show `aborted`.
 

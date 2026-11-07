@@ -23,7 +23,8 @@
   --ui: "Chakra Petch", system-ui, sans-serif;
   --mono: "JetBrains Mono", ui-monospace, monospace;
   --cut: 14px;
-  --plate: polygon(0 0, calc(100% - var(--cut)) 0, 100% var(--cut), 100% 100%, var(--cut) 100%, 0 calc(100% - var(--cut)));
+  /* Straight edges overshoot 1px: borders are pixel-snapped but clip-paths are not. */
+  --plate: polygon(-1px -1px, calc(100% - var(--cut) - 1px) -1px, calc(100% + 1px) calc(var(--cut) + 1px), calc(100% + 1px) calc(100% + 1px), calc(var(--cut) + 1px) calc(100% + 1px), -1px calc(100% - var(--cut) - 1px));
   accent-color: var(--optic);
 }
 
@@ -360,10 +361,10 @@ a.vital:hover { text-decoration: none; text-shadow: none; color: var(--bone); bo
 .controls form { margin: 0; }
 
 .hazard {
+  position: relative;
   margin-left: auto;
   padding: 7px;
   background: repeating-linear-gradient(-45deg, var(--amber) 0 10px, #111 10px 20px);
-  clip-path: polygon(0 0, calc(100% - 16px) 0, 100% 16px, 100% 100%, 16px 100%, 0 calc(100% - 16px));
 }
 .hazard button { display: block; }
 
@@ -529,6 +530,42 @@ button:disabled, button:disabled:hover { opacity: 0.35; cursor: not-allowed; fil
 
 form > button[type="submit"] { margin-top: 0.25rem; }
 .spaced { margin-top: 0.75rem; }
+
+button.glass, .shards { position: absolute; top: 3px; left: 3px; z-index: 1; }
+button.glass {
+  right: 3px;
+  bottom: 3px;
+  padding: 0;
+  clip-path: none;
+  background:
+    radial-gradient(circle at 6px 6px, var(--chrome) 0 1px, var(--steel-hi) 1.6px 2.2px, transparent 2.7px),
+    radial-gradient(circle at calc(100% - 6px) 6px, var(--chrome) 0 1px, var(--steel-hi) 1.6px 2.2px, transparent 2.7px),
+    radial-gradient(circle at 6px calc(100% - 6px), var(--chrome) 0 1px, var(--steel-hi) 1.6px 2.2px, transparent 2.7px),
+    radial-gradient(circle at calc(100% - 6px) calc(100% - 6px), var(--chrome) 0 1px, var(--steel-hi) 1.6px 2.2px, transparent 2.7px),
+    linear-gradient(112deg, transparent 16%, rgba(255, 255, 255, 0.22) 17%, rgba(255, 255, 255, 0.05) 29%, transparent 30% 36%, rgba(255, 255, 255, 0.12) 37%, transparent 43%),
+    linear-gradient(180deg, rgba(214, 234, 246, 0.17), rgba(214, 234, 246, 0.05) 55%, rgba(214, 234, 246, 0.11));
+  border: 1px solid rgba(225, 240, 250, 0.42);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.4), inset 0 0 14px rgba(190, 220, 240, 0.14), 0 3px 10px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(0.8px) brightness(0.8) saturate(0.7);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+button.glass:hover {
+  border-color: rgba(240, 248, 255, 0.7);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55), inset 0 0 18px rgba(190, 220, 240, 0.24), 0 3px 10px rgba(0, 0, 0, 0.55);
+}
+button.glass:focus-visible { outline-offset: 2px; }
+
+.shards { overflow: visible; pointer-events: none; }
+.shards polygon {
+  fill: rgb(214, 234, 246);
+  stroke: rgba(255, 255, 255, 0.7);
+  stroke-width: 0.7;
+  stroke-linejoin: round;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.shards .dust { fill-opacity: 0.6; stroke: none; }
+.shards .impact { fill: #fff; filter: blur(3px); transform-box: fill-box; transform-origin: center; }
 
 
 table {

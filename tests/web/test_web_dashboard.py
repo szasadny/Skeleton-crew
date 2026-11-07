@@ -93,6 +93,16 @@ async def test_kill_switch_persists_kills_and_audits(web: Web) -> None:
     assert "Release kill switch" in (await web.client.get("/")).text
 
 
+async def test_kill_switch_sits_behind_glass_only_while_armed(web: Web) -> None:
+    armed = (await web.client.get("/")).text
+    assert 'id="kill-switch" hx-preserve data-break-glass' in armed
+    assert 'src="/static/break-glass.js"' in armed
+    await web.post("/actions/kill")
+    engaged = (await web.client.get("/partials/status")).text
+    assert "data-break-glass" not in engaged
+    assert "hx-preserve" not in engaged
+
+
 async def test_release_kill_switch(web: Web) -> None:
     await web.post("/actions/kill")
     response = await web.post("/actions/release")
