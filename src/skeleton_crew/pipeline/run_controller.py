@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import suppress
 from datetime import timedelta
 from functools import partial
@@ -17,6 +17,7 @@ from skeleton_crew.domain.task_state import (
 )
 from skeleton_crew.github.gateway import IssueRef
 from skeleton_crew.github.write_guard import AuditSink
+from skeleton_crew.pipeline.classify import screen_candidates
 from skeleton_crew.pipeline.deps import PipelineDeps, RunContext, audit_sink
 from skeleton_crew.pipeline.escalation import escalate_issue
 from skeleton_crew.pipeline.pr_maintenance import choose_pr_updates, has_conflicts, run_pr_fix
@@ -194,11 +195,15 @@ class RunController:
             deadline=started + timedelta(hours=settings.schedule.window_hours),
             audit=sink,
             required_checks=required,
+            classifier=checked.classifier,
         )
-        candidates = await find_candidates(deps, settings, gw, sink)
+        screened = await screen_candidates(ctx, await find_candidates(deps, settings, gw, sink))
+        for number, reason in screened.escalations.items():
+            await self._escalate(ctx, number, reason)
+        candidates = screened.candidates
         async with asyncio.TaskGroup() as group:
             group.create_task(self._refines(ctx, candidates.refine, quotas.refines))
-            workers = group.create_task(self._workers(ctx, candidates, quotas))
+            workers = group.create_task(self._workers(ctx, candidates, quotas, screened.efforts))
         note = workers.result()
         return (RunState.COMPLETED if note is None else RunState.FAILED), note
 
@@ -215,12 +220,18 @@ class RunController:
                 await session.commit()
             await run_refine(ctx, task.id, candidate.issue, candidate.comments)
 
-    async def _workers(self, ctx: RunContext, candidates: Candidates, quotas: Quotas) -> str | None:
+    async def _workers(
+        self,
+        ctx: RunContext,
+        candidates: Candidates,
+        quotas: Quotas,
+        efforts: Mapping[int, str],
+    ) -> str | None:
         picks, note = await self._select(ctx, candidates.ready, quotas.issues)
         slots = asyncio.Semaphore(ctx.settings.limits.max_parallel_workers)
         async with asyncio.TaskGroup() as group:
             await self._start_pr_fixes(ctx, group, slots, candidates.open_prs, quotas.fixes)
-            await self._start_issues(ctx, group, slots, picks)
+            await self._start_issues(ctx, group, slots, picks, efforts)
         return note
 
     async def _select(
@@ -276,6 +287,7 @@ class RunController:
         group: asyncio.TaskGroup,
         slots: asyncio.Semaphore,
         picks: Sequence[Candidate],
+        efforts: Mapping[int, str],
     ) -> None:
         for pick in picks:
             await slots.acquire()
@@ -283,9 +295,9 @@ class RunController:
                 slots.release()
                 return
             task_id = await self._add_task(ctx, pick.issue, TaskKind.ISSUE)
-            group.create_task(
-                self._in_slot(slots, partial(run_worker, ctx, task_id, pick.issue, pick.comments))
-            )
+            effort = efforts.get(pick.issue.number)
+            work = partial(run_worker, ctx, task_id, pick.issue, pick.comments, effort=effort)
+            group.create_task(self._in_slot(slots, work))
 
     async def _add_task(self, ctx: RunContext, issue: IssueRef, kind: TaskKind) -> int:
         async with self._deps.sessionmaker() as session:

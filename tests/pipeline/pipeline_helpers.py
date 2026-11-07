@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from fake_agent import ok_outcome
+from fake_classifier import FakeClassifier
 from fake_gateway import FakeGitHubGateway, FakePull, WriteRecord
 from fake_runtime import ExecCall, FakeRuntime, argv_starts_with, ok
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -17,7 +18,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from skeleton_crew.agents.base import AgentBackend, SessionOutcome, SessionRequest, failed_outcome
 from skeleton_crew.core.audit import AuditKind, AuditOutcome
 from skeleton_crew.core.config import BootstrapConfig
-from skeleton_crew.domain.settings import AppSettings, Limits, RepoPolicy, Role
+from skeleton_crew.domain.settings import (
+    AppSettings,
+    ClassifierSettings,
+    Limits,
+    RepoPolicy,
+    Role,
+)
 from skeleton_crew.domain.task_state import RunState, TaskState
 from skeleton_crew.github.gateway import CiState, CiStatus, Gateway
 from skeleton_crew.github.write_guard import AuditSink
@@ -32,6 +39,7 @@ from skeleton_crew.runtime.workspace import AGENT_PATCH_ARGV
 from skeleton_crew.store import audit_store, runs_store, settings_store
 
 MODEL_TOKEN = "model-token-for-tests"  # noqa: S105
+CLASSIFIER_KEY = "classifier-key-for-tests"
 START = datetime(2026, 10, 29, 9, 0, tzinfo=UTC)
 GIT_ENV = {
     "GIT_CONFIG_GLOBAL": os.devnull,
@@ -165,6 +173,7 @@ def make_config(data_dir: Path) -> BootstrapConfig:
             "ui_password_hash": "$argon2id$v=19$m=65536,t=3,p=4$fake",
             "session_secret": "s" * 32,
             "data_dir": data_dir,
+            "agent_credentials": {"typesafe_api_key": CLASSIFIER_KEY},
         }
     )
 
@@ -262,6 +271,7 @@ class Harness:
         self.runtime = FakeRuntime()
         self.backend = ScriptedBackend()
         self.backend_builds: list[str] = []
+        self.classifier = FakeClassifier()
         self.clock = FakeClock()
         self.secret_findings: list[str] = []
         self.patches: list[bytes] = []
@@ -310,6 +320,7 @@ class Harness:
             gateway_factory=self.gateway.bind,
             runtime=self.runtime,
             backend_factory=self._backend,
+            classifier_factory=lambda settings: self.classifier,
             secret_scanner=self._scan,
             clock=self.clock,
             sleep=self._sleep,
@@ -319,6 +330,15 @@ class Harness:
         self.settings = self.settings.model_copy(
             update={
                 "limits": Limits.model_validate({**self.settings.limits.model_dump(), **values})
+            }
+        )
+
+    def classify(self, **values: Any) -> None:
+        self.settings = self.settings.model_copy(
+            update={
+                "classifier": ClassifierSettings.model_validate(
+                    {**self.settings.classifier.model_dump(), **values}
+                )
             }
         )
 
@@ -393,7 +413,10 @@ def assert_no_forbidden_writes(harness: Harness) -> None:
     }
     for spec in harness.runtime.started:
         assert MODEL_TOKEN not in spec.env.values()
+        assert CLASSIFIER_KEY not in spec.env.values()
     for call in harness.runtime.execs:
+        assert CLASSIFIER_KEY not in call.env.values()
+        assert CLASSIFIER_KEY not in " ".join(call.argv)
         if call.argv[0] != "fake-agent":
             assert MODEL_TOKEN not in call.env.values()
 

@@ -21,7 +21,12 @@ from skeleton_crew.store import runs_store
 
 
 async def run_worker(
-    ctx: RunContext, task_id: int, issue: IssueRef, comments: Sequence[IssueComment]
+    ctx: RunContext,
+    task_id: int,
+    issue: IssueRef,
+    comments: Sequence[IssueComment],
+    *,
+    effort: str | None = None,
 ) -> None:
     key = worker_key(task_id)
     job = WorkerJob(
@@ -32,6 +37,7 @@ async def run_worker(
         key=key,
         paths=task_paths(ctx.deps.config.tasks_dir, key),
         branch=branch_name(issue.number, issue.title),
+        effort=effort,
     )
     await run_job(job, _work)
 

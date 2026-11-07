@@ -11,6 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from skeleton_crew.agents.base import AgentBackend
 from skeleton_crew.agents.registry import settings_problems
 from skeleton_crew.agents.rules import compose_rules, default_rules
+from skeleton_crew.classifiers import registry as classifiers
+from skeleton_crew.classifiers.base import Classifier
 from skeleton_crew.core.audit import AuditKind, AuditOutcome
 from skeleton_crew.domain.repo_docs import render_repo_docs, select_docs
 from skeleton_crew.domain.settings import AppSettings, Role
@@ -69,6 +71,7 @@ class Quotas:
 class Preflight:
     problems: list[str]
     backends: dict[str, AgentBackend]
+    classifier: Classifier | None
 
 
 def make_backends(deps: PipelineDeps, settings: AppSettings) -> dict[str, AgentBackend]:
@@ -77,13 +80,19 @@ def make_backends(deps: PipelineDeps, settings: AppSettings) -> dict[str, AgentB
 
 
 async def preflight(deps: PipelineDeps, settings: AppSettings, gw: Gateway) -> Preflight:
-    problems = settings_problems(settings)
+    problems = settings_problems(settings) + classifiers.settings_problems(settings)
     # Backends are built only from settings the registry accepts.
     backends = {} if problems else make_backends(deps, settings)
+    classifier = None
+    if not problems and settings.classifier.enabled:
+        classifier = deps.classifier_factory(settings)
+        problems += classifiers.credential_problems(
+            settings.classifier, deps.config.agent_credentials
+        )
     problems += await _environment_problems(deps, settings, gw)
     for backend in backends.values():
         problems += backend.credential_problems()
-    return Preflight(problems, backends)
+    return Preflight(problems, backends, classifier)
 
 
 async def _environment_problems(

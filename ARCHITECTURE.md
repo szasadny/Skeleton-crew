@@ -10,7 +10,7 @@ The authoritative reference for where things live and which rules hold. Behaviou
 | 3 | Packages and import rules |
 | 4 | Run flow, task lifecycle, code path from agent to PR |
 | 5 | Data model |
-| 6 | Cross-cutting: config, agent backends, work rules, audit |
+| 6 | Cross-cutting: config, agent backends, work rules, audit, classifiers |
 | 7 | Modularity contract |
 | 8 | When to update this document |
 
@@ -53,7 +53,12 @@ Each row has exactly one correct place. Putting it anywhere else violates the co
 | Secret scanning of a patch (gitleaks) | `runtime/secret_scan.py` |
 | The agent backend interface and the session runner | `agents/base.py`, `agents/session.py` |
 | A specific agent CLI (argv, env, output parsing, its `BackendSpec`) | `agents/backends/<name>.py`, registered in `agents/registry.py` |
-| Checking agent settings against the backends (model, effort, options) | `agents/registry.py` (`field_problems`, `settings_problems`) |
+| Helpers every backend shares (stdin wrapper, login-file writer, JSONL reading, safe ids) | `agents/backends/_shared.py` |
+| Checking agent settings against the backends (model, effort, options, models per option) | `agents/registry.py` (`field_problems`, `settings_problems`) |
+| The classifier interface and the shared HTTP call | `classifiers/base.py` |
+| A specific classifier API (request, response, its `ClassifierSpec`) | `classifiers/<name>.py`, registered in `classifiers/registry.py` |
+| The classifier questions and what their answers decide (thresholds, fail closed or fall back) | `domain/classifier_policy.py` |
+| Asking the classifier about candidates and repo output | `pipeline/classify.py` |
 | A role prompt template | `agents/prompts/<role>.md.j2`, rendered by `agents/prompting.py` |
 | A default work rule | `agents/rules/<role>.md` (seed for the UI-editable copy) |
 | Reading or writing settings, rules, runs, tasks | `store/` |
@@ -127,6 +132,7 @@ All code lives in `src/skeleton_crew/`.
 | `github/` | Gateway (allow-listed operations only, **no merge**), its private git transport and CI evaluation, write guard, trust data, preflight | Write without the `domain/` policy check and an audit event |
 | `runtime/` | Containers, controller-side git work, egress, secret scan | Pass any GitHub credential into a container |
 | `agents/` | Backend interface, backend registry, backends, session runner, prompts, default rules | Call GitHub; import `runtime/` (it receives an executor) |
+| `classifiers/` | Optional classifier interface, registry, providers (controller-side HTTP) | Call GitHub; decide anything (`domain/` does) |
 | `pipeline/` | Run controller, worker flow, job engine, branch update, PR maintenance, refine flow, CI watcher, retention | Define policy of its own |
 | `scheduler/` | Cron triggers from settings, manual "run now" | Contain run logic |
 | `web/` | FastAPI routes, Jinja2 templates, HTMX partials | Contain business logic |
@@ -134,15 +140,15 @@ All code lives in `src/skeleton_crew/`.
 Import direction (an arrow means "may import"):
 
 ```text
-cli → web, scheduler → pipeline → github, runtime, agents, store → models → domain
+cli → web, scheduler → pipeline → github, runtime, agents, classifiers, store → models → domain
 every package → core (core → domain only)
 ```
 
-`github/`, `runtime/`, `agents/` and `store/` never import each other. `pipeline/` composes them. import-linter enforces this in CI.
+`github/`, `runtime/`, `agents/`, `classifiers/` and `store/` never import each other. `pipeline/` composes them. import-linter enforces this in CI.
 
 `github/_git.py` and `github/_ci.py` are private to the gateway: only `github/gateway.py` imports them, enforced by import-linter. Other packages import the CI names from `github/gateway.py`.
 
-`web/` reaches the run controller only through the `web/ports.py` `RunControl` protocol and may import `scheduler/` to re-apply the schedule. Its only `agents/` imports are `agents.rules.default_rules`, for "reset to default" on the rules page, and `agents.registry`, to render and check the agents page.
+`web/` reaches the run controller only through the `web/ports.py` `RunControl` protocol and may import `scheduler/` to re-apply the schedule. Its only `agents/` imports are `agents.rules.default_rules`, for "reset to default" on the rules page, and `agents.registry`, to render and check the agents page; likewise its only `classifiers/` import is `classifiers.registry`.
 
 ---
 
@@ -151,7 +157,7 @@ every package → core (core → domain only)
 ### 4.1 Run flow
 
 1. **Preflight**: a ruleset on the base branch requires a PR plus ≥1 approval, and the App cannot bypass it (without any ruleset only when `allow_unprotected_base_branch` is on); the App has the required permissions, no `workflows` permission and no `administration` write; the agent settings pass `agents/registry.py`; Docker, Sysbox, the agent image and the proxy are healthy; each configured backend has its credential; with self-hosted CI on, the repo is private, the runner image, network and proxy are healthy and at least one runner is registered; the required checks can be read, the egress allowlist applied and the repo docs read (§6.3) from a clone of the base branch that the selector reuses. Any failure ends the run as `preflight_failed`. While the kill switch is on, no run starts.
-2. **Candidates**: open issues with the labels that pass the trust rules (`docs/labels.md` § Trust), except issues that also carry `skeleton HITL` (or, for `skeleton`, `skeleton refine`). Issues with an open skeleton PR go to PR maintenance instead. Expired task directories are pruned before this step (§5).
+2. **Candidates**: open issues with the labels that pass the trust rules (`docs/labels.md` § Trust), except issues that also carry `skeleton HITL` (or, for `skeleton`, `skeleton refine`). Issues with an open skeleton PR go to PR maintenance instead. Expired task directories are pruned before this step (§5). With a classifier use case on, each candidate is screened first (§6.5).
 3. **Selector**: orders candidates up to the daily quota. It escalates only issues that are clearly too large, need an owner decision (with the question and options) or are rejected; every other candidate it does not pick stays queued.
 4. **Worker pool** (≤ `max_parallel_workers`), and in parallel the **refine flow**. PR maintenance jobs (§4.4) take slots before new issues.
 5. **Stop** when candidates or quota run out, the window ends, or the kill switch fires.
@@ -228,19 +234,26 @@ Task directories (`<data>/tasks/<key>/`, transcripts and command logs) of termin
 ### 6.1 Configuration
 
 - **Bootstrap** (`.env`, `core/config.py`, prefix `SC_`): target repo `owner/name`, GitHub App id and key path, optional installation id and bot login, agent credentials (`SC_AGENT_CREDENTIALS__<NAME>`, read into `agent_credentials` with lowercase names), UI password hash, session secret, data directory, image, network and egress-proxy names (for agents and for runners), listen address. Never editable in the UI and never logged.
-- **Runtime** (`domain/settings.py`, edited in the UI): schedule, limits, per-role agent (backend, model, effort, web tools), per-backend options (`backend_options.<backend>.<option>`), label names, base branch, protected paths, `setup_command`, `check_command`, `require_ci`, `allow_unprotected_base_branch`, trusted users, egress allowlist, resource limits, self-hosted CI (`ci.*`: on/off, runner count, labels, runner allowlist, no-proxy hosts, runner resource limits), `dry_run`, kill switch. The domain only checks the shape of agent fields; `agents/registry.py` checks them against the backends on save and in preflight. The domain's default agent strings must match a registry backend, which a test enforces.
+- **Runtime** (`domain/settings.py`, edited in the UI): schedule, limits, per-role agent (backend, model, effort, web tools), per-backend options (`backend_options.<backend>.<option>`), label names, base branch, protected paths, `setup_command`, `check_command`, `require_ci`, `allow_unprotected_base_branch`, trusted users, egress allowlist, resource limits, self-hosted CI (`ci.*`: on/off, runner count, labels, runner allowlist, no-proxy hosts, runner resource limits), classifier (`classifier.*`: provider, model, one toggle per use case, routed efforts), `dry_run`, kill switch. The domain only checks the shape of agent fields; `agents/registry.py` checks them against the backends on save and in preflight. The domain's default agent strings must match a registry backend, which a test enforces.
 
 ### 6.2 Agent backends
 
 `agents/base.py` defines `AgentBackend`. A backend turns a `SessionRequest` (role, prompt and the inbox file that holds it, model, effort, limits, schema, rules file, resume id) into an argv plus environment; the prompt is read from that file, never passed as an argument, because Linux caps one argument at 128 KiB, and turns the CLI output into a `SessionOutcome` (session id, raw structured output, cost, turns, error flags, early-stop reason). It also declares the egress domains and credentials it needs, and the repo docs its CLI loads by itself (`auto_loaded_docs`, e.g. `CLAUDE.md` and `.claude/CLAUDE.md` for Claude Code). Each backend module exports a `BackendSpec` (name, display name, models, efforts, options with allowed values and defaults, credential names, web-tools support, factory). `agents/registry.py` holds the specs: it builds a backend with only its declared credentials and its options, and rejects an unknown backend, model, effort, option or unsupported web tools, on UI save (`field_problems`) and in preflight (`settings_problems`; a run then ends `preflight_failed`). `agents/session.py` runs any backend through an injected executor with transcript capture; the executor (`runtime/containers.py`) enforces the wall-clock timeout with SIGINT and a hard kill, so backends add no timeout wrapper of their own. Output is always validated by `domain/schemas.py`, whether or not the backend enforces a schema itself. The target repo's own agent hooks run as configured. When a session ends cleanly without a result, for example because a hook stopped the turn, the backend reports it as `stopped_early` and `pipeline/sessions.py` resumes the same session with a continue prompt, up to `max_continues` times, then fails closed. A continue only gets what is left of the session's `max_turns`, `session_timeout_minutes` and budget, and none is started once one of them is used up.
 
-MVP backend: **Claude Code** (`agents/backends/claude_code.py`): `claude -p` with `--output-format stream-json`, `--json-schema`, `--resume`, `--max-turns`, `--disallowedTools` for every interactive tool, and `--max-budget-usd` in API-key mode. Option `auth_mode` is `subscription` (`SC_AGENT_CREDENTIALS__CLAUDE_OAUTH_TOKEN` from `claude setup-token`, passed as `CLAUDE_CODE_OAUTH_TOKEN`) or `api_key` (`SC_AGENT_CREDENTIALS__ANTHROPIC_API_KEY`, passed as `ANTHROPIC_API_KEY`), always with the unmodified CLI. Codex and OpenCode come after the MVP as extra backends.
+Backends (`claude_code` is the default):
+
+- **Claude Code** (`agents/backends/claude_code.py`): `claude -p` with `--output-format stream-json`, `--json-schema`, `--resume`, `--max-turns`, `--disallowedTools` for every interactive tool, and `--max-budget-usd` in API-key mode. Option `auth_mode` is `subscription` (`SC_AGENT_CREDENTIALS__CLAUDE_OAUTH_TOKEN` from `claude setup-token`, passed as `CLAUDE_CODE_OAUTH_TOKEN`) or `api_key` (`SC_AGENT_CREDENTIALS__ANTHROPIC_API_KEY`, passed as `ANTHROPIC_API_KEY`), always with the unmodified CLI.
+- **Codex** (`agents/backends/codex.py`): `codex exec --json` (`exec resume <id>` to resume), `--dangerously-bypass-approvals-and-sandbox`, `-c web_search="disabled"` unless web tools are on. It has no turn limit, so the session timeout is its only bound, and its strict schema mode rejects optional fields, so it gets no CLI schema. Option `auth_mode` is `api_key` (`OPENAI_API_KEY`, passed as `CODEX_API_KEY`) or `subscription` (`CODEX_AUTH_JSON`, written to `~/.codex/auth.json`).
+- **Gemini CLI** (`agents/backends/gemini.py`): headless `gemini` with `--output-format stream-json`, `--approval-mode yolo`, `--skip-trust`, `--resume <id>`, and `--allowed-mcp-server-names` with a name no server has, so repo MCP servers stay off. The turn limit (`maxSessionTurns`), excluded tools (interactive always, web unless enabled) and auth type are written to `~/.gemini/settings.json` before each session. Effort is `default` only. Option `auth_mode` is `api_key` (`GEMINI_API_KEY`) or `subscription` (`GEMINI_OAUTH_CREDS_JSON`, written to `~/.gemini/oauth_creds.json`).
+- **OpenCode** (`agents/backends/opencode.py`): `opencode run --format json` with `-m <provider>/<model>`, `--variant` for effort and `--session` to resume. A per-session `OPENCODE_CONFIG_CONTENT` denies the `question` tool and, unless web tools are on, `webfetch`/`websearch`, loads the rules file as `instructions` and sets the agent's `steps`, which OpenCode treats as advisory. Option `provider` (`anthropic`, `openai`, `openrouter`, `google`) picks one key and one egress host, and limits the models to that provider's prefix (`BackendSpec.model_filter`). Catalog fetches, auto-update and CLAUDE.md compatibility are off in the image.
+
+Every backend builds its argv with `agents/backends/_shared.py`: the prompt (and, for CLIs without a system-prompt file option, the rules before it) goes to stdin, a subscription login file is written from `SC_AUTH_FILE` only when absent (the CLI may have refreshed it), and a per-session settings file is rewritten each time. The schema is also in the inbox as `schema.json` for CLIs that take it as a file.
 
 Adding a backend:
 
 1. A module `agents/backends/<name>.py` implementing `AgentBackend` and exporting its `BackendSpec`.
 2. One entry for that spec in `agents/registry.py`.
-3. The CLI install in `runtime/images/agent/Dockerfile`.
+3. The CLI install in `runtime/images/agent/Dockerfile`, pinned, with a checksum where the CLI ships release binaries.
 4. Its credentials as `SC_AGENT_CREDENTIALS__<NAME>` in `.env`, documented in `.env.example` and `docs/install.md`.
 
 No other package changes: the UI, preflight and pipeline read everything from the registry.
@@ -261,6 +274,18 @@ Untrusted text (issue bodies, comments, CI logs) is rendered into prompts only i
 
 Every GitHub write attempt is recorded via `store/audit_store.py`, whether it is allowed, blocked or dry-run. So are logins, settings and rules changes, the kill switch, run start and end, preflight failures, escalations and skipped issues or PRs; the kinds live in `core/audit.py`. Agents cannot read or write the audit log.
 
+### 6.5 Classifiers
+
+An optional classifier answers fixed multiple-choice questions about a text with a probability per option. It runs on the controller, never in a container, and replaces no agent. Each use case has its own toggle, all off by default; with all off, no classifier is built or called.
+
+- **Injection screen**: the issue text (title, body, trusted comments) of every candidate, and failed CI logs and `check_command` output before they reach the worker. A hit or any failure escalates (fail closed). Nothing is remembered; a false positive is fixed by editing the text.
+- **Pre-screen**: ready candidates that are clearly too large or unclear (p ≥ 0.9) escalate before the selector runs. Anything else, including a failure, goes to the selector.
+- **Effort routing**: a confident size (p ≥ 0.6) of a new issue sets the worker's effort from `classifier.effort_small/medium/large`; otherwise the worker's own effort is used. Other roles keep theirs.
+
+`pipeline/classify.py` sends one request per issue with only the enabled questions; `domain/classifier_policy.py` holds the questions, validates every answer (exact options, finite probabilities summing to 1) and decides. Each provider module exports a `ClassifierSpec` (name, display name, models, credential, factory); `classifiers/registry.py` checks provider and model on save and in preflight, and gives a provider only its own credential from `SC_AGENT_CREDENTIALS__*`. `agents/registry.py` checks the routed efforts against the worker's backend.
+
+Providers (`jev` is the default): **Jev** (`classifiers/jev.py`, `POST https://api.typesafe.ai/v1/systemone`, `SC_AGENT_CREDENTIALS__TYPESAFE_API_KEY`) and **OpenAI Decisions** (`classifiers/openai_decisions.py`, `POST https://api.openai.com/v1/decisions`, model `gpt-6-luna`, `SC_AGENT_CREDENTIALS__OPENAI_API_KEY`). Adding one: a module with its `ClassifierSpec`, one entry in `classifiers/registry.py`, its credential in `.env.example` and `docs/install.md`.
+
 ---
 
 ## 7. Modularity contract
@@ -269,11 +294,11 @@ Before merging, check:
 
 - [ ] No GitHub call outside `github/gateway.py`
 - [ ] No GitHub write without a `domain/` policy check and an audit event
-- [ ] No credential passed into a container except the backend's model credential (agents) or the runner's own registration (CI runners)
+- [ ] No credential passed into a container except the backend's model credential (agents) or the runner's own registration (CI runners); the classifier key stays on the controller
 - [ ] No git command run by the controller in an agent-writable directory
 - [ ] No I/O in `domain/`
 - [ ] Agent output parsed only through `domain/schemas.py`
-- [ ] No backend-specific code outside `agents/backends/`
+- [ ] No backend-specific code outside `agents/backends/`, no classifier-specific code outside `classifiers/`
 - [ ] Import direction of §3 respected (`uv run --no-sync lint-imports`)
 - [ ] New behaviour covered by tests, policy changes covered by adversarial tests
 

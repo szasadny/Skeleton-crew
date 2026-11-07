@@ -154,6 +154,7 @@ def make_request(
         json_schema='{"type":"object"}',
         rules_path_in_container="/skeleton-in/rules.md",
         prompt_path_in_container="/skeleton-in/prompt.md",
+        schema_path_in_container="/skeleton-in/schema.json",
         cwd="/workspace",
         resume_session_id=resume_session_id,
         max_budget_usd=max_budget_usd,

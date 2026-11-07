@@ -2,11 +2,13 @@ from collections.abc import Mapping
 
 from pydantic import SecretStr
 
-from skeleton_crew.agents.backends import claude_code
+from skeleton_crew.agents.backends import claude_code, codex, gemini, opencode
 from skeleton_crew.agents.base import AgentBackend, BackendSpec
-from skeleton_crew.domain.settings import AppSettings
+from skeleton_crew.domain.settings import AppSettings, Role
 
-_BACKENDS: Mapping[str, BackendSpec] = {spec.name: spec for spec in (claude_code.SPEC,)}
+_BACKENDS: Mapping[str, BackendSpec] = {
+    spec.name: spec for spec in (claude_code.SPEC, codex.SPEC, gemini.SPEC, opencode.SPEC)
+}
 
 
 class UnknownBackendError(ValueError):
@@ -36,6 +38,22 @@ def option_problems(spec: BackendSpec, options: Mapping[str, str]) -> dict[str, 
     return errors
 
 
+def resolved_options(spec: BackendSpec, options: Mapping[str, str]) -> dict[str, str]:
+    return {key: option.default for key, option in spec.options.items()} | dict(options)
+
+
+def _model_problem(spec: BackendSpec, model: str, options: Mapping[str, str]) -> str | None:
+    if model not in spec.models:
+        return f"not a {spec.display_name} model"
+    if spec.model_filter is None or option_problems(spec, options):
+        return None
+    resolved = resolved_options(spec, options)
+    if spec.model_filter(model, resolved):
+        return None
+    shown = ", ".join(f"{key}={value}" for key, value in sorted(resolved.items()))
+    return f"not a {spec.display_name} model for {shown}"
+
+
 def field_problems(settings: AppSettings) -> dict[str, list[str]]:
     errors: dict[str, list[str]] = {}
     for role, agent in settings.agents.items():
@@ -44,8 +62,9 @@ def field_problems(settings: AppSettings) -> dict[str, list[str]]:
         if spec is None:
             errors[f"{prefix}.backend"] = [f"unknown agent backend {agent.backend}"]
             continue
-        if agent.model not in spec.models:
-            errors[f"{prefix}.model"] = [f"not a {spec.display_name} model"]
+        options = settings.backend_options.get(spec.name, {})
+        if (problem := _model_problem(spec, agent.model, options)) is not None:
+            errors[f"{prefix}.model"] = [problem]
         if agent.effort not in spec.efforts:
             errors[f"{prefix}.effort"] = [f"not a {spec.display_name} effort"]
         if agent.web_tools and not spec.web_tools:
@@ -56,7 +75,18 @@ def field_problems(settings: AppSettings) -> dict[str, list[str]]:
             errors[f"backend_options.{name}"] = [f"unknown agent backend {name}"]
         else:
             errors |= option_problems(spec, options)
-    return errors
+    return errors | _routed_effort_problems(settings)
+
+
+def _routed_effort_problems(settings: AppSettings) -> dict[str, list[str]]:
+    spec = _BACKENDS.get(settings.agents[Role.WORKER].backend)
+    if not settings.classifier.effort_routing or spec is None:
+        return {}
+    return {
+        f"classifier.effort_{size}": [f"not a {spec.display_name} effort"]
+        for size, effort in settings.classifier.routed_efforts.items()
+        if effort not in spec.efforts
+    }
 
 
 def settings_problems(settings: AppSettings) -> list[str]:
@@ -74,7 +104,7 @@ def backend_for(
     problems = option_problems(spec, options)
     if problems:
         raise ValueError(f"invalid options for {name}: {sorted(problems)}")
-    resolved = {key: option.default for key, option in spec.options.items()} | dict(options)
+    resolved = resolved_options(spec, options)
     # A backend only ever sees the credentials it declares.
     own = {key: credentials[key] for key in spec.credentials if key in credentials}
     return spec.factory(own, resolved)

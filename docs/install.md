@@ -62,7 +62,13 @@ Rulesets need a public repository or a paid plan. On a free private repository, 
 2. Fill in `.env`:
    - `SC_REPO`: the target repository as `owner/name`.
    - `SC_GITHUB_APP_ID`, `SC_GITHUB_APP_PRIVATE_KEY_PATH` and optionally `SC_GITHUB_APP_INSTALLATION_ID`, `SC_GITHUB_BOT_LOGIN`.
-   - The agent credential, as `SC_AGENT_CREDENTIALS__<NAME>`. For Claude Code: `SC_AGENT_CREDENTIALS__CLAUDE_OAUTH_TOKEN` (from `claude setup-token`, auth mode `subscription`) or `SC_AGENT_CREDENTIALS__ANTHROPIC_API_KEY` (auth mode `api_key`, chosen on the Agents page). Use a dedicated token.
+   - The agent credential, as `SC_AGENT_CREDENTIALS__<NAME>`, for each backend you pick on the Agents page (Claude Code is the default). Use dedicated tokens and accounts.
+     - Claude Code: `SC_AGENT_CREDENTIALS__CLAUDE_OAUTH_TOKEN` (from `claude setup-token`, auth mode `subscription`) or `SC_AGENT_CREDENTIALS__ANTHROPIC_API_KEY` (auth mode `api_key`).
+     - Codex: `SC_AGENT_CREDENTIALS__OPENAI_API_KEY` (auth mode `api_key`) or `SC_AGENT_CREDENTIALS__CODEX_AUTH_JSON` (auth mode `subscription`): run `codex login` on a trusted machine and paste the content of `~/.codex/auth.json` on one line, in single quotes.
+     - Gemini CLI: `SC_AGENT_CREDENTIALS__GEMINI_API_KEY` (auth mode `api_key`, from Google AI Studio) or `SC_AGENT_CREDENTIALS__GEMINI_OAUTH_CREDS_JSON` (auth mode `subscription`): run `gemini`, choose *Sign in with Google*, and paste the content of `~/.gemini/oauth_creds.json` on one line, in single quotes. Set the role's effort to `default`.
+     - OpenCode: the key of the provider chosen on the Agents page: `SC_AGENT_CREDENTIALS__ANTHROPIC_API_KEY`, `__OPENAI_API_KEY`, `__OPENROUTER_API_KEY` or `__GEMINI_API_KEY`.
+     - Optional classifier (Agents page, off by default): `SC_AGENT_CREDENTIALS__TYPESAFE_API_KEY` for Jev, or `SC_AGENT_CREDENTIALS__OPENAI_API_KEY` for OpenAI Decisions. It stays on the controller.
+     - A subscription login file holds a refresh token. The CLI may rotate it inside the container, which can make the copy in `.env` stop working; log in again and replace it if a session reports an auth error.
    - `SC_SESSION_SECRET`: output of `openssl rand -hex 32`.
    - `SC_SITE_ADDRESS`: the VM's LAN IP or hostname (the installer fills in the first IP it finds).
 3. Create the UI password hash and put it in `SC_UI_PASSWORD_HASH`, inside single quotes:

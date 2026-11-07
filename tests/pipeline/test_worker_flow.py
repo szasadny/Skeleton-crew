@@ -302,8 +302,8 @@ async def test_second_review_resumes_the_reviewer_in_the_same_container(harness:
     assert second.resume_session_id == "review-session"
     assert second.prompt.startswith("# Task: review the updated change")
     assert [(snap["app.py"], snap["inbox"]) for snap in seen] == [
-        (GREETING["app.py"], "changes.diff prompt.md rules.md"),
-        ("print(1)\n", "changes.diff prompt.md rules.md since-review.diff"),
+        (GREETING["app.py"], "changes.diff prompt.md rules.md schema.json"),
+        ("print(1)\n", "changes.diff prompt.md rules.md schema.json since-review.diff"),
     ]
     assert [snap["prompt"] for snap in seen] == [first.prompt, second.prompt]
     assert not harness.runtime.running
