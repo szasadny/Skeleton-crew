@@ -1,6 +1,10 @@
+from dataclasses import replace
+
 import pytest
 from pydantic import SecretStr
 
+from skeleton_crew.agents import registry
+from skeleton_crew.agents.base import BackendSpec, OptionSpec
 from skeleton_crew.agents.registry import (
     UnknownBackendError,
     available_backends,
@@ -109,3 +113,56 @@ def test_valid_options_have_no_problems() -> None:
 def test_settings_problems_name_the_field() -> None:
     [problem] = settings_problems(_with_worker(model="gpt-9"))
     assert problem.startswith("agents.worker.model: ")
+
+
+def _filtered_spec() -> BackendSpec:
+    base = spec_for("claude_code")
+    return replace(
+        base,
+        name="filtered",
+        display_name="Filtered",
+        models=("a/one", "b/one"),
+        options={"provider": OptionSpec(allowed=("a", "b"), default="a")},
+        model_filter=lambda model, options: model.startswith(f"{options['provider']}/"),
+    )
+
+
+@pytest.fixture
+def filtered(monkeypatch: pytest.MonkeyPatch) -> BackendSpec:
+    spec = _filtered_spec()
+    monkeypatch.setattr(registry, "_BACKENDS", {**registry._BACKENDS, spec.name: spec})
+    return spec
+
+
+def _filtered_settings(model: str, options: dict[str, str] | None = None) -> AppSettings:
+    settings = _with_worker(backend="filtered", model=model, effort="low")
+    return settings.model_copy(
+        update={"backend_options": {} if options is None else {"filtered": options}}
+    )
+
+
+@pytest.mark.usefixtures("filtered")
+def test_model_filter_uses_the_default_option() -> None:
+    assert "agents.worker.model" not in field_problems(_filtered_settings("a/one"))
+    problems = field_problems(_filtered_settings("b/one"))
+    assert problems["agents.worker.model"] == ["not a Filtered model for provider=a"]
+
+
+@pytest.mark.usefixtures("filtered")
+def test_model_filter_follows_the_chosen_option() -> None:
+    chosen = {"provider": "b"}
+    assert "agents.worker.model" not in field_problems(_filtered_settings("b/one", chosen))
+    assert "agents.worker.model" in field_problems(_filtered_settings("a/one", chosen))
+
+
+@pytest.mark.usefixtures("filtered")
+def test_model_filter_cannot_be_bypassed_with_an_unlisted_model() -> None:
+    problems = field_problems(_filtered_settings("b/two", {"provider": "b"}))
+    assert problems["agents.worker.model"] == ["not a Filtered model"]
+
+
+@pytest.mark.usefixtures("filtered")
+def test_invalid_option_is_reported_once_not_as_a_model_problem() -> None:
+    problems = field_problems(_filtered_settings("a/one", {"provider": "c"}))
+    assert "agents.worker.model" not in problems
+    assert "backend_options.filtered.provider" in problems

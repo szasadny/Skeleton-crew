@@ -91,6 +91,17 @@ async def test_start_returns_only_after_the_entrypoint_is_ready(
     assert result.exit_code == 0
 
 
+@pytest.mark.parametrize("cli", ["claude", "codex", "gemini", "opencode"])
+async def test_every_agent_cli_is_installed(
+    started: tuple[DockerRuntime, ContainerHandle], cli: str
+) -> None:
+    runtime, handle = started
+    result = await runtime.exec(
+        handle, [cli, "--version"], env={}, cwd="/workspace", user="agent", timeout_s=60
+    )
+    assert result.exit_code == 0
+
+
 async def test_workspace_mount_is_read_only(started: tuple[DockerRuntime, ContainerHandle]) -> None:
     runtime, handle = started
     result = await runtime.exec(

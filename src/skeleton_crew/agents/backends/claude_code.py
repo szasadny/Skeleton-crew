@@ -1,5 +1,4 @@
 import json
-import re
 from collections.abc import Mapping
 from enum import StrEnum
 from pathlib import Path
@@ -7,6 +6,14 @@ from typing import Any
 
 from pydantic import SecretStr
 
+from skeleton_crew.agents.backends._shared import (
+    jsonl_events,
+    number,
+    safe_reason,
+    safe_session_id,
+    secret_value,
+    stdin_command,
+)
 from skeleton_crew.agents.base import (
     BackendSpec,
     OptionSpec,
@@ -60,32 +67,13 @@ _CREDENTIALS = {
     AuthMode.API_KEY: ("anthropic_api_key", "ANTHROPIC_API_KEY"),
 }
 _BASE_ENV = {"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "DISABLE_AUTOUPDATER": "1"}
-# On stdin, because Linux caps a single argument at 128 KiB and prompts can be larger.
-_PROMPT_FROM_STDIN = 'prompt="$1"; shift; exec claude "$@" < "$prompt"'
-_SUBTYPE_RE = re.compile(r"^[a-z_]{1,40}$")
-# The id is later passed to --resume, so it must never look like an option.
-_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$")
-
-
-def _number(value: Any, default: float) -> float:
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        return default
-    return float(value)
 
 
 def _last_result(stdout_path: Path) -> dict[str, Any] | None:
     result: dict[str, Any] | None = None
-    try:
-        with stdout_path.open(encoding="utf-8", errors="replace") as stream:
-            for line in stream:
-                try:
-                    event = json.loads(line)
-                except ValueError:
-                    continue
-                if isinstance(event, dict) and event.get("type") == "result":
-                    result = event
-    except FileNotFoundError:
-        return None
+    for event in jsonl_events(stdout_path):
+        if event.get("type") == "result":
+            result = event
     return result
 
 
@@ -112,9 +100,7 @@ class ClaudeCodeBackend:
 
     def _credential(self) -> tuple[str, str | None]:
         name, var = _CREDENTIALS[self._auth_mode]
-        secret = self._credentials.get(name)
-        value = secret.get_secret_value().strip() if secret is not None else ""
-        return var, value or None
+        return var, secret_value(self._credentials, name)
 
     def credential_problems(self) -> list[str]:
         _, value = self._credential()
@@ -128,12 +114,7 @@ class ClaudeCodeBackend:
         return {**_BASE_ENV, var: value} if value is not None else dict(_BASE_ENV)
 
     def command(self, req: SessionRequest) -> list[str]:
-        argv = [
-            "sh",
-            "-c",
-            _PROMPT_FROM_STDIN,
-            "sh",
-            req.prompt_path_in_container,
+        args = [
             "-p",
             "--output-format",
             "stream-json",
@@ -156,10 +137,10 @@ class ClaudeCodeBackend:
             disallowed_tools(web_tools=req.agent.web_tools),
         ]
         if req.resume_session_id is not None:
-            argv += ["--resume", req.resume_session_id]
+            args += ["--resume", req.resume_session_id]
         if self._auth_mode is AuthMode.API_KEY and req.max_budget_usd is not None:
-            argv += ["--max-budget-usd", str(req.max_budget_usd)]
-        return argv
+            args += ["--max-budget-usd", str(req.max_budget_usd)]
+        return stdin_command("claude", args, prompt_path=req.prompt_path_in_container)
 
     def parse(self, stdout_path: Path, exit_code: int, timed_out: bool) -> SessionOutcome:
         result = _last_result(stdout_path)
@@ -174,28 +155,19 @@ class ClaudeCodeBackend:
         if timed_out:
             error = "timed out"
         elif subtype != "success":
-            shown = (
-                subtype if isinstance(subtype, str) and _SUBTYPE_RE.match(subtype) else "unknown"
-            )
-            error = f"session ended with {shown}"
+            error = f"session ended with {safe_reason(subtype) or 'unknown'}"
         elif result.get("is_error") is not False:
             error = "session reported an error"
         elif exit_code != 0:
             error = f"exit code {exit_code}"
         elif structured is None:
             error = "no structured output"
-            reason = result.get("terminal_reason")
-            valid = isinstance(reason, str) and _SUBTYPE_RE.match(reason)
-            stopped_early = reason if valid else "no_result"
+            stopped_early = safe_reason(result.get("terminal_reason")) or "no_result"
         return SessionOutcome(
-            session_id=(
-                session_id
-                if isinstance(session_id, str) and _SESSION_ID_RE.match(session_id)
-                else None
-            ),
+            session_id=safe_session_id(session_id),
             structured_output=structured,
-            cost_usd=_number(result.get("total_cost_usd"), 0.0),
-            turns=int(_number(result.get("num_turns"), 0)),
+            cost_usd=number(result.get("total_cost_usd"), 0.0),
+            turns=int(number(result.get("num_turns"), 0)),
             ok=error is None,
             error=error,
             timed_out=timed_out,

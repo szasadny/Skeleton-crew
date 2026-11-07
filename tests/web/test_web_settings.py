@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from web_helpers import Web, open_web
 
+from skeleton_crew.agents.registry import available_backends
 from skeleton_crew.core.audit import AuditKind
 from skeleton_crew.domain.settings import (
     AppSettings,
@@ -29,13 +30,22 @@ def _limits_form(**overrides: Any) -> dict[str, str]:
     return {f"limits.{k}": "" if v is None else str(v) for k, v in values.items()}
 
 
+_DEFAULT_OPTIONS = {
+    spec.name: {name: option.default for name, option in spec.options.items()}
+    for spec in available_backends()
+    if spec.options
+}
+
+
 def _agents_form(**overrides: str) -> dict[str, str]:
     form = {}
     for role in Role:
         form[f"agents.{role}.backend"] = "claude_code"
         form[f"agents.{role}.model"] = "opus"
         form[f"agents.{role}.effort"] = "medium"
-    form["backend_options.claude_code.auth_mode"] = "subscription"
+    for backend, options in _DEFAULT_OPTIONS.items():
+        for name, value in options.items():
+            form[f"backend_options.{backend}.{name}"] = value
     return form | overrides
 
 
@@ -159,7 +169,7 @@ async def test_agents_round_trip(web: Web) -> None:
     worker = settings.agents[Role.WORKER]
     assert (worker.model, worker.effort, worker.web_tools) == ("sonnet", "high", True)
     assert settings.agents[Role.REVIEWER].web_tools is False
-    assert settings.backend_options == {"claude_code": {"auth_mode": "api_key"}}
+    assert settings.backend_options == _DEFAULT_OPTIONS | {"claude_code": {"auth_mode": "api_key"}}
     assert 'value="api_key" selected' in (await web.client.get("/agents")).text
 
 
@@ -212,7 +222,37 @@ async def test_agents_ignores_option_fields_the_registry_does_not_declare(web: W
         **{"backend_options.claude_code.inject": "x", "backend_options.evil.a": "b"}
     )
     assert await _post(web, "/agents", form) == (303, "/agents?msg=saved")
-    assert (await web.settings()).backend_options == {"claude_code": {"auth_mode": "subscription"}}
+    assert (await web.settings()).backend_options == _DEFAULT_OPTIONS
+
+
+async def test_agents_switches_a_role_to_another_backend(web: Web) -> None:
+    form = _agents_form(
+        **{
+            "agents.worker.backend": "opencode",
+            "agents.worker.model": "openai/gpt-6.1-sol",
+            "backend_options.opencode.provider": "openai",
+            "agents.reviewer.backend": "gemini",
+            "agents.reviewer.model": "pro",
+            "agents.reviewer.effort": "default",
+        }
+    )
+    assert await _post(web, "/agents", form) == (303, "/agents?msg=saved")
+    agents = (await web.settings()).agents
+    assert (agents[Role.WORKER].backend, agents[Role.REVIEWER].backend) == ("opencode", "gemini")
+
+
+async def test_agents_rejects_a_model_of_another_opencode_provider(web: Web) -> None:
+    form = _agents_form(
+        **{
+            "agents.worker.backend": "opencode",
+            "agents.worker.model": "anthropic/claude-opus-5-5",
+            "backend_options.opencode.provider": "openai",
+        }
+    )
+    status, html = await _post(web, "/agents", form)
+    assert status == 422
+    assert "not a OpenCode model for provider=openai" in html
+    assert (await web.settings()).agents == AppSettings().agents
 
 
 async def test_agents_page_renders_backend_options_from_the_registry(web: Web) -> None:

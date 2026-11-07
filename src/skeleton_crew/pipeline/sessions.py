@@ -24,6 +24,7 @@ WORKSPACE = "/workspace"
 INBOX = "/skeleton-in"
 RULES_FILE = "rules.md"
 PROMPT_FILE = "prompt.md"
+SCHEMA_FILE = "schema.json"
 TASK_LABEL = "skeleton-crew.task"
 ROLE_LABEL = "skeleton-crew.role"
 _STDERR_TAIL_CHARS = 4000
@@ -169,6 +170,7 @@ async def run_agent[T: BaseModel](
         json_schema=schema,
         rules_path_in_container=f"{INBOX}/{RULES_FILE}",
         prompt_path_in_container=f"{INBOX}/{PROMPT_FILE}",
+        schema_path_in_container=f"{INBOX}/{SCHEMA_FILE}",
         cwd=WORKSPACE,
         resume_session_id=resume_session_id,
         max_budget_usd=limits.max_budget_usd_per_session,
@@ -187,9 +189,11 @@ async def run_agent[T: BaseModel](
 
 
 async def _session(ctx: RunContext, sandbox: Sandbox, request: SessionRequest) -> SessionOutcome:
-    await asyncio.to_thread(
-        update_inbox, sandbox.inbox, {PROMPT_FILE: request.prompt.encode("utf-8")}
-    )
+    files = {
+        PROMPT_FILE: request.prompt.encode("utf-8"),
+        SCHEMA_FILE: request.json_schema.encode("utf-8"),
+    }
+    await asyncio.to_thread(update_inbox, sandbox.inbox, files)
     return await run_session(
         ctx.backends[request.agent.backend],
         container_executor(ctx, sandbox.handle),

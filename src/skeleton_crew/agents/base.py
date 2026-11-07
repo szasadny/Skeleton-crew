@@ -38,6 +38,7 @@ class SessionRequest:
     json_schema: str
     rules_path_in_container: str
     prompt_path_in_container: str
+    schema_path_in_container: str
     cwd: str
     resume_session_id: str | None = None
     max_budget_usd: float | None = None
@@ -79,6 +80,8 @@ class OptionSpec:
 
 
 type BackendFactory = Callable[[Mapping[str, SecretStr], Mapping[str, str]], AgentBackend]
+# Narrows the models to those valid for the resolved options, e.g. a provider prefix.
+type ModelFilter = Callable[[str, Mapping[str, str]], bool]
 
 
 @dataclass(frozen=True)
@@ -91,6 +94,7 @@ class BackendSpec:
     options: Mapping[str, OptionSpec] = field(default_factory=dict)
     credentials: tuple[str, ...] = ()
     web_tools: bool = False
+    model_filter: ModelFilter | None = None
 
 
 def failed_outcome(error: str, *, timed_out: bool = False) -> SessionOutcome:
