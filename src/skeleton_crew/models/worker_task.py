@@ -25,6 +25,7 @@ class WorkerTask(Base):
     head_sha: Mapped[str | None] = mapped_column(String(64))
     session_id: Mapped[str | None] = mapped_column(String(128))
     container_id: Mapped[str | None] = mapped_column(String(128))
+    check_rounds: Mapped[int] = mapped_column(default=0, server_default="0")
     ci_rounds: Mapped[int] = mapped_column(default=0)
     review_rounds: Mapped[int] = mapped_column(default=0)
     policy_rounds: Mapped[int] = mapped_column(default=0)

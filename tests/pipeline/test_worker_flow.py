@@ -1,5 +1,6 @@
 import asyncio
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -356,7 +357,7 @@ async def test_review_rounds_exhausted_escalates(harness: Harness) -> None:
 
     [task] = await harness.tasks(run_id)
     assert task.state is TaskState.ESCALATED
-    assert "1 policy or review rounds" in str(task.note)
+    assert "reviewer still requests changes after 1 fix rounds" in str(task.note)
     assert harness.actions()[-2:] == ["comment", "change_labels"]
     labels = harness.writes("change_labels")
     assert [("change_labels", dict(w.args)) for w in labels] == escalation_writes()
@@ -393,7 +394,7 @@ async def test_worker_scope_too_large_escalates_without_push(harness: Harness) -
 
 
 async def test_protected_path_edit_gets_follow_up_then_escalates(harness: Harness) -> None:
-    harness.limits(max_review_rounds=1)
+    harness.limits(max_policy_rounds=1)
     workflow = {".github/workflows/ci.yml": "on: push\n"}
     harness.patches = [harness.patch(workflow)]
     harness.backend.script(Role.WORKER, worker_json(), worker_json())
@@ -402,6 +403,7 @@ async def test_protected_path_edit_gets_follow_up_then_escalates(harness: Harnes
 
     [task] = await harness.tasks(run_id)
     assert (task.state, task.policy_rounds) == (TaskState.ESCALATED, 1)
+    assert "still breaks policy after 1 fix rounds" in str(task.note)
     assert harness.actions() == ["comment", "change_labels"]
     follow_up = harness.backend.prompts(Role.WORKER)[1]
     assert ".github/workflows/ci.yml: protected path" in follow_up.prompt
@@ -410,7 +412,7 @@ async def test_protected_path_edit_gets_follow_up_then_escalates(harness: Harnes
 
 
 async def test_secret_in_patch_is_a_policy_violation(harness: Harness) -> None:
-    harness.limits(max_review_rounds=0)
+    harness.limits(max_policy_rounds=0)
     harness.patches = [harness.patch(GREETING)]
     harness.secret_findings = ["generic-api-key in app.py"]
     harness.backend.script(Role.WORKER, worker_json())
@@ -503,6 +505,48 @@ async def test_continues_are_capped_then_escalate(harness: Harness) -> None:
     assert harness.actions() == ["comment", "change_labels"]
 
 
+async def test_continues_get_only_what_is_left_of_the_session_limits(harness: Harness) -> None:
+    harness.limits(max_turns=10, session_timeout_minutes=10, max_budget_usd_per_session=1.0)
+    harness.session_seconds = 120.0
+    harness.patches = [harness.patch(GREETING)]
+    harness.backend.script(Role.WORKER, stopped_outcome(), stopped_outcome(), worker_json())
+    harness.backend.script(Role.REVIEWER, review_json())
+
+    run_id = await harness.run()
+
+    [task] = await harness.tasks(run_id)
+    assert task.state is TaskState.DONE
+    first, second, third = harness.backend.prompts(Role.WORKER)
+    assert [r.max_turns for r in (first, second, third)] == [10, 8, 6]
+    assert [r.timeout_s for r in (first, second, third)] == [600.0, 480.0, 360.0]
+    assert second.max_budget_usd == pytest.approx(0.99)
+    assert third.max_budget_usd == pytest.approx(0.98)
+
+
+@pytest.mark.parametrize(
+    ("limits", "session_seconds"),
+    [
+        ({"max_turns": 10}, 0.0),
+        ({"session_timeout_minutes": 5}, 300.0),
+        ({"max_budget_usd_per_session": 0.01}, 0.0),
+    ],
+)
+async def test_no_continue_once_the_session_limits_are_used_up(
+    harness: Harness, limits: dict[str, float], session_seconds: float
+) -> None:
+    harness.limits(max_continues=5, **limits)
+    harness.session_seconds = session_seconds
+    used_up = replace(stopped_outcome(), turns=10)
+    harness.backend.script(Role.WORKER, used_up, worker_json())
+
+    run_id = await harness.run()
+
+    [task] = await harness.tasks(run_id)
+    assert task.state is TaskState.ESCALATED
+    assert "stopped early: hook_stopped" in str(task.note)
+    assert len(harness.backend.prompts(Role.WORKER)) == 1
+
+
 @pytest.mark.parametrize(("max_continues", "session_id"), [(0, "worker-session"), (5, None)])
 async def test_early_stop_is_not_continued_without_budget_or_session(
     harness: Harness, max_continues: int, session_id: str | None
@@ -528,7 +572,7 @@ async def test_worker_timeout_escalates(harness: Harness) -> None:
 
     [task] = await harness.tasks(run_id)
     assert task.state is TaskState.ESCALATED
-    assert "timed out" in str(task.note)
+    assert "timed out or the run window ended while waiting for CI" in str(task.note)
     assert harness.actions() == ["push_branch", "open_pr", "comment", "change_labels"]
     assert not harness.runtime.running
 
@@ -611,7 +655,7 @@ async def test_rejected_contest_goes_back_through_review(harness: Harness) -> No
 
 
 async def test_objection_on_another_line_does_not_lift_the_flag(harness: Harness) -> None:
-    harness.limits(max_review_rounds=1)
+    harness.limits(max_policy_rounds=1)
     harness.patches = [harness.patch(COMMENTED)]
     wrong_line = {**LICENSE_OBJECTION, "line": 2}
     harness.backend.script(
@@ -678,7 +722,7 @@ async def test_failed_check_goes_back_to_the_worker_before_any_push(harness: Har
     run_id = await harness.run()
 
     [task] = await harness.tasks(run_id)
-    assert (task.state, task.ci_rounds, task.policy_rounds) == (TaskState.DONE, 1, 0)
+    assert (task.state, task.check_rounds, task.ci_rounds) == (TaskState.DONE, 1, 0)
     assert len(calls) == 2
     assert all(c.env == {} for c in calls)
     follow_up = harness.backend.prompts(Role.WORKER)[1]
@@ -689,8 +733,40 @@ async def test_failed_check_goes_back_to_the_worker_before_any_push(harness: Har
     assert harness.actions() == ["push_branch", "open_pr", "set_review_check"]
 
 
+async def test_check_rounds_do_not_use_up_ci_rounds(harness: Harness) -> None:
+    harness.limits(max_ci_rounds=0, max_check_rounds=1)
+    harness.repo(check_command="make check")
+    _commands(harness, (1, b"FAILED"), (0, b"ok"))
+    harness.patches = [harness.patch(GREETING)]
+    harness.backend.script(Role.WORKER, worker_json(), worker_json())
+    harness.backend.script(Role.REVIEWER, review_json())
+
+    run_id = await harness.run()
+
+    [task] = await harness.tasks(run_id)
+    assert (task.state, task.check_rounds, task.ci_rounds) == (TaskState.DONE, 1, 0)
+
+
+async def test_policy_rounds_do_not_use_up_review_rounds(harness: Harness) -> None:
+    harness.limits(max_policy_rounds=1, max_review_rounds=1)
+    workflow = {".github/workflows/ci.yml": "on: push\n"}
+    harness.patches = [
+        harness.patch(workflow),
+        harness.patch(GREETING),
+        harness.patch({"app.py": "print(1)\n"}),
+    ]
+    harness.backend.script(Role.WORKER, worker_json(), worker_json(), worker_json())
+    changes = review_json("changes_requested", [BLOCKER])
+    harness.backend.script(Role.REVIEWER, changes, review_json())
+
+    run_id = await harness.run()
+
+    [task] = await harness.tasks(run_id)
+    assert (task.state, task.policy_rounds, task.review_rounds) == (TaskState.DONE, 1, 1)
+
+
 async def test_check_rounds_exhausted_escalates_without_push(harness: Harness) -> None:
-    harness.limits(max_ci_rounds=0)
+    harness.limits(max_check_rounds=0, max_ci_rounds=5)
     harness.repo(check_command="make check")
     _commands(harness, (1, b"FAILED"))
     harness.patches = [harness.patch(GREETING)]
@@ -705,7 +781,7 @@ async def test_check_rounds_exhausted_escalates_without_push(harness: Harness) -
 
 
 async def test_objection_cannot_lift_a_hard_violation(harness: Harness) -> None:
-    harness.limits(max_review_rounds=1)
+    harness.limits(max_policy_rounds=1)
     workflow = {".github/workflows/ci.yml": "on: push\n"}
     harness.patches = [harness.patch(workflow)]
     disguised = {**LICENSE_OBJECTION, "path": ".github/workflows/ci.yml"}

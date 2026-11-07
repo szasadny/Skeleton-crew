@@ -33,7 +33,7 @@ async def test_migrations_are_idempotent(engine: AsyncEngine) -> None:
     await run_migrations(engine)
     async with engine.connect() as connection:
         version = await connection.scalar(text("SELECT version_num FROM alembic_version"))
-    assert version == "0005"
+    assert version == "0006"
 
 
 async def test_pragmas_are_applied(engine: AsyncEngine) -> None:

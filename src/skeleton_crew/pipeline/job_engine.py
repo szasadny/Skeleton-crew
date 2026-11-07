@@ -8,7 +8,7 @@ from skeleton_crew.domain.contestable_checks import describe_checks
 from skeleton_crew.domain.errors import PolicyViolation
 from skeleton_crew.domain.schemas import WorkerResult
 from skeleton_crew.domain.settings import Role
-from skeleton_crew.domain.task_state import TERMINAL_TASK_STATES, TaskEvent
+from skeleton_crew.domain.task_state import TERMINAL_TASK_STATES, TaskEvent, TaskState
 from skeleton_crew.github.gateway import CiState, FailedJob
 from skeleton_crew.pipeline.ci_watcher import wait_for_ci
 from skeleton_crew.pipeline.deps import RunContext
@@ -52,7 +52,8 @@ async def run_job(job: WorkerJob, work: Work) -> None:
         async with asyncio.timeout(_seconds_left(ctx)):
             await work(job)
     except TimeoutError:
-        outcome = Escalation("the worker timed out or the run window ended")
+        waiting = " while waiting for CI" if job.record.state is TaskState.AWAITING_CI else ""
+        outcome = Escalation(f"the worker timed out or the run window ended{waiting}")
     except (Escalation, Skip) as exc:
         outcome = exc
     except Exception as exc:
@@ -154,18 +155,20 @@ async def _run_checks(job: WorkerJob) -> FollowUp | None:
     checks = await run_repo_command(job, command, "check")
     if checks.ok:
         return None
-    job.rounds.ci += 1
-    limit = job.ctx.settings.limits.max_ci_rounds
-    if job.rounds.ci > limit:
+    job.rounds.check += 1
+    limit = job.ctx.settings.limits.max_check_rounds
+    if job.rounds.check > limit:
         raise Escalation(f"the check command still fails after {limit} fix rounds")
-    await job.record.fire(TaskEvent.CHECK_FAILED, ci_rounds=job.rounds.ci)
+    await job.record.fire(TaskEvent.CHECK_FAILED, check_rounds=job.rounds.check)
     details = f"`{command}` failed ({checks.status}):\n\n{checks.output_tail}".strip()
     return FollowUp(FollowUpKind.CHECK_FAILED, details)
 
 
 async def _policy_failed(job: WorkerJob, check: PolicyCheck) -> FollowUp:
     job.rounds.policy += 1
-    _check_review_rounds(job)
+    limit = job.ctx.settings.limits.max_policy_rounds
+    if job.rounds.policy > limit:
+        raise Escalation(f"the change still breaks policy after {limit} fix rounds")
     await job.record.fire(TaskEvent.POLICY_FAILED, policy_rounds=job.rounds.policy)
     return FollowUp(FollowUpKind.POLICY_FAILED, "\n".join(f"- {v}" for v in check.violations))
 
@@ -248,12 +251,6 @@ async def _report_new_issues(job: WorkerJob, result: WorkerResult) -> None:
             log.warning("new issue from #%d was blocked: %s", job.issue.number, exc)
 
 
-def _check_review_rounds(job: WorkerJob) -> None:
-    allowed = job.ctx.settings.limits.max_review_rounds
-    if job.rounds.policy + job.rounds.review > allowed:
-        raise Escalation(f"no acceptable change after {allowed} policy or review rounds")
-
-
 async def publish(job: WorkerJob, result: WorkerResult | None, head_sha: str) -> None:
     gw, max_chars = job.ctx.gateway, job.ctx.settings.limits.max_comment_chars
     await gw.push_branch(job.paths.controller_repo, job.branch, head_sha, job.git.remote_sha)
@@ -334,6 +331,8 @@ async def review(
     if result.verdict == "scope_too_large":
         raise Escalation(f"the reviewer judged the change too large: {result.summary}")
     job.rounds.review += 1
-    _check_review_rounds(job)
+    limit = job.ctx.settings.limits.max_review_rounds
+    if job.rounds.review > limit:
+        raise Escalation(f"the reviewer still requests changes after {limit} fix rounds")
     await job.record.fire(TaskEvent.REVIEW_CHANGES, review_rounds=job.rounds.review)
     return FollowUp(FollowUpKind.REVIEW_CHANGES, review_text(result))

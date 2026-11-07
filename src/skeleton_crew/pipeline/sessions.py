@@ -5,6 +5,7 @@ import secrets
 import shutil
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
+from datetime import datetime
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -172,8 +173,9 @@ async def run_agent[T: BaseModel](
         resume_session_id=resume_session_id,
         max_budget_usd=limits.max_budget_usd_per_session,
     )
+    started = ctx.deps.clock()
     outcome = await _continue_stopped(
-        ctx, sandbox, request, await _session(ctx, sandbox, request), schema
+        ctx, sandbox, request, await _session(ctx, sandbox, request), schema, started
     )
     if not outcome.ok or outcome.structured_output is None:
         return AgentReply(outcome, None, _failure(outcome))
@@ -202,17 +204,34 @@ async def _continue_stopped(
     request: SessionRequest,
     outcome: SessionOutcome,
     schema: str,
+    started: datetime,
 ) -> SessionOutcome:
     cost, turns = outcome.cost_usd, outcome.turns
     prompt = render_prompt(PromptName.CONTINUE, {}, json_schema=schema)
     for _ in range(ctx.settings.limits.max_continues):
         if outcome.stopped_early is None or outcome.session_id is None:
             break
+        elapsed_s = (ctx.deps.clock() - started).total_seconds()
+        left = _remaining(request, cost, turns, elapsed_s)
+        if left is None:
+            log.info("%s session used up its limits, not continuing", request.role)
+            break
         log.info("%s session stopped early (%s), continuing", request.role, outcome.stopped_early)
-        resumed = replace(request, prompt=prompt, resume_session_id=outcome.session_id)
+        resumed = replace(left, prompt=prompt, resume_session_id=outcome.session_id)
         outcome = await _session(ctx, sandbox, resumed)
         cost, turns = cost + outcome.cost_usd, turns + outcome.turns
     return replace(outcome, cost_usd=cost, turns=turns)
+
+
+def _remaining(
+    request: SessionRequest, cost: float, turns: int, elapsed_s: float
+) -> SessionRequest | None:
+    max_turns = request.max_turns - turns
+    timeout_s = request.timeout_s - elapsed_s
+    budget = None if request.max_budget_usd is None else request.max_budget_usd - cost
+    if max_turns < 1 or timeout_s <= 0 or (budget is not None and budget <= 0):
+        return None
+    return replace(request, max_turns=max_turns, timeout_s=timeout_s, max_budget_usd=budget)
 
 
 def _failure(outcome: SessionOutcome) -> str:

@@ -32,6 +32,7 @@ _WORKER_TASK_FIELDS = frozenset(
         "head_sha",
         "session_id",
         "container_id",
+        "check_rounds",
         "ci_rounds",
         "review_rounds",
         "policy_rounds",

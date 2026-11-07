@@ -56,6 +56,7 @@ class GitState:
 
 @dataclass
 class Rounds:
+    check: int = 0
     ci: int = 0
     review: int = 0
     policy: int = 0

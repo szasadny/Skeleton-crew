@@ -266,6 +266,7 @@ class Harness:
         self.secret_findings: list[str] = []
         self.patches: list[bytes] = []
         self.patch_from_workspace: Callable[[ExecCall], bytes] | None = None
+        self.session_seconds = 0.0
         self.sleeps: list[float] = []
         self.sleep_hook: asyncio.Event | None = None
         self.sleeping = asyncio.Event()
@@ -284,6 +285,7 @@ class Harness:
         return ok(self.patches.pop(0) if len(self.patches) > 1 else self.patches[0])
 
     def _session(self, call: ExecCall) -> Any:
+        self.clock.advance(self.session_seconds)
         return ok(call.argv[1].encode())
 
     async def _scan(self, patch: bytes) -> list[str]:
