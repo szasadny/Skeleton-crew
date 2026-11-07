@@ -420,13 +420,14 @@ body.boot .hud {
 
 
 .skull { display: block; height: auto; overflow: visible; }
-.skull .cranium { fill: #1a1e22; stroke: var(--chrome); stroke-width: 2; stroke-linejoin: round; }
-.skull .socket { fill: #040506; }
-.skull .seam { fill: none; stroke: #7d868e; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
-.skull .eye { fill: #3a1411; transition: fill 0.4s; }
-.skull.active .eye {
+.skull .eye {
   fill: var(--optic);
-  filter: drop-shadow(0 0 2px var(--optic)) drop-shadow(0 0 6px var(--optic));
+  filter: drop-shadow(0 0 1px var(--optic)) drop-shadow(0 0 4px var(--optic));
+  transition: filter 0.4s;
+}
+.skull.active .eye {
+  fill: var(--optic-soft);
+  filter: drop-shadow(0 0 2px var(--optic)) drop-shadow(0 0 6px var(--optic)) drop-shadow(0 0 14px var(--optic));
   animation: eye-pulse 2.6s ease-in-out infinite;
 }
 
