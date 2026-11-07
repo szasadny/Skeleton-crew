@@ -4,7 +4,7 @@ from pydantic import SecretStr
 
 from skeleton_crew.agents.backends import claude_code, codex, gemini, opencode
 from skeleton_crew.agents.base import AgentBackend, BackendSpec
-from skeleton_crew.domain.settings import AppSettings
+from skeleton_crew.domain.settings import AppSettings, Role
 
 _BACKENDS: Mapping[str, BackendSpec] = {
     spec.name: spec for spec in (claude_code.SPEC, codex.SPEC, gemini.SPEC, opencode.SPEC)
@@ -75,7 +75,18 @@ def field_problems(settings: AppSettings) -> dict[str, list[str]]:
             errors[f"backend_options.{name}"] = [f"unknown agent backend {name}"]
         else:
             errors |= option_problems(spec, options)
-    return errors
+    return errors | _routed_effort_problems(settings)
+
+
+def _routed_effort_problems(settings: AppSettings) -> dict[str, list[str]]:
+    spec = _BACKENDS.get(settings.agents[Role.WORKER].backend)
+    if not settings.classifier.effort_routing or spec is None:
+        return {}
+    return {
+        f"classifier.effort_{size}": [f"not a {spec.display_name} effort"]
+        for size, effort in settings.classifier.routed_efforts.items()
+        if effort not in spec.efforts
+    }
 
 
 def settings_problems(settings: AppSettings) -> list[str]:

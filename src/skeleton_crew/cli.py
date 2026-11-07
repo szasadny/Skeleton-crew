@@ -10,6 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from skeleton_crew.agents.base import AgentBackend
 from skeleton_crew.agents.registry import backend_for
+from skeleton_crew.classifiers.base import Classifier
+from skeleton_crew.classifiers.registry import classifier_for
 from skeleton_crew.core.config import BootstrapConfig, get_config
 from skeleton_crew.core.db import make_engine, make_sessionmaker, run_migrations
 from skeleton_crew.core.logging import configure_logging
@@ -71,12 +73,16 @@ async def _build_deps(
         options = settings.backend_options.get(name, {})
         return backend_for(name, credentials=config.agent_credentials, options=options)
 
+    def classifier_factory(settings: AppSettings) -> Classifier:
+        return classifier_for(settings.classifier, config.agent_credentials)
+
     return PipelineDeps(
         config=config,
         sessionmaker=sessionmaker,
         gateway_factory=gateway_factory,
         runtime=DockerRuntime(),
         backend_factory=backend_factory,
+        classifier_factory=classifier_factory,
         secret_scanner=scan_patch,
         clock=_now,
         sleep=asyncio.sleep,

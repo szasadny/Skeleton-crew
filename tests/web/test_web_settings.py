@@ -11,6 +11,7 @@ from skeleton_crew.agents.registry import available_backends
 from skeleton_crew.core.audit import AuditKind
 from skeleton_crew.domain.settings import (
     AppSettings,
+    ClassifierSettings,
     Limits,
     Role,
     Weekday,
@@ -46,6 +47,9 @@ def _agents_form(**overrides: str) -> dict[str, str]:
     for backend, options in _DEFAULT_OPTIONS.items():
         for name, value in options.items():
             form[f"backend_options.{backend}.{name}"] = value
+    for name, value in ClassifierSettings().model_dump().items():
+        if isinstance(value, str):
+            form[f"classifier.{name}"] = value
     return form | overrides
 
 
@@ -253,6 +257,38 @@ async def test_agents_rejects_a_model_of_another_opencode_provider(web: Web) -> 
     assert status == 422
     assert "not a OpenCode model for provider=openai" in html
     assert (await web.settings()).agents == AppSettings().agents
+
+
+async def test_agents_saves_classifier_toggles_and_keeps_them_off_by_default(web: Web) -> None:
+    assert (await web.settings()).classifier.enabled is False
+    form = _agents_form(
+        **{
+            "classifier.provider": "openai_decisions",
+            "classifier.model": "gpt-6-luna",
+            "classifier.injection_screen": "on",
+            "classifier.effort_small": "low",
+        }
+    )
+    assert await _post(web, "/agents", form) == (303, "/agents?msg=saved")
+    chosen = (await web.settings()).classifier
+    assert (chosen.provider, chosen.injection_screen, chosen.prescreen) == (
+        "openai_decisions",
+        True,
+        False,
+    )
+
+
+async def test_agents_rejects_a_routed_effort_the_worker_backend_lacks(web: Web) -> None:
+    form = _agents_form(
+        **{
+            "classifier.effort_routing": "on",
+            "classifier.effort_large": "default",
+        }
+    )
+    status, html = await _post(web, "/agents", form)
+    assert status == 422
+    assert "not a Claude Code effort" in html
+    assert (await web.settings()).classifier == ClassifierSettings()
 
 
 async def test_agents_page_renders_backend_options_from_the_registry(web: Web) -> None:

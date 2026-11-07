@@ -80,6 +80,7 @@ class WorkerJob:
     paths: TaskPaths
     branch: str
     kind: TaskKind = TaskKind.ISSUE
+    effort: str | None = None
     continues_branch: bool = False
     pr_requested: bool = False
     git: GitState = field(default_factory=GitState)

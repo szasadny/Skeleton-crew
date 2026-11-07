@@ -67,6 +67,7 @@ Rulesets need a public repository or a paid plan. On a free private repository, 
      - Codex: `SC_AGENT_CREDENTIALS__OPENAI_API_KEY` (auth mode `api_key`) or `SC_AGENT_CREDENTIALS__CODEX_AUTH_JSON` (auth mode `subscription`): run `codex login` on a trusted machine and paste the content of `~/.codex/auth.json` on one line, in single quotes.
      - Gemini CLI: `SC_AGENT_CREDENTIALS__GEMINI_API_KEY` (auth mode `api_key`, from Google AI Studio) or `SC_AGENT_CREDENTIALS__GEMINI_OAUTH_CREDS_JSON` (auth mode `subscription`): run `gemini`, choose *Sign in with Google*, and paste the content of `~/.gemini/oauth_creds.json` on one line, in single quotes. Set the role's effort to `default`.
      - OpenCode: the key of the provider chosen on the Agents page: `SC_AGENT_CREDENTIALS__ANTHROPIC_API_KEY`, `__OPENAI_API_KEY`, `__OPENROUTER_API_KEY` or `__GEMINI_API_KEY`.
+     - Optional classifier (Agents page, off by default): `SC_AGENT_CREDENTIALS__TYPESAFE_API_KEY` for Jev, or `SC_AGENT_CREDENTIALS__OPENAI_API_KEY` for OpenAI Decisions. It stays on the controller.
      - A subscription login file holds a refresh token. The CLI may rotate it inside the container, which can make the copy in `.env` stop working; log in again and replace it if a session reports an auth error.
    - `SC_SESSION_SECRET`: output of `openssl rand -hex 32`.
    - `SC_SITE_ADDRESS`: the VM's LAN IP or hostname (the installer fills in the first IP it finds).

@@ -157,8 +157,11 @@ async def run_agent[T: BaseModel](
     context: Mapping[str, object],
     output: type[T],
     resume_session_id: str | None = None,
+    effort: str | None = None,
 ) -> AgentReply[T]:
     agent = ctx.settings.agents[role]
+    if effort is not None:
+        agent = agent.model_copy(update={"effort": effort})
     limits = ctx.settings.limits
     schema = json_schema(output)
     request = SessionRequest(

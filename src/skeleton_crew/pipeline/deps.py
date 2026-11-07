@@ -5,6 +5,7 @@ from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from skeleton_crew.agents.base import AgentBackend
+from skeleton_crew.classifiers.base import Classifier
 from skeleton_crew.core.audit import AuditKind, AuditOutcome
 from skeleton_crew.core.config import BootstrapConfig
 from skeleton_crew.domain.settings import AppSettings, Role
@@ -21,6 +22,7 @@ class PipelineDeps:
     gateway_factory: Callable[[AppSettings, AuditSink], Gateway]
     runtime: ContainerRuntime
     backend_factory: Callable[[str, AppSettings], AgentBackend]
+    classifier_factory: Callable[[AppSettings], Classifier]
     secret_scanner: Callable[[bytes], Awaitable[list[str]]]
     clock: Callable[[], datetime]
     sleep: Callable[[float], Awaitable[None]]
@@ -38,6 +40,7 @@ class RunContext:
     deadline: datetime
     audit: AuditSink
     required_checks: frozenset[str]
+    classifier: Classifier | None
 
 
 def audit_sink(sessionmaker: async_sessionmaker[AsyncSession], run_id: int | None) -> AuditSink:

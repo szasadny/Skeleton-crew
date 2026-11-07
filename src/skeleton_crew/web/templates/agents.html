@@ -27,6 +27,25 @@
     {% endfor %}
   </fieldset>
   {% endfor %}
+  {% set c = "classifier." %}
+  {% set classifier = classifiers.get(values.get(c ~ "provider")) %}
+  {% set worker = specs.get(values.get("agents.worker.backend")) %}
+  <fieldset>
+    <legend>Classifier</legend>
+    <p class="hint">Optional fast checks before agents run. Each one is off until you turn it on.</p>
+    <div class="grid">
+      {{ m.select(c ~ "provider", "Provider", classifiers.keys(), values, errors) }}
+      {{ m.select(c ~ "model", "Model", classifier.models if classifier else (), values, errors) }}
+    </div>
+    {{ m.checkbox(c ~ "injection_screen", "Injection screen: stop issue text and CI output that try to steer the agent", values, errors) }}
+    {{ m.checkbox(c ~ "prescreen", "Pre-screen: send clearly too large or unclear issues to HITL", values, errors) }}
+    {{ m.checkbox(c ~ "effort_routing", "Effort routing: pick the worker effort by issue size", values, errors) }}
+    <div class="grid">
+      {% for size in ("small", "medium", "large") %}
+      {{ m.select(c ~ "effort_" ~ size, "Effort for " ~ size ~ " issues", worker.efforts if worker else (), values, errors) }}
+      {% endfor %}
+    </div>
+  </fieldset>
   <button type="submit">Save</button>
 </form>
 {% endblock %}

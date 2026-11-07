@@ -11,6 +11,7 @@ from skeleton_crew.domain.settings import Role
 from skeleton_crew.domain.task_state import TERMINAL_TASK_STATES, TaskEvent, TaskState
 from skeleton_crew.github.gateway import CiState, FailedJob
 from skeleton_crew.pipeline.ci_watcher import wait_for_ci
+from skeleton_crew.pipeline.classify import injection_reason, screen_output
 from skeleton_crew.pipeline.deps import RunContext
 from skeleton_crew.pipeline.escalation import Escalation, escalate_issue
 from skeleton_crew.pipeline.repo_commands import run_repo_command
@@ -30,6 +31,8 @@ from skeleton_crew.pipeline.worker_review import review_change
 from skeleton_crew.runtime.workspace import checkout_commit, make_agent_copy
 
 CI_LOG_CHARS = 20_000
+# Produced by the repo's code and dependencies, not by a trusted person.
+_REPO_OUTPUT = frozenset({FollowUpKind.CI_FAILED, FollowUpKind.CHECK_FAILED})
 NOTE_CHARS = 1000
 DRY_RUN_CI = "skipped (dry run, nothing was pushed)"
 
@@ -196,6 +199,10 @@ def _prompt(job: WorkerJob, follow_up: FollowUp | None) -> tuple[PromptName, dic
 
 
 async def _code(job: WorkerJob, follow_up: FollowUp | None) -> WorkerResult:
+    if follow_up is not None and follow_up.kind in _REPO_OUTPUT:
+        problem = await screen_output(job.ctx, follow_up.details)
+        if problem is not None:
+            raise Escalation(injection_reason(f"{follow_up.kind.value} output", problem))
     prompt, context = _prompt(job, follow_up)
     if job.sandbox is None:
         await start_worker_sandbox(job)
@@ -209,6 +216,7 @@ async def _code(job: WorkerJob, follow_up: FollowUp | None) -> WorkerResult:
         context=context,
         output=WorkerResult,
         resume_session_id=job.session_id if prompt is PromptName.WORKER_FOLLOWUP else None,
+        effort=job.effort,
     )
     if reply.outcome.session_id is not None:
         job.session_id = reply.outcome.session_id

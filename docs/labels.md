@@ -42,7 +42,9 @@ The controller comments on the issue, removes `skeleton` and adds `skeleton HITL
 - the setup command fails;
 - the maximum number of check, CI, policy or review rounds is reached, or CI does not report or finish in time;
 - an existing branch has commits Skeleton Crew did not push, or its PR was closed without merging;
-- the worker times out or the run window ends.
+- the worker times out or the run window ends;
+- with the injection screen on, the issue text or the CI or check output looks like prompt injection, or the classifier gives no valid answer; edit the text to go on;
+- with the pre-screen on, the classifier is sure the issue is too large or unclear.
 
 To retry an issue whose existing branch escalated, delete the branch `skeleton/<number>-<slug>`, remove `skeleton HITL` and add `skeleton` again. The next run starts a fresh branch.
 

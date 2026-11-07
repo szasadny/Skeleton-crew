@@ -31,7 +31,7 @@ Never break these, not even for debugging.
 8. **Agent output is untrusted.** Parse it only through `domain/schemas.py`, never with ad-hoc `json.loads`.
 9. **Secrets only in `.env`.** Never in source, tests, fixtures or defaults. Never print, log or echo them.
 10. **Never edit an applied Alembic migration.** Always add a new one.
-11. **Generic.** No code may assume a specific target stack, language or repo, or a specific agent backend outside `agents/backends/`.
+11. **Generic.** No code may assume a specific target stack, language or repo, a specific agent backend outside `agents/backends/`, or a specific classifier outside `classifiers/`.
 
 ## Stack
 
@@ -44,6 +44,7 @@ Never break these, not even for debugging.
 | Containers | docker-py, Sysbox runtime, Squid egress proxy |
 | Scheduling | APScheduler 3.x |
 | Agents | Pluggable CLI backends behind `agents/base.py`: Claude Code (default), Codex, Gemini CLI, OpenCode |
+| Classifiers | Optional, off by default, behind `classifiers/base.py`: Jev (default), OpenAI Decisions, over `httpx` |
 | Secret scan | gitleaks |
 
 ## Project structure
@@ -58,11 +59,12 @@ src/skeleton_crew/
   github/     gateway (+ private _git, _ci), write guard, trust gate, preflight
   runtime/    containers, workspace, egress, secret scan, images/
   agents/     backend interface, registry, backends/ (claude_code, codex, gemini, opencode, _shared), prompts/, rules/
+  classifiers/ optional classifier interface, registry, providers (jev, openai_decisions)
   pipeline/   run controller, worker flow, job engine, branch update, PR maintenance, refine, CI watcher, retention
   scheduler/  cron triggers
   web/        routes, templates, static
   cli.py      serve, hash-password, preflight
-tests/        pytest; tests/fakes/ for GitHub, Docker, agent backends, run control
+tests/        pytest; tests/fakes/ for GitHub, Docker, agent backends, classifiers, run control
 docs/         user docs
 docker/       controller Dockerfile
 deploy/       Caddyfile

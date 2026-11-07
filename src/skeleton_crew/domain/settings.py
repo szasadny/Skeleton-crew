@@ -31,6 +31,8 @@ DEFAULT_BACKEND = "claude_code"
 DEFAULT_MODEL = "opus"
 DEFAULT_EFFORT = "medium"
 DEFAULT_REVIEWER_EFFORT = "high"
+DEFAULT_CLASSIFIER = "jev"
+DEFAULT_CLASSIFIER_MODEL = "jev-latest"
 
 _DOMAIN_RE = re.compile(r"^(\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
 _MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/\[\]-]{0,99}$")
@@ -98,6 +100,18 @@ def _identifier(value: str, what: str) -> str:
     return value
 
 
+def _model(value: str) -> str:
+    if not _MODEL_RE.fullmatch(value):
+        raise ValueError("model name contains unsupported characters")
+    return value
+
+
+def _effort(value: str) -> str:
+    if not _EFFORT_RE.fullmatch(value):
+        raise ValueError("effort contains unsupported characters")
+    return value
+
+
 class RoleAgent(_Frozen):
     backend: str = DEFAULT_BACKEND
     model: str = DEFAULT_MODEL
@@ -112,16 +126,12 @@ class RoleAgent(_Frozen):
     @field_validator("model")
     @classmethod
     def _valid_model(cls, value: str) -> str:
-        if not _MODEL_RE.fullmatch(value):
-            raise ValueError("model name contains unsupported characters")
-        return value
+        return _model(value)
 
     @field_validator("effort")
     @classmethod
     def _valid_effort(cls, value: str) -> str:
-        if not _EFFORT_RE.fullmatch(value):
-            raise ValueError("effort contains unsupported characters")
-        return value
+        return _effort(value)
 
 
 def _default_agents() -> dict[Role, RoleAgent]:
@@ -251,6 +261,44 @@ class SelfHostedCi(_Frozen):
         return _domains(value)
 
 
+class ClassifierSettings(_Frozen):
+    provider: str = DEFAULT_CLASSIFIER
+    model: str = DEFAULT_CLASSIFIER_MODEL
+    injection_screen: bool = False
+    prescreen: bool = False
+    effort_routing: bool = False
+    effort_small: str = "low"
+    effort_medium: str = "medium"
+    effort_large: str = "high"
+
+    @field_validator("provider")
+    @classmethod
+    def _valid_provider(cls, value: str) -> str:
+        return _identifier(value, "provider")
+
+    @field_validator("model")
+    @classmethod
+    def _valid_model(cls, value: str) -> str:
+        return _model(value)
+
+    @field_validator("effort_small", "effort_medium", "effort_large")
+    @classmethod
+    def _valid_effort(cls, value: str) -> str:
+        return _effort(value)
+
+    @property
+    def enabled(self) -> bool:
+        return self.injection_screen or self.prescreen or self.effort_routing
+
+    @property
+    def routed_efforts(self) -> dict[str, str]:
+        return {
+            "small": self.effort_small,
+            "medium": self.effort_medium,
+            "large": self.effort_large,
+        }
+
+
 class AppSettings(_Frozen):
     schedule: Schedule = Schedule()
     limits: Limits = Limits()
@@ -260,6 +308,7 @@ class AppSettings(_Frozen):
     repo: RepoPolicy = RepoPolicy()
     runtime: RuntimeLimits = RuntimeLimits()
     ci: SelfHostedCi = SelfHostedCi()
+    classifier: ClassifierSettings = ClassifierSettings()
     dry_run: bool = True
     kill_switch: bool = False
 

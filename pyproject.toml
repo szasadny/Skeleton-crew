@@ -84,7 +84,7 @@ layers = [
     "skeleton_crew.web",
     "skeleton_crew.scheduler",
     "skeleton_crew.pipeline",
-    "skeleton_crew.github | skeleton_crew.runtime | skeleton_crew.agents | skeleton_crew.store",
+    "skeleton_crew.github | skeleton_crew.runtime | skeleton_crew.agents | skeleton_crew.classifiers | skeleton_crew.store",
     "skeleton_crew.models",
     "skeleton_crew.core",
     "skeleton_crew.domain",
