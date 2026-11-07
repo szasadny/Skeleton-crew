@@ -43,7 +43,7 @@ Never break these, not even for debugging.
 | GitHub | githubkit with GitHub App auth |
 | Containers | docker-py, Sysbox runtime, Squid egress proxy |
 | Scheduling | APScheduler 3.x |
-| Agents | Pluggable CLI backends behind `agents/base.py`; MVP adapter: Claude Code (`claude -p`) |
+| Agents | Pluggable CLI backends behind `agents/base.py`: Claude Code (default), Codex, Gemini CLI, OpenCode |
 | Secret scan | gitleaks |
 
 ## Project structure
@@ -57,7 +57,7 @@ src/skeleton_crew/
   store/      async data access (settings, rules, runs, audit)
   github/     gateway (+ private _git, _ci), write guard, trust gate, preflight
   runtime/    containers, workspace, egress, secret scan, images/
-  agents/     backend interface, registry, backends/ (claude_code, …), prompts/, rules/
+  agents/     backend interface, registry, backends/ (claude_code, codex, gemini, opencode, _shared), prompts/, rules/
   pipeline/   run controller, worker flow, job engine, branch update, PR maintenance, refine, CI watcher, retention
   scheduler/  cron triggers
   web/        routes, templates, static
