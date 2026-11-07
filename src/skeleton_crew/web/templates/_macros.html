@@ -18,7 +18,7 @@
 </div>
 {% endmacro %}
 
-{% macro number(spec, values, errors, hint=none) %}
+{% macro number(spec, values, errors) %}
 <div class="field">
   <label for="{{ spec.name }}">{{ spec.label }}</label>
   <input id="{{ spec.name }}" name="{{ spec.name }}" type="number" step="{{ spec.step }}"
@@ -26,7 +26,6 @@
     {%- if spec.max is not none %} max="{{ spec.max }}"{% endif %}
     {%- if not spec.optional %} required{% endif %} value="{{ value_of(values, spec.name) }}">
   {% if spec.optional %}<p class="hint">Leave empty for no limit.</p>{% endif %}
-  {% if hint %}<p class="hint">{{ hint }}</p>{% endif %}
   {{ field_errors(errors, spec.name) }}
 </div>
 {% endmacro %}
@@ -72,3 +71,15 @@
 {% macro rule_tabs(keys, key) %}
 <nav class="tabs">{% for k in keys %}<a href="/rules/{{ k }}"{% if k == key %} class="current"{% endif %}>{{ k }}</a>{% endfor %}</nav>
 {% endmacro %}
+
+{% macro skull(active, oob=false) %}
+<svg id="skull" class="skull{% if active %} active{% endif %}" viewBox="0 0 64 64" role="img" aria-label="{{ 'Crew active' if active else 'Crew idle' }}"{% if oob %} hx-swap-oob="true"{% endif %}>
+  <path class="cranium" d="M32 4 45 8 51 18 52 28 49 35 45 38 45 46 40 52 24 52 19 46 19 38 15 35 12 28 13 18 19 8Z"/>
+  <path class="socket" d="M17 24 29 22.5 29.5 31 20 32ZM47 24 35 22.5 34.5 31 44 32Z"/>
+  <circle class="eye" cx="24" cy="27" r="2.6"/>
+  <circle class="eye" cx="40" cy="27" r="2.6"/>
+  <path class="seam" d="M32 4V15M13 19 19 21M51 19 45 21M32 33 35.5 39H28.5ZM19 38 24 41.5M45 38 40 41.5M23 44H41M26 41.5V47M29 41.5V47M32 41.5V47M35 41.5V47M38 41.5V47"/>
+</svg>
+{% endmacro %}
+
+{% macro state(value) %}<span class="state" data-state="{{ value }}">{{ value }}</span>{% endmacro %}

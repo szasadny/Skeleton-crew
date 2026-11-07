@@ -11,7 +11,7 @@
     <td><a href="/runs/{{ run.id }}">{{ run.id }}</a></td>
     <td>{{ run.trigger }}</td>
     <td>{{ "Yes" if run.dry_run else "No" }}</td>
-    <td>{{ run.state.value }}</td>
+    <td>{{ m.state(run.state.value) }}</td>
     <td>{{ run.started_at | dt }}</td>
     <td>{{ run.finished_at | dt }}</td>
     <td>{{ run.note or "" }}</td>

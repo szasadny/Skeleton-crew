@@ -18,7 +18,7 @@
   <tr>
     <td>{{ event.at | dt }}</td>
     <td>{{ event.kind.value }}</td>
-    <td>{{ event.outcome.value }}</td>
+    <td>{{ m.state(event.outcome.value) }}</td>
     <td>{{ event.summary }}</td>
     <td>{% if event.run_id %}<a href="/runs/{{ event.run_id }}">{{ event.run_id }}</a>{% endif %}</td>
     <td class="mono">{{ event.payload | tojson if event.payload else "" }}</td>

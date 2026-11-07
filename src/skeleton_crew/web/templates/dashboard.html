@@ -2,7 +2,7 @@
 {% block title %}Dashboard{% endblock %}
 {% block content %}
 <h1>Dashboard</h1>
-<div hx-get="/partials/status" hx-trigger="every 5s" hx-swap="innerHTML">
+<div class="status" hx-get="/partials/status" hx-trigger="every 5s" hx-swap="innerHTML">
   {% include "_status.html" %}
 </div>
 {% endblock %}

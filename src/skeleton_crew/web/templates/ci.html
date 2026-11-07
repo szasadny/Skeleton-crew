@@ -12,7 +12,7 @@
   <thead><tr><th>Runner</th><th>Status</th><th>Detail</th></tr></thead>
   <tbody>
   {% for runner in runners %}
-  <tr><td>{{ runner.name }}</td><td>{{ runner.status.value }}</td><td>{{ runner.reason }}</td></tr>
+  <tr><td>{{ runner.name }}</td><td>{{ m.state(runner.status.value) }}</td><td>{{ runner.reason }}</td></tr>
   {% endfor %}
   </tbody>
 </table>

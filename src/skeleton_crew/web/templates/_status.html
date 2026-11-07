@@ -1,50 +1,77 @@
 {% import "_macros.html" as m with context %}
-<dl class="facts">
-  <dt>State</dt><dd>{{ "Running" if running else "Idle" }}</dd>
-  <dt>Next scheduled run</dt><dd>{{ next_run | dt if next_run else "Not scheduled" }}</dd>
-  <dt>Dry run</dt><dd>{{ "On" if settings.dry_run else "Off" }}</dd>
-  {% if settings.ci.enabled %}<dt>CI runners</dt><dd><a href="/ci">{% for status, count in runners %}{{ count }} {{ status }}{% if not loop.last %}, {% endif %}{% else %}none{% endfor %}</a></dd>{% endif %}
-  <dt>Kill switch</dt><dd{% if settings.kill_switch %} class="danger"{% endif %}>{{ "Engaged" if settings.kill_switch else "Off" }}</dd>
-</dl>
-<div class="actions">
-  <form method="post" action="/actions/run-now">{{ m.csrf() }}<button type="submit"{% if running or settings.kill_switch %} disabled{% endif %}>Run now</button></form>
+{% if path == "/partials/status" %}{{ m.skull(running, oob=true) }}{% endif %}
+<section class="vitals">
+  <div class="vital{% if running %} live{% endif %}">
+    <span class="vital-label">State</span>
+    <span class="vital-value">{{ "Running" if running else "Idle" }}</span>
+  </div>
+  <div class="vital">
+    <span class="vital-label">Next scheduled run</span>
+    <span class="vital-value small">{{ next_run | dt if next_run else "Not scheduled" }}</span>
+  </div>
+  <div class="vital{% if settings.dry_run %} caution{% endif %}">
+    <span class="vital-label">Dry run</span>
+    <span class="vital-value">{{ "On" if settings.dry_run else "Off" }}</span>
+  </div>
+  {% if settings.ci.enabled %}
+  <a class="vital" href="/ci">
+    <span class="vital-label">CI runners</span>
+    <span class="vital-value small">{% for status, count in runners %}{{ count }} {{ status }}{% if not loop.last %}, {% endif %}{% else %}none{% endfor %}</span>
+  </a>
+  {% endif %}
+  <div class="vital{% if settings.kill_switch %} alarm{% endif %}">
+    <span class="vital-label">Kill switch</span>
+    <span class="vital-value">{{ "Engaged" if settings.kill_switch else "Off" }}</span>
+  </div>
+</section>
+
+<section class="controls">
+  <form method="post" action="/actions/run-now">{{ m.csrf() }}<button type="submit" class="big"{% if running or settings.kill_switch %} disabled{% endif %}>Run now</button></form>
   <form method="post" action="/actions/dry-run">{{ m.csrf() }}
     <input type="hidden" name="enabled" value="{{ 'off' if settings.dry_run else 'on' }}">
-    <button type="submit" class="secondary">{{ "Disable dry run" if settings.dry_run else "Enable dry run" }}</button>
+    <button type="submit" class="secondary big">{{ "Disable dry run" if settings.dry_run else "Enable dry run" }}</button>
   </form>
-  {% if settings.kill_switch %}
-  <form method="post" action="/actions/release">{{ m.csrf() }}<button type="submit" class="secondary">Release kill switch</button></form>
-  {% else %}
-  <form method="post" action="/actions/kill">{{ m.csrf() }}<button type="submit" class="danger">Kill switch</button></form>
-  {% endif %}
+  <div class="hazard">
+    {% if settings.kill_switch %}
+    <form method="post" action="/actions/release">{{ m.csrf() }}<button type="submit" class="secondary big">Release kill switch</button></form>
+    {% else %}
+    <form method="post" action="/actions/kill">{{ m.csrf() }}<button type="submit" class="danger big">Kill switch</button></form>
+    {% endif %}
+  </div>
+</section>
+
+<div class="split">
+  <section class="panel">
+    <h2>Last run</h2>
+    {% if last_run %}
+    <p>
+      <a href="/runs/{{ last_run.id }}">Run {{ last_run.id }}</a>: {{ last_run.state.value }}, {{ last_run.trigger }}{% if last_run.dry_run %}, dry run{% endif %}.
+      Started {{ last_run.started_at | dt }}{% if last_run.finished_at %}, finished {{ last_run.finished_at | dt }}{% endif %}.
+    </p>
+    {% if last_run_blocked %}<p>{{ m.blockers_badge(last_run_blocked) }}</p>{% endif %}
+    {% if last_run_states %}<p class="chips">{% for state, count in last_run_states %}<span class="state" data-state="{{ state }}">{{ state }} {{ count }}</span>{% endfor %}</p>{% endif %}
+    {% else %}
+    <p class="empty">No runs yet.</p>
+    {% endif %}
+  </section>
+
+  <section class="panel">
+    <h2>Active tasks</h2>
+    {% if active_tasks %}
+    <table>
+      <thead><tr><th>Issue</th><th>State</th><th>PR</th></tr></thead>
+      <tbody>
+      {% for task in active_tasks %}
+      <tr>
+        <td>#{{ task.issue_number }} {{ task.issue_title }}</td>
+        <td>{{ m.state(task.state.value) }}</td>
+        <td>{% if task.pr_number %}<a href="https://github.com/{{ repo }}/pull/{{ task.pr_number }}">#{{ task.pr_number }}</a>{% endif %}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty">No active tasks.</p>
+    {% endif %}
+  </section>
 </div>
-
-<h2>Last run</h2>
-{% if last_run %}
-<p>
-  <a href="/runs/{{ last_run.id }}">Run {{ last_run.id }}</a>: {{ last_run.state.value }}, {{ last_run.trigger }}{% if last_run.dry_run %}, dry run{% endif %}.
-  Started {{ last_run.started_at | dt }}{% if last_run.finished_at %}, finished {{ last_run.finished_at | dt }}{% endif %}.
-</p>
-{% if last_run_blocked %}<p>{{ m.blockers_badge(last_run_blocked) }}</p>{% endif %}
-{% if last_run_states %}<p>Tasks: {% for state, count in last_run_states %}{{ state }} {{ count }}{% if not loop.last %}, {% endif %}{% endfor %}</p>{% endif %}
-{% else %}
-<p>No runs yet.</p>
-{% endif %}
-
-<h2>Active tasks</h2>
-{% if active_tasks %}
-<table>
-  <thead><tr><th>Issue</th><th>State</th><th>PR</th></tr></thead>
-  <tbody>
-  {% for task in active_tasks %}
-  <tr>
-    <td>#{{ task.issue_number }} {{ task.issue_title }}</td>
-    <td>{{ task.state.value }}</td>
-    <td>{% if task.pr_number %}<a href="https://github.com/{{ repo }}/pull/{{ task.pr_number }}">#{{ task.pr_number }}</a>{% endif %}</td>
-  </tr>
-  {% endfor %}
-  </tbody>
-</table>
-{% else %}
-<p>No active tasks.</p>
-{% endif %}

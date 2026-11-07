@@ -6,22 +6,30 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="htmx-config" content='{"includeIndicatorStyles": false, "allowEval": false, "allowScriptTags": false}'>
   <title>{% block title %}{% endblock %} - Skeleton Crew</title>
+  <link rel="icon" href="/static/skull.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/app.css">
   <script src="/static/htmx.min.js" defer></script>
 </head>
-<body hx-headers='{{ {"X-CSRF-Token": csrf_token} | tojson }}'>
-  <header class="topbar">
-    <span class="brand">Skeleton Crew</span>
-    {% if authenticated %}
-    <nav class="nav">
+<body hx-headers='{{ {"X-CSRF-Token": csrf_token} | tojson }}' class="{{ 'console' if authenticated else 'boot' }}">
+  {% if authenticated %}
+  <aside class="spine">
+    <a href="/" class="brand">
+      {{ m.skull(running) }}
+      <span class="wordmark">Skeleton<span>Crew</span></span>
+    </a>
+    <p class="unit">{{ repo }}</p>
+    <nav class="vertebrae">
       {% for href, label, prefix in nav %}
-      <a href="{{ href }}"{% if (path == "/" if prefix == "/" else path.startswith(prefix)) %} class="current"{% endif %}>{{ label }}</a>
+      <a href="{{ href }}" class="vertebra{% if (path == "/" if prefix == "/" else path.startswith(prefix)) %} current{% endif %}">
+        <span class="bone"></span><span class="label">{{ label }}</span><span class="segment">{{ "C%d" % loop.index if loop.index <= 7 else "T%d" % (loop.index - 7) }}</span>
+      </a>
       {% endfor %}
     </nav>
-    <form method="post" action="/logout" class="logout">{{ m.csrf() }}<button type="submit" class="secondary">Log out</button></form>
-    {% endif %}
-  </header>
-  <main>
+    <form method="post" action="/logout" class="logout">{{ m.csrf() }}<button type="submit" class="ghost">Log out</button></form>
+  </aside>
+  {% endif %}
+  <main class="hud">
+    {% if authenticated %}<p class="kicker">sc://{{ path.strip("/") or "dashboard" }}<span class="cursor"></span></p>{% endif %}
     {% if message %}<p class="notice">{{ message }}</p>{% endif %}
     {% block content %}{% endblock %}
   </main>

@@ -45,11 +45,14 @@ MESSAGES = {
 def render(
     request: Request, name: str, context: dict[str, Any] | None = None, status_code: int = 200
 ) -> Response:
-    secret = get_state(request).config.session_secret.get_secret_value()
+    state = get_state(request)
+    secret = state.config.session_secret.get_secret_value()
     message_key = request.query_params.get("msg", "")
     full_context: dict[str, Any] = {
         "csrf_token": csrf_token(request, secret),
         "authenticated": is_authenticated(request),
+        "running": state.controller.is_running,
+        "repo": state.config.repo,
         "nav": NAV,
         "path": request.url.path,
         "message": MESSAGES.get(message_key),

@@ -3,7 +3,7 @@
 {% block content %}
 <h1>Run {{ run.id }}</h1>
 <dl class="facts">
-  <dt>State</dt><dd>{{ run.state.value }}</dd>
+  <dt>State</dt><dd>{{ m.state(run.state.value) }}</dd>
   <dt>Trigger</dt><dd>{{ run.trigger }}{% if run.dry_run %}, dry run{% endif %}</dd>
   <dt>Started</dt><dd>{{ run.started_at | dt }}</dd>
   <dt>Finished</dt><dd>{{ run.finished_at | dt }}</dd>
@@ -20,7 +20,7 @@
   <tr>
     <td>#{{ task.issue_number }} {{ task.issue_title }}</td>
     <td>{{ task.kind.value }}</td>
-    <td>{{ task.state.value }}</td>
+    <td>{{ m.state(task.state.value) }}</td>
     <td>{% if task.pr_number %}<a href="https://github.com/{{ repo }}/pull/{{ task.pr_number }}">#{{ task.pr_number }}</a>{% endif %}</td>
     <td>{{ task.check_rounds }} / {{ task.ci_rounds }} / {{ task.policy_rounds }} / {{ task.review_rounds }}</td>
     <td>${{ "%.2f" | format(task.cost_usd) }}</td>
@@ -50,7 +50,7 @@
   {% for task in refines %}
   <tr>
     <td>#{{ task.issue_number }}</td>
-    <td>{{ task.state.value }}</td>
+    <td>{{ m.state(task.state.value) }}</td>
     <td>${{ "%.2f" | format(task.cost_usd) }}</td>
     <td>{{ task.error or "" }}</td>
     <td><a href="/runs/{{ run.id }}/transcripts/{{ refine_keys[task.id] }}">Transcripts</a></td>

@@ -1,8 +1,16 @@
 {% extends "base.html" %}
 {% block title %}Log in{% endblock %}
 {% block content %}
-<section class="narrow">
-  <h1>Log in</h1>
+<section class="boot-screen">
+  {{ m.skull(true) }}
+  <ol class="boot-log" aria-hidden="true">
+    <li>skeleton crew // endoskeleton os</li>
+    <li>neural net processor .......... online</li>
+    <li>github gateway ................ standby</li>
+    <li>merge capability .............. <em>absent</em></li>
+    <li>operator identity ............. <strong>unverified</strong></li>
+  </ol>
+  <h1>Authorization required</h1>
   {% if error %}<div class="alert"><p>{{ error }}</p></div>{% endif %}
   <form method="post" action="/login">
     {{ m.csrf() }}
@@ -10,7 +18,7 @@
       <label for="password">Password</label>
       <input id="password" name="password" type="password" autocomplete="current-password" required autofocus>
     </div>
-    <button type="submit">Log in</button>
+    <button type="submit" class="big">Log in</button>
   </form>
 </section>
 {% endblock %}

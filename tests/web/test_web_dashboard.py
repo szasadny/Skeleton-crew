@@ -35,6 +35,18 @@ async def test_dashboard_shows_idle_state_without_schedule(web: Web) -> None:
     assert "X-CSRF-Token" in html
 
 
+async def test_skull_eyes_follow_the_run_state(web: Web) -> None:
+    idle = (await web.client.get("/")).text
+    assert 'class="skull"' in idle
+    assert "hx-swap-oob" not in idle
+
+    web.controller.running = True
+    assert 'class="skull active"' in (await web.client.get("/runs")).text
+    partial = (await web.client.get("/partials/status")).text
+    assert 'class="skull active"' in partial
+    assert 'hx-swap-oob="true"' in partial
+
+
 async def test_dashboard_shows_running_state_and_next_run(web: Web) -> None:
     web.controller.running = True
     web.scheduler.apply(AppSettings(schedule=Schedule(weekdays=frozenset({Weekday.MON}))))
