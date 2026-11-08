@@ -14,7 +14,7 @@ router = APIRouter()
 _NUMBERS = number_specs("ci", SelfHostedCi, ["runners", "cpus", "memory_gb", "pids"])
 
 
-def _live(request: Request) -> Mapping[str, Any]:
+def _live(request: Request, _values: Mapping[str, object]) -> Mapping[str, Any]:
     state = get_state(request)
     return {
         "runners": state.runners.statuses(),

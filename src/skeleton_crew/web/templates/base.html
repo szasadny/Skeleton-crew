@@ -20,10 +20,13 @@
     </a>
     <p class="unit">{{ repo }}</p>
     <nav class="vertebrae">
-      {% for href, label, prefix in nav %}
+      {% for group in nav %}
+      <p class="region">{{ group.title }}</p>
+      {% for href, label, prefix in group.links %}
       <a href="{{ href }}" class="vertebra{% if (path == "/" if prefix == "/" else path.startswith(prefix)) %} current{% endif %}">
-        <span class="bone"></span><span class="label">{{ label }}</span><span class="segment">{{ "C%d" % loop.index if loop.index <= 7 else "T%d" % (loop.index - 7) }}</span>
+        <span class="bone"></span><span class="label">{{ label }}</span><span class="segment">{{ group.code }}{{ loop.index }}</span>
       </a>
+      {% endfor %}
       {% endfor %}
     </nav>
     <form method="post" action="/logout" class="logout">{{ m.csrf() }}<button type="submit" class="ghost">Log out</button></form>
@@ -31,7 +34,7 @@
   {% endif %}
   <main class="hud">
     {% if authenticated %}<p class="kicker">sc://{{ path.strip("/") or "dashboard" }}<span class="cursor"></span></p>{% endif %}
-    {% if message %}<p class="notice">{{ message }}</p>{% endif %}
+    {% block flash %}{% if message %}<p class="notice">{{ message }}</p>{% endif %}{% endblock %}
     {% block content %}{% endblock %}
   </main>
 </body>

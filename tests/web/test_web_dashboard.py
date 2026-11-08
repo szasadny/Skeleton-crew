@@ -100,7 +100,7 @@ async def test_kill_switch_sits_behind_glass_only_while_armed(web: Web) -> None:
     await web.post("/actions/kill")
     engaged = (await web.client.get("/partials/status")).text
     assert "data-break-glass" not in engaged
-    assert "hx-preserve" not in engaged
+    assert 'id="kill-switch"' not in engaged
 
 
 async def test_release_kill_switch(web: Web) -> None:
@@ -151,3 +151,24 @@ async def test_last_run_without_blockers_shows_no_badge(web: Web) -> None:
         await runs_store.add_worker_task(session, run.id, 1, "T")
         await session.commit()
     assert "with blockers" not in (await web.client.get("/")).text
+
+
+async def test_sidebar_puts_monitoring_before_configuration(web: Web) -> None:
+    html = (await web.client.get("/")).text
+    links = ["/runs", "/logs", "/repo", "/agents", "/rules/common", "/schedule", "/limits", "/ci"]
+    positions = [html.index(f'<a href="{link}" class="vertebra') for link in links]
+    assert positions == sorted(positions)
+    monitor, configure = html.index(">Monitor<"), html.index(">Configure<")
+    assert monitor < positions[0] < configure < positions[2]
+    assert '<span class="segment">C3</span>' in html
+    assert '<span class="segment">T6</span>' in html
+
+
+async def test_dashboard_message_sits_between_controls_and_panels(web: Web) -> None:
+    response = await web.post("/actions/kill")
+    html = (await web.client.get(response.headers["location"])).text
+    notice = html.index('<p class="notice">Kill switch engaged.')
+    assert html.index("Release kill switch") < notice < html.index("<h2>Last run</h2>")
+    assert html.count('class="notice"') == 1
+    partial = (await web.client.get("/partials/status")).text
+    assert '<div id="flash" hx-preserve></div>' in partial

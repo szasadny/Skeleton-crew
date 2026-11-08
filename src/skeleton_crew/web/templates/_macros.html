@@ -39,9 +39,20 @@
 </div>
 {% endmacro %}
 
-{% macro checkbox(name, label, values, errors) %}
+{% macro checkbox(name, label, values, errors, disabled=false) %}
 <div class="field checkbox">
-  <label><input name="{{ name }}" type="checkbox"{% if values.get(name) %} checked{% endif %}> {{ label }}</label>
+  <label><input name="{{ name }}" type="checkbox"{% if disabled %} disabled{% elif values.get(name) %} checked{% endif %}> {{ label }}</label>
+  {{ field_errors(errors, name) }}
+</div>
+{% endmacro %}
+
+{% macro toggle(name, label, description, values, errors) %}
+<div class="toggle">
+  <label>
+    <input name="{{ name }}" type="checkbox"{% if values.get(name) %} checked{% endif %}>
+    <span class="toggle-title">{{ label }}</span>
+    <span class="toggle-text">{{ description }}</span>
+  </label>
   {{ field_errors(errors, name) }}
 </div>
 {% endmacro %}

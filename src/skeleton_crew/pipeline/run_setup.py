@@ -87,7 +87,7 @@ async def preflight(deps: PipelineDeps, settings: AppSettings, gw: Gateway) -> P
     if not problems and settings.classifier.enabled:
         classifier = deps.classifier_factory(settings)
         problems += classifiers.credential_problems(
-            settings.classifier, deps.config.agent_credentials
+            settings.classifier.provider, deps.config.agent_credentials
         )
     problems += await _environment_problems(deps, settings, gw)
     for backend in backends.values():

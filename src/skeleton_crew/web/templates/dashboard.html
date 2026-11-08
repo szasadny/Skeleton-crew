@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Dashboard{% endblock %}
+{% block flash %}{% endblock %}
 {% block content %}
 <h1>Dashboard</h1>
 <div class="status" hx-get="/partials/status" hx-trigger="every 5s" hx-swap="innerHTML">

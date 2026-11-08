@@ -7,6 +7,7 @@ from skeleton_crew.agents import registry
 from skeleton_crew.agents.base import BackendSpec, OptionSpec
 from skeleton_crew.agents.registry import (
     UnknownBackendError,
+    allowed_models,
     available_backends,
     backend_for,
     field_problems,
@@ -166,3 +167,11 @@ def test_invalid_option_is_reported_once_not_as_a_model_problem() -> None:
     problems = field_problems(_filtered_settings("a/one", {"provider": "c"}))
     assert "agents.worker.model" not in problems
     assert "backend_options.filtered.provider" in problems
+
+
+def test_allowed_models_follow_the_option_and_fall_back_on_invalid_options() -> None:
+    spec = _filtered_spec()
+    assert allowed_models(spec, {}) == ("a/one",)
+    assert allowed_models(spec, {"provider": "b"}) == ("b/one",)
+    assert allowed_models(spec, {"provider": "c"}) == spec.models
+    assert allowed_models(spec_for("claude_code"), {}) == spec_for("claude_code").models

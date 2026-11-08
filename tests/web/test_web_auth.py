@@ -28,7 +28,9 @@ async def _login_events(web: Web) -> list[tuple[AuditOutcome, str, object]]:
     return [(event.outcome, event.summary, event.payload) for event in reversed(events)]
 
 
-@pytest.mark.parametrize("path", ["/", "/schedule", "/limits", "/rules/common", "/runs", "/audit"])
+@pytest.mark.parametrize(
+    "path", ["/", "/schedule", "/limits", "/agents/draft", "/rules/common", "/runs", "/logs"]
+)
 async def test_pages_redirect_to_login_without_session(web: Web, path: str) -> None:
     response = await web.client.get(path)
     assert response.status_code == 303
@@ -121,7 +123,7 @@ async def test_post_without_csrf_token_is_rejected(web: Web) -> None:
 
 async def test_post_with_forged_csrf_token_is_rejected(web: Web) -> None:
     await web.login()
-    token = await web.csrf("/audit")
+    token = await web.csrf("/logs")
     response = await web.client.post("/actions/kill", data={"csrf_token": token[:-2] + "xx"})
     assert response.status_code == 403
     assert web.controller.kills == 0
@@ -139,7 +141,7 @@ async def test_csrf_token_of_another_session_is_rejected(
 ) -> None:
     async with open_web(tmp_path, sessionmaker) as other:
         await other.login()
-        foreign = await other.csrf("/audit")
+        foreign = await other.csrf("/logs")
     await web.login()
     response = await web.client.post("/actions/run-now", data={"csrf_token": foreign})
     assert response.status_code == 403
@@ -147,7 +149,7 @@ async def test_csrf_token_of_another_session_is_rejected(
 
 async def test_csrf_token_in_header_is_accepted(web: Web) -> None:
     await web.login()
-    token = await web.csrf("/audit")
+    token = await web.csrf("/logs")
     response = await web.client.post("/actions/run-now", headers={"X-CSRF-Token": token})
     assert response.status_code == 303
     assert web.controller.starts == ["manual"]

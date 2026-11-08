@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from web_helpers import Web, open_web
+from web_helpers import TOKEN_SECRET, Web, open_web
 
 from skeleton_crew.agents.registry import available_backends
 from skeleton_crew.core.audit import AuditKind
@@ -293,8 +293,38 @@ async def test_agents_rejects_a_routed_effort_the_worker_backend_lacks(web: Web)
 
 async def test_agents_page_renders_backend_options_from_the_registry(web: Web) -> None:
     html = (await web.client.get("/agents")).text
-    assert "<legend>Claude Code</legend>" in html
+    assert "<h3>Claude Code</h3>" in html
     assert 'value="subscription" selected' in html
+
+
+async def test_agents_backend_cards_show_use_and_credential_state(web: Web) -> None:
+    html = (await web.client.get("/agents")).text
+    assert "Used by selector, refiner, reviewer, worker" in html
+    assert html.count('data-state="ready"') == 1
+    assert html.count('data-state="unused"') == len(available_backends()) - 1
+    form = _agents_form(**{"backend_options.claude_code.auth_mode": "api_key"})
+    assert await _post(web, "/agents", form) == (303, "/agents?msg=saved")
+    html = (await web.client.get("/agents")).text
+    assert 'data-state="no credential"' in html
+    assert "SC_AGENT_CREDENTIALS__ANTHROPIC_API_KEY is not set" in html
+    assert TOKEN_SECRET not in html
+
+
+async def test_agents_draft_follows_the_chosen_backend_without_saving(web: Web) -> None:
+    form = _agents_form(**{"agents.worker.backend": "codex", "classifier.injection_screen": "on"})
+    response = await web.client.get("/agents/draft", params=form)
+    assert response.status_code == 200
+    assert 'value="gpt-6.1-sol"' in response.text
+    assert "Used by worker" in response.text
+    assert "SC_AGENT_CREDENTIALS__TYPESAFE_API_KEY is not set" in response.text
+    assert await web.settings() == AppSettings()
+
+
+async def test_agents_draft_never_writes_even_with_a_valid_csrf_token(web: Web) -> None:
+    token = await web.csrf("/agents")
+    form = _agents_form(**{"agents.worker.backend": "codex", "csrf_token": token})
+    assert (await web.client.get("/agents/draft", params=form)).status_code == 200
+    assert await web.settings() == AppSettings()
 
 
 async def test_repo_round_trip(web: Web) -> None:

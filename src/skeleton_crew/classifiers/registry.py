@@ -33,10 +33,8 @@ def settings_problems(settings: AppSettings) -> list[str]:
     ]
 
 
-def credential_problems(
-    settings: ClassifierSettings, credentials: Mapping[str, SecretStr]
-) -> list[str]:
-    spec = _PROVIDERS[settings.provider]
+def credential_problems(provider: str, credentials: Mapping[str, SecretStr]) -> list[str]:
+    spec = _PROVIDERS[provider]
     secret = credentials.get(spec.credential)
     if secret is None or not secret.get_secret_value().strip():
         return [f"{spec.display_name}: SC_AGENT_CREDENTIALS__{spec.credential.upper()} is not set"]

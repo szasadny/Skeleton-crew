@@ -12,7 +12,7 @@ from skeleton_crew.core.config import BootstrapConfig
 from skeleton_crew.scheduler.scheduler import RunScheduler
 from skeleton_crew.store.settings_store import load_settings
 from skeleton_crew.web.ports import RunControl, RunnerControl
-from skeleton_crew.web.routes import agents, audit, auth, ci, dashboard, limits, repo, rules, runs
+from skeleton_crew.web.routes import agents, auth, ci, dashboard, limits, logs, repo, rules, runs
 from skeleton_crew.web.routes import schedule as schedule_page
 from skeleton_crew.web.security import (
     LOGIN_PATH,
@@ -25,7 +25,7 @@ from skeleton_crew.web.security import (
 from skeleton_crew.web.state import WebState, get_state
 
 _STATIC_DIR = Path(__file__).parent / "static"
-_ROUTERS = (auth, dashboard, schedule_page, limits, agents, repo, ci, rules, runs, audit)
+_ROUTERS = (auth, dashboard, schedule_page, limits, agents, repo, ci, rules, runs, logs)
 
 
 async def _guard(request: Request) -> None:

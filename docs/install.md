@@ -92,7 +92,7 @@ Rulesets need a public repository or a paid plan. On a free private repository, 
 ## 6. Dry run, then go live
 
 1. Leave `dry_run` on (the default) for the first runs. Every GitHub write is then recorded in the audit log as dry-run instead of performed. Agent sessions still run (and cost tokens); CI is skipped.
-2. Label a few small issues, start a run and read the audit log to see what would have happened.
+2. Label a few small issues, start a run and read the audit log on the Logs page to see what would have happened.
 3. When the planned actions look right, switch `dry_run` off in the UI.
 
 ## Toolchains

@@ -74,7 +74,7 @@ class Web:
         assert response.status_code == 303, response.text
 
     async def post(self, path: str, data: Mapping[str, Any] | None = None) -> httpx.Response:
-        token = await self.csrf("/audit")
+        token = await self.csrf("/logs")
         return await self.client.post(path, data={**(data or {}), "csrf_token": token})
 
     async def settings(self) -> AppSettings:

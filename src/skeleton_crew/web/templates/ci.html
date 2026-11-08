@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}CI{% endblock %}
 {% block content %}
-<h1>Self-hosted CI</h1>
+<h1>CI</h1>
 <p>Runs the CI of Skeleton Crew's own pull requests on runners on this host, only while a task of a live run waits for CI. Jobs for any branch not starting with <code>{{ branch_prefix }}</code> fail with an explanation. Private repositories only. Skeleton Crew never changes workflows; route its pull requests here with:</p>
 <pre class="block">runs-on: ${{ '{{' }} startsWith(github.head_ref, '{{ branch_prefix }}') &amp;&amp; vars.CI_RUNNER || 'ubuntu-latest' {{ '}}' }}</pre>
 <p>with the repository variable <code>CI_RUNNER</code> set to one of the labels below. See docs/install.md.</p>

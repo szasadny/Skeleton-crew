@@ -3,49 +3,75 @@
 {% block content %}
 <h1>Agents</h1>
 {{ m.general_errors(errors) }}
-<form method="post" action="/agents">
+<form id="agents-form" method="post" action="/agents"
+  hx-get="/agents/draft" hx-trigger="change" hx-sync="this:replace" hx-params="not csrf_token"
+  hx-select="#agents-form" hx-target="this" hx-swap="outerHTML">
   {{ m.csrf() }}
-  {% for role in roles %}
-  {% set p = "agents." ~ role.value ~ "." %}
-  {% set spec = specs.get(values.get(p ~ "backend")) %}
-  <fieldset>
-    <legend>{{ role.value | capitalize }}</legend>
-    <div class="grid">
-      {{ m.select(p ~ "backend", "Backend", specs.keys(), values, errors) }}
-      {{ m.select(p ~ "model", "Model", spec.models if spec else (), values, errors) }}
-      {{ m.select(p ~ "effort", "Effort", spec.efforts if spec else (), values, errors) }}
-      {{ m.checkbox(p ~ "web_tools", "Web tools", values, errors) }}
-    </div>
-  </fieldset>
-  {% endfor %}
-  {% for spec in backends if spec.options %}
-  <fieldset>
-    <legend>{{ spec.display_name }}</legend>
-    {% for option_name, option in spec.options.items() %}
-    {% set name = "backend_options." ~ spec.name ~ "." ~ option_name %}
-    {{ m.select(name, option_name | replace("_", " ") | capitalize, option.allowed, {name: values.get(name) or option.default}, errors) }}
+  <h2>Crew</h2>
+  <div class="roster">
+    {% for view in roles %}
+    {% set p = "agents." ~ view.role.value ~ "." %}
+    <fieldset>
+      <legend>{{ view.role.value | capitalize }}</legend>
+      <p class="hint duty">{{ view.duty }}</p>
+      <div class="grid">
+        {{ m.select(p ~ "backend", "Backend", backend_names, values, errors) }}
+        {{ m.select(p ~ "model", "Model", view.models, values, errors) }}
+        {{ m.select(p ~ "effort", "Effort", view.spec.efforts if view.spec else (), values, errors) }}
+      </div>
+      {{ m.checkbox(p ~ "web_tools", "Web tools", values, errors, disabled=not (view.spec and view.spec.web_tools)) }}
+    </fieldset>
     {% endfor %}
-  </fieldset>
-  {% endfor %}
-  {% set c = "classifier." %}
-  {% set classifier = classifiers.get(values.get(c ~ "provider")) %}
-  {% set worker = specs.get(values.get("agents.worker.backend")) %}
-  <fieldset>
-    <legend>Classifier</legend>
-    <p class="hint">Optional fast checks before agents run. Each one is off until you turn it on.</p>
-    <div class="grid">
-      {{ m.select(c ~ "provider", "Provider", classifiers.keys(), values, errors) }}
-      {{ m.select(c ~ "model", "Model", classifier.models if classifier else (), values, errors) }}
-    </div>
-    {{ m.checkbox(c ~ "injection_screen", "Injection screen: stop issue text and CI output that try to steer the agent", values, errors) }}
-    {{ m.checkbox(c ~ "prescreen", "Pre-screen: send clearly too large or unclear issues to HITL", values, errors) }}
-    {{ m.checkbox(c ~ "effort_routing", "Effort routing: pick the worker effort by issue size", values, errors) }}
-    <div class="grid">
-      {% for size in ("small", "medium", "large") %}
-      {{ m.select(c ~ "effort_" ~ size, "Effort for " ~ size ~ " issues", worker.efforts if worker else (), values, errors) }}
+  </div>
+
+  <h2>Backends</h2>
+  <div class="cards">
+    {% for view in backends %}
+    <section class="panel backend{% if not view.used_by %} unused{% endif %}">
+      <header class="card-head">
+        <h3>{{ view.spec.display_name }}</h3>
+        {% if not view.used_by %}{{ m.state("unused") }}{% elif view.problems %}{{ m.state("no credential") }}{% else %}{{ m.state("ready") }}{% endif %}
+      </header>
+      <p class="used-by">{% if view.used_by %}Used by {{ view.used_by | map(attribute="value") | join(", ") }}{% else %}No role uses it.{% endif %}</p>
+      {% for option_name, option in view.spec.options.items() %}
+      {% set name = "backend_options." ~ view.spec.name ~ "." ~ option_name %}
+      {{ m.select(name, option_name | replace("_", " ") | capitalize, option.allowed, {name: values.get(name) or option.default}, errors) }}
       {% endfor %}
+      {% for problem in view.problems %}<p class="field-error">{{ problem }}</p>{% endfor %}
+    </section>
+    {% endfor %}
+  </div>
+
+  {% set c = "classifier." %}
+  <h2>Classifier</h2>
+  <fieldset class="classifier">
+    <legend>
+      Fast checks before agents run
+      {% if not classifier.enabled %}{{ m.state("off") }}{% elif classifier.problems %}{{ m.state("no credential") }}{% else %}{{ m.state("ready") }}{% endif %}
+    </legend>
+    <div class="grid">
+      {{ m.select(c ~ "provider", "Provider", classifier_names, values, errors) }}
+      {{ m.select(c ~ "model", "Model", classifier.models, values, errors) }}
+    </div>
+    {% for problem in classifier.problems %}<p class="field-error">{{ problem }}</p>{% endfor %}
+    <div class="toggles">
+      {{ m.toggle(c ~ "injection_screen", "Injection screen", "Stops issue text and CI output that try to steer the agent.", values, errors) }}
+      {{ m.toggle(c ~ "prescreen", "Pre-screen", "Sends clearly too large or unclear issues to HITL.", values, errors) }}
+      {{ m.toggle(c ~ "effort_routing", "Effort routing", "Picks the worker effort by issue size.", values, errors) }}
+    </div>
+    <div class="routing">
+      <p class="routing-title">Worker effort per issue size</p>
+      <div class="grid">
+        {% for size in ("small", "medium", "large") %}
+        {{ m.select(c ~ "effort_" ~ size, size | capitalize ~ " issues", routed_efforts, values, errors) }}
+        {% endfor %}
+      </div>
     </div>
   </fieldset>
-  <button type="submit">Save</button>
+
+  <div class="savebar">
+    <span class="hint">Model and effort lists follow the backend you pick.</span>
+    <button type="submit">Save</button>
+  </div>
 </form>
 {% endblock %}

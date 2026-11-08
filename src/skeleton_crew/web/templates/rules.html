@@ -4,26 +4,30 @@
 <h1>Rules</h1>
 {{ m.rule_tabs(keys, key) }}
 {% if error %}<div class="alert"><p>{{ error }}</p></div>{% endif %}
-{% if is_default %}<p class="hint">Showing the default rules. Nothing has been saved yet.</p>{% endif %}
-<form method="post" action="/rules/{{ key }}">
+<form method="post" action="/rules/{{ key }}" class="panel editor">
   {{ m.csrf() }}
-  <div class="field">
-    <label for="content">Rules for {{ key }}</label>
-    <textarea id="content" name="content" rows="24" maxlength="{{ max_chars }}" class="mono">{{ content }}</textarea>
-    <p class="hint">Maximum {{ max_chars }} characters.</p>
+  <header class="card-head">
+    <label for="content">{{ key | capitalize }} rules</label>
+    {% if is_default %}{{ m.state("default") }}{% else %}{{ m.state("saved") }}{% endif %}
+  </header>
+  <p class="hint">
+    {{ "Every role gets these." if key == "common" else "The " ~ key ~ " gets these after the common rules." }}
+    {% if is_default %}Nothing saved yet, so this is the built-in default.{% else %}Revision {{ history[0].id }}, saved {{ history[0].created_at | dt }}.{% endif %}
+  </p>
+  <textarea id="content" name="content" rows="24" maxlength="{{ max_chars }}" class="mono">{{ content }}</textarea>
+  <div class="editor-actions">
+    <span class="hint">Maximum {{ max_chars }} characters.</span>
+    <button type="submit" form="rules-reset" class="secondary">Reset to default</button>
+    <button type="submit">Save</button>
   </div>
-  <button type="submit">Save</button>
 </form>
-<form method="post" action="/rules/{{ key }}/reset" class="spaced">
-  {{ m.csrf() }}
-  <button type="submit" class="secondary">Reset to default</button>
-</form>
+<form id="rules-reset" method="post" action="/rules/{{ key }}/reset">{{ m.csrf() }}</form>
 <h2>History</h2>
 {% if history %}
 <ul class="plain">
   {% for revision in history %}<li><a href="/rules/{{ key }}/revisions/{{ revision.id }}">Revision {{ revision.id }}</a> {{ revision.created_at | dt }}</li>{% endfor %}
 </ul>
 {% else %}
-<p>No revisions yet.</p>
+<p class="empty">No revisions yet.</p>
 {% endif %}
 {% endblock %}

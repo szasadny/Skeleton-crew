@@ -58,8 +58,8 @@ def test_routed_efforts_must_suit_the_worker_backend_when_routing_is_on() -> Non
 
 
 def test_credential_problems_name_only_the_providers_own_variable() -> None:
-    jev = ClassifierSettings()
-    decisions = ClassifierSettings(provider="openai_decisions", model="gpt-6-luna")
+    jev = ClassifierSettings().provider
+    decisions = "openai_decisions"
     only_openai = {"openai_api_key": SecretStr("fake-openai-key")}
     assert credential_problems(jev, only_openai) == [
         "Jev: SC_AGENT_CREDENTIALS__TYPESAFE_API_KEY is not set"

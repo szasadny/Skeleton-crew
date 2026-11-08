@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -18,16 +19,32 @@ def _format_datetime(value: datetime | None) -> str:
 
 templates.env.filters["dt"] = _format_datetime
 
+
+@dataclass(frozen=True)
+class NavGroup:
+    code: str
+    title: str
+    links: tuple[tuple[str, str, str], ...]
+
+
 NAV = (
-    ("/", "Dashboard", "/"),
-    ("/schedule", "Schedule", "/schedule"),
-    ("/limits", "Limits", "/limits"),
-    ("/agents", "Agents", "/agents"),
-    ("/repo", "Repo", "/repo"),
-    ("/ci", "CI", "/ci"),
-    ("/rules/common", "Rules", "/rules"),
-    ("/runs", "Runs", "/runs"),
-    ("/audit", "Audit", "/audit"),
+    NavGroup(
+        "C",
+        "Monitor",
+        (("/", "Dashboard", "/"), ("/runs", "Runs", "/runs"), ("/logs", "Logs", "/logs")),
+    ),
+    NavGroup(
+        "T",
+        "Configure",
+        (
+            ("/repo", "Repo", "/repo"),
+            ("/agents", "Agents", "/agents"),
+            ("/rules/common", "Rules", "/rules"),
+            ("/schedule", "Schedule", "/schedule"),
+            ("/limits", "Limits", "/limits"),
+            ("/ci", "CI", "/ci"),
+        ),
+    ),
 )
 
 MESSAGES = {

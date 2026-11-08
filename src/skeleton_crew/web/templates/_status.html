@@ -42,6 +42,8 @@
   </div>
   {% endif %}
 </section>
+{# Polls carry no message; hx-preserve keeps the one from the page load. #}
+<div id="flash" hx-preserve>{% if message %}<p class="notice">{{ message }}</p>{% endif %}</div>
 
 <div class="split">
   <section class="panel">

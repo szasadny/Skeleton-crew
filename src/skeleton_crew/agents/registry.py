@@ -42,6 +42,13 @@ def resolved_options(spec: BackendSpec, options: Mapping[str, str]) -> dict[str,
     return {key: option.default for key, option in spec.options.items()} | dict(options)
 
 
+def allowed_models(spec: BackendSpec, options: Mapping[str, str]) -> tuple[str, ...]:
+    if spec.model_filter is None or option_problems(spec, options):
+        return spec.models
+    resolved = resolved_options(spec, options)
+    return tuple(model for model in spec.models if spec.model_filter(model, resolved))
+
+
 def _model_problem(spec: BackendSpec, model: str, options: Mapping[str, str]) -> str | None:
     if model not in spec.models:
         return f"not a {spec.display_name} model"

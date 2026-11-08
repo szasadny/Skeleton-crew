@@ -199,6 +199,17 @@ body.console {
 
 .segment { font-family: var(--mono); font-size: 0.65rem; color: var(--steel-hi); }
 
+.region {
+  margin: 0;
+  padding: 0.85rem 0 0.2rem 2.7rem;
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.24em;
+  color: var(--steel-hi);
+}
+.region:first-child { padding-top: 0; }
+
 .vertebra.current { color: var(--bone); font-weight: 600; }
 .vertebra.current .bone { background: var(--optic); border-color: var(--optic); box-shadow: 0 0 10px var(--optic), 0 0 24px var(--optic-glow); }
 .vertebra.current .bone::before { background: var(--optic); }
@@ -243,11 +254,13 @@ body.console {
 
 
 .panel, fieldset, .vital {
+  --plate-edge: var(--steel-hi);
+  --plate-fill: linear-gradient(180deg, var(--metal-1), var(--metal-0));
   position: relative;
   background:
-    linear-gradient(225deg, transparent 9.2px, var(--steel-hi) 9.9px, transparent 10.8px),
-    linear-gradient(45deg, transparent 9.2px, var(--steel-hi) 9.9px, transparent 10.8px),
-    linear-gradient(180deg, var(--metal-1), var(--metal-0));
+    linear-gradient(225deg, transparent 9.4px, var(--plate-edge) 9.9px 10.9px, transparent 11.4px),
+    linear-gradient(45deg, transparent 9.4px, var(--plate-edge) 9.9px 10.9px, transparent 11.4px),
+    var(--plate-fill);
   border: 1px solid var(--steel);
   clip-path: var(--plate);
 }
@@ -325,7 +338,7 @@ a.vital:hover { text-decoration: none; text-shadow: none; color: var(--bone); bo
 }
 .vital-value.small { font-family: var(--mono); font-size: 0.95rem; font-weight: 400; text-transform: none; letter-spacing: 0; line-height: 1.35; }
 
-.vital.live { border-color: var(--optic); }
+.vital.live { --plate-edge: var(--optic); border-color: var(--optic); }
 .vital.live .vital-value { color: var(--optic); text-shadow: 0 0 14px var(--optic-glow); }
 .vital.live::after {
   content: "";
@@ -341,10 +354,9 @@ a.vital:hover { text-decoration: none; text-shadow: none; color: var(--bone); bo
 }
 .vital.caution .vital-value { color: var(--amber); }
 .vital.alarm {
+  --plate-edge: var(--optic);
+  --plate-fill: repeating-linear-gradient(-45deg, rgba(255, 59, 48, 0.13) 0 8px, transparent 8px 16px), var(--metal-1);
   border-color: var(--optic);
-  background:
-    repeating-linear-gradient(-45deg, rgba(255, 59, 48, 0.13) 0 8px, transparent 8px 16px),
-    var(--metal-1);
 }
 .vital.alarm .vital-value { color: var(--optic); }
 
@@ -379,6 +391,57 @@ a.vital:hover { text-decoration: none; text-shadow: none; color: var(--bone); bo
 .chips { display: flex; flex-wrap: wrap; gap: 0.4rem; }
 .empty { font-family: var(--mono); font-size: 0.85rem; color: var(--ash); }
 .empty::before { content: "∅ "; color: var(--steel-hi); }
+
+.roster { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(28rem, 100%), 1fr)); gap: 1rem; }
+.roster fieldset { margin: 0; }
+.roster .duty { margin: 0 0 1rem; }
+.roster .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(24rem, 100%), 1fr)); gap: 1rem; }
+.cards .field-error { overflow-wrap: anywhere; }
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; margin: 0.15rem 0 0.3rem 0.4rem; }
+.card-head > :first-child { margin: 0; font-size: 1rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; }
+.used-by { margin: 0 0 1rem 0.4rem; font-family: var(--mono); font-size: 0.75rem; color: var(--ash); }
+.backend.unused { opacity: 0.55; transition: opacity 0.15s; }
+.backend.unused:hover, .backend.unused:focus-within { opacity: 1; }
+
+.editor .card-head { justify-content: flex-start; }
+.editor > .hint { margin: 0 0 1rem 0.4rem; }
+.editor-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 0.75rem; margin-top: 1rem; }
+.editor-actions .hint { margin: 0 auto 0 0; }
+
+legend .state { margin-left: 0.75rem; vertical-align: 0.1em; }
+
+.toggles { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(16rem, 100%), 1fr)); gap: 0.75rem; margin: 0.25rem 0 1.25rem; }
+.toggle {
+  padding: 0.85rem 1rem;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--steel);
+  transition: border-color 0.15s, background 0.15s;
+}
+.toggle:has(> label > input:checked) { border-color: var(--optic); background: var(--optic-haze); }
+.toggle > label { display: grid; grid-template-columns: auto 1fr; gap: 0.2rem 0.65rem; align-items: center; cursor: pointer; }
+.toggle-title { font-weight: 600; letter-spacing: 0.04em; }
+.toggle-text { grid-column: 2; color: var(--ash); font-size: 0.82rem; line-height: 1.4; }
+.routing { padding-top: 1rem; border-top: 1px dashed var(--steel); }
+.routing .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.routing-title { margin: 0 0 0.75rem; font-weight: 600; letter-spacing: 0.04em; }
+.classifier:has(input[name="classifier.effort_routing"]:not(:checked)) .routing { display: none; }
+
+.savebar {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 1.25rem;
+  margin-top: 1.5rem;
+  padding: 0.85rem 0;
+  background: linear-gradient(180deg, rgba(8, 9, 11, 0.8), var(--void) 60%);
+  border-top: 1px solid var(--steel);
+}
+.savebar .hint { margin: 0; }
 
 
 body.boot .hud {
@@ -471,6 +534,7 @@ body.boot .hud {
   color: var(--bone);
   cursor: pointer;
 }
+.field.checkbox label:has(input:disabled) { color: var(--steel-hi); cursor: not-allowed; }
 label.inline { display: inline-flex; align-items: center; gap: 0.35rem; margin: 0 1.1rem 0.5rem 0; white-space: nowrap; cursor: pointer; }
 input[type="checkbox"] { width: 1rem; height: 1rem; }
 
@@ -556,16 +620,15 @@ button.glass:hover {
 button.glass:focus-visible { outline-offset: 2px; }
 
 .shards { overflow: visible; pointer-events: none; }
+.shards > * { transform-box: fill-box; transform-origin: center; }
 .shards polygon {
   fill: rgb(214, 234, 246);
   stroke: rgba(255, 255, 255, 0.7);
   stroke-width: 0.7;
   stroke-linejoin: round;
-  transform-box: fill-box;
-  transform-origin: center;
 }
 .shards .dust { fill-opacity: 0.6; stroke: none; }
-.shards .impact { fill: #fff; filter: blur(3px); transform-box: fill-box; transform-origin: center; }
+.shards .impact { fill: #fff; filter: blur(3px); }
 
 
 table {
@@ -613,14 +676,14 @@ td.mono { max-width: 30rem; overflow-wrap: anywhere; color: var(--ash); }
 .state[data-state="running"]::before, .state[data-state="preparing"]::before, .state[data-state="coding"]::before,
 .state[data-state="policy_check"]::before, .state[data-state="reviewing"]::before, .state[data-state="refining"]::before,
 .state[data-state="busy"]::before, .state[data-state="starting"]::before { box-shadow: 0 0 6px var(--optic); animation: pulse 1.4s ease-in-out infinite; }
-.state[data-state="done"], .state[data-state="completed"], .state[data-state="allowed"] { color: var(--phosphor); }
-.state[data-state="failed"], .state[data-state="preflight_failed"], .state[data-state="blocked"], .state[data-state="offline"] {
+.state[data-state="done"], .state[data-state="completed"], .state[data-state="allowed"], .state[data-state="ready"], .state[data-state="saved"] { color: var(--phosphor); }
+.state[data-state="failed"], .state[data-state="preflight_failed"], .state[data-state="blocked"], .state[data-state="offline"], .state[data-state="no credential"] {
   color: #fff;
   background: rgba(179, 18, 27, 0.55);
   border-color: var(--optic);
 }
-.state[data-state="escalated"], .state[data-state="aborted"], .state[data-state="dry_run"], .state[data-state="not registered"] { color: var(--amber); }
-.state[data-state="queued"], .state[data-state="awaiting_ci"], .state[data-state="standby"], .state[data-state="idle"] { color: var(--chrome); }
+.state[data-state="escalated"], .state[data-state="aborted"], .state[data-state="dry_run"], .state[data-state="not registered"], .state[data-state="default"] { color: var(--amber); }
+.state[data-state="queued"], .state[data-state="awaiting_ci"], .state[data-state="standby"], .state[data-state="idle"], .state[data-state="unused"], .state[data-state="off"] { color: var(--chrome); }
 
 .badge {
   display: inline-block;
@@ -717,7 +780,7 @@ pre.block {
   .brand { flex-direction: row; }
   .brand .skull { width: 2.4rem; }
   .wordmark { flex-direction: row; gap: 0.4em; font-size: 0.9rem; }
-  .unit, .segment, .vertebrae::before, .vertebra.current::after { display: none; }
+  .unit, .segment, .region, .vertebrae::before, .vertebra.current::after { display: none; }
   .vertebrae { order: 3; flex: 1 0 100%; flex-direction: row; flex-wrap: wrap; gap: 0.25rem 0.9rem; }
   .vertebra { grid-template-columns: auto auto; gap: 0.4rem; padding: 0.2rem 0; }
   .bone { width: 0.9rem; height: 0.55rem; }

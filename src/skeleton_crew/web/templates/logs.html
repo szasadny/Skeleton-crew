@@ -1,8 +1,8 @@
 {% extends "base.html" %}
-{% block title %}Audit{% endblock %}
+{% block title %}Logs{% endblock %}
 {% block content %}
-<h1>Audit</h1>
-<form method="get" action="/audit" class="filters">
+<h1>Logs</h1>
+<form method="get" action="/logs" class="filters">
   <label for="kind">Kind</label>
   <select id="kind" name="kind">
     <option value="">All</option>
@@ -29,5 +29,5 @@
 {% else %}
 <p>No events on this page.</p>
 {% endif %}
-{{ m.pager("/audit", page, has_next, "&kind=" ~ kind if kind else "") }}
+{{ m.pager("/logs", page, has_next, "&kind=" ~ kind if kind else "") }}
 {% endblock %}

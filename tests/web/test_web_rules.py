@@ -26,7 +26,8 @@ async def _active(web: Web, key: str) -> str | None:
 @pytest.mark.parametrize("key", RULE_KEYS)
 async def test_editor_shows_default_rules_before_any_save(web: Web, key: str) -> None:
     html = (await web.client.get(f"/rules/{key}")).text
-    assert "Showing the default rules" in html
+    assert 'data-state="default"' in html
+    assert "Nothing saved yet" in html
     first_line = default_rules(key).strip().splitlines()[0]
     assert first_line.replace("&", "&amp;").replace("<", "&lt;") in html
 
@@ -49,6 +50,8 @@ async def test_save_appends_revision_and_audits(web: Web) -> None:
     html = (await web.client.get("/rules/worker")).text
     assert "Second version." in html
     assert html.count("/rules/worker/revisions/") == 2
+    assert 'data-state="saved"' in html
+    assert "Nothing saved yet" not in html
     async with web.sessionmaker() as session:
         events = await audit_store.list_events(session, 10, 0, AuditKind.RULES_CHANGED)
     assert [event.summary for event in events] == ["rules changed: worker"] * 2

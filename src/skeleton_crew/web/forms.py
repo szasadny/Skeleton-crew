@@ -7,7 +7,7 @@ from typing import Any, get_args
 from fastapi import Request
 from fastapi.responses import Response
 from pydantic import BaseModel, ValidationError
-from starlette.datastructures import FormData
+from starlette.datastructures import ImmutableMultiDict, UploadFile
 
 from skeleton_crew.domain.settings import AppSettings
 from skeleton_crew.store.settings_store import load_settings, save_settings
@@ -33,12 +33,15 @@ def label(name: str) -> str:
     return " ".join(words)[:1].upper() + " ".join(words)[1:]
 
 
-def _text(form: FormData, name: str) -> str:
+type FormFields = ImmutableMultiDict[str, UploadFile | str]
+
+
+def _text(form: FormFields, name: str) -> str:
     value = form.get(name)
     return value.strip() if isinstance(value, str) else ""
 
 
-def parse_form(form: FormData, fields: Mapping[str, Kind]) -> dict[str, object]:
+def parse_form(form: FormFields, fields: Mapping[str, Kind]) -> dict[str, object]:
     parsed: dict[str, object] = {}
     for name, kind in fields.items():
         text = _text(form, name)
@@ -133,7 +136,7 @@ class SettingsPage:
     context: Mapping[str, Any] = field(default_factory=dict)
     on_saved: Callable[[Request, AppSettings], None] | None = None
     check: Callable[[AppSettings], dict[str, list[str]]] | None = None
-    live_context: Callable[[Request], Mapping[str, Any]] | None = None
+    live_context: Callable[[Request, Mapping[str, object]], Mapping[str, Any]] | None = None
 
     def _render(
         self,
@@ -142,7 +145,7 @@ class SettingsPage:
         errors: Mapping[str, list[str]],
         status_code: int = 200,
     ) -> Response:
-        live = self.live_context(request) if self.live_context is not None else {}
+        live = self.live_context(request, values) if self.live_context is not None else {}
         context = {**self.context, **live, "values": values, "errors": errors}
         return render(request, self.template, context, status_code)
 
@@ -150,6 +153,12 @@ class SettingsPage:
         async with get_state(request).sessionmaker() as session:
             current = await load_settings(session)
         return self._render(request, flatten(current.model_dump(mode="json")), {})
+
+    async def draft(self, request: Request) -> Response:
+        updates = parse_form(request.query_params, self.fields)
+        async with get_state(request).sessionmaker() as session:
+            current = await load_settings(session)
+        return self._render(request, flatten(current.model_dump(mode="json")) | updates, {})
 
     async def submit(self, request: Request) -> Response:
         updates = parse_form(await request.form(), self.fields)
