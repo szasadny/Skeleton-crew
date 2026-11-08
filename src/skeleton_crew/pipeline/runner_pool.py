@@ -8,6 +8,7 @@ from pathlib import Path
 
 from skeleton_crew.domain.branch_policy import BRANCH_PREFIX
 from skeleton_crew.domain.runner_policy import (
+    DRAINING_REASON,
     PUBLIC_REPO_PROBLEM,
     STANDBY_REASON,
     RunnerState,
@@ -40,6 +41,7 @@ LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
 BUSY_ARGV = ("pgrep", "-x", "Runner.Worker")
 TICK_S = 5.0
 ELIGIBILITY_TTL_S = 600.0
+CI_DEMAND_TTL_S = 30.0
 _EXEC_TIMEOUT_S = 10.0
 _NOT_FOUND_EXIT = 1
 
@@ -131,6 +133,7 @@ class RunnerPool:
         self._slots: dict[str, _Slot] = {}
         self._states: list[RunnerState] = []
         self._eligibility: tuple[float, str | None] | None = None
+        self._demand: tuple[float, bool] | None = None
         self._allowlist: frozenset[str] | None = None
         self._task: asyncio.Task[None] | None = None
 
@@ -168,22 +171,42 @@ class RunnerPool:
         async with self._lock:
             async with self._deps.sessionmaker() as session:
                 settings = await settings_store.load_settings(session)
-                demand = await runs_store.awaiting_ci_count(session)
+                waiting = await runs_store.awaiting_ci_count(session)
             names = runner_names(settings.ci.runners)
             blocker = await self._blocker(settings)
             if blocker is not None:
                 shown = names if settings.ci.enabled else []
                 await self._park([RunnerState(n, RunnerStatus.OFFLINE, blocker) for n in shown])
-            elif demand == 0:
-                registered = registered_runners(self._deps, settings)
-                await self._park([_standby(n, registered=n in registered) for n in names])
-            else:
+            elif waiting or await self._github_demand(settings):
                 await self._apply_allowlist(settings)
                 await self._run(settings, names)
+            else:
+                await self._drain(settings, names)
 
     async def _park(self, states: list[RunnerState]) -> None:
         await self._remove_all()
         self._slots.clear()
+        self._states = states
+
+    async def _drain(self, settings: AppSettings, names: list[str]) -> None:
+        registered = registered_runners(self._deps, settings)
+        containers = {
+            info.handle.name: info
+            for info in await self._deps.runtime.list_labeled(ROLE_LABEL, RUNNER_ROLE)
+        }
+        states: list[RunnerState] = []
+        for name in names:
+            info = containers.pop(container_name(name), None)
+            busy = info is not None and info.running and await self._is_busy(info.handle)
+            if busy:
+                states.append(RunnerState(name, RunnerStatus.BUSY, DRAINING_REASON))
+                continue
+            if info is not None:
+                await self._deps.runtime.remove(info.handle)
+            self._slots.pop(name, None)
+            states.append(_standby(name, registered=name in registered))
+        for info in containers.values():
+            await self._deps.runtime.remove(info.handle)
         self._states = states
 
     async def _run(self, settings: AppSettings, names: list[str]) -> None:
@@ -207,12 +230,27 @@ class RunnerPool:
         now = self._monotonic()
         if self._eligibility is not None and now - self._eligibility[0] <= ELIGIBILITY_TTL_S:
             return self._eligibility[1]
-        gw = self._deps.gateway_factory(settings, audit_sink(self._deps.sessionmaker, None))
-        problem = await visibility_problem(gw)
+        problem = await visibility_problem(self._gateway(settings))
         # Only a definite answer is cached; a failed read is retried on the next tick.
         definite = problem in (None, PUBLIC_REPO_PROBLEM)
         self._eligibility = (now, problem) if definite else None
         return problem
+
+    async def _github_demand(self, settings: AppSettings) -> bool:
+        now = self._monotonic()
+        if self._demand is not None and now - self._demand[0] <= CI_DEMAND_TTL_S:
+            return self._demand[1]
+        try:
+            active = await self._gateway(settings).skeleton_ci_active()
+        except Exception:
+            log.exception("could not read the CI runs of Skeleton Crew branches")
+            self._demand = None
+            return False
+        self._demand = (now, active)
+        return active
+
+    def _gateway(self, settings: AppSettings) -> Gateway:
+        return self._deps.gateway_factory(settings, audit_sink(self._deps.sessionmaker, None))
 
     async def _apply_allowlist(self, settings: AppSettings) -> None:
         domains = frozenset(settings.ci.egress_allowlist)
@@ -269,6 +307,9 @@ class RunnerPool:
         if result.exit_code == 0:
             return RunnerStatus.BUSY
         return RunnerStatus.IDLE if result.exit_code == _NOT_FOUND_EXIT else RunnerStatus.OFFLINE
+
+    async def _is_busy(self, handle: ContainerHandle) -> bool:
+        return await self._activity(handle) is RunnerStatus.BUSY
 
     async def _remove_all(self) -> None:
         try:

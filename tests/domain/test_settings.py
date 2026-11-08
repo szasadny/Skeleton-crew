@@ -157,7 +157,7 @@ def test_invalid_timezone_is_rejected(tz: str) -> None:
     ("field", "value"),
     [
         ("issues_per_day", -1),
-        ("issues_per_day", 51),
+        ("issues_per_day", 101),
         ("max_parallel_workers", 0),
         ("max_diff_lines", 9),
         ("max_comment_chars", 199),

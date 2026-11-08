@@ -268,10 +268,11 @@ class RunController:
         fix_quota: int,
     ) -> None:
         remaining = fix_quota
-        for pr in await choose_pr_updates(ctx, open_prs):
+        for update in await choose_pr_updates(ctx, open_prs):
+            pr = update.pr
             if remaining <= 0 or not self._window_open(ctx):
                 return
-            if not await has_conflicts(ctx, pr):
+            if not update.unfinished and not await has_conflicts(ctx, pr):
                 continue
             await slots.acquire()
             if not self._window_open(ctx):
@@ -279,7 +280,8 @@ class RunController:
                 return
             remaining -= 1
             task_id = await self._add_task(ctx, pr.issue, TaskKind.PR_FIX)
-            group.create_task(self._in_slot(slots, partial(run_pr_fix, ctx, task_id, pr)))
+            work = partial(run_pr_fix, ctx, task_id, pr, finish=update.unfinished)
+            group.create_task(self._in_slot(slots, work))
 
     async def _start_issues(
         self,

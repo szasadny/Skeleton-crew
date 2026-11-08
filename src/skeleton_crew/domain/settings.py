@@ -70,7 +70,7 @@ class Schedule(_Frozen):
 
 
 class Limits(_Frozen):
-    issues_per_day: int = Field(default=10, ge=0, le=50)
+    issues_per_day: int = Field(default=10, ge=0, le=100)
     refines_per_day: int = Field(default=10, ge=0, le=50)
     conflict_fixes_per_day: int = Field(default=30, ge=0, le=50)
     max_parallel_workers: int = Field(default=2, ge=1, le=10)

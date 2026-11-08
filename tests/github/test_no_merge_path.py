@@ -101,6 +101,7 @@ def test_gateway_exposes_no_merge_like_method() -> None:
         "fetch_branch",
         "branch_head",
         "failed_job_logs",
+        "skeleton_ci_active",
         "branch_rules",
         "ruleset_bypass",
         "installation_permissions",

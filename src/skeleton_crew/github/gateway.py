@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 from urllib.parse import quote
 
 from githubkit import AppAuthStrategy, AppInstallationAuthStrategy, GitHub, Response
@@ -45,6 +45,7 @@ from skeleton_crew.github.write_guard import (
 
 TOKEN_REFRESH_MARGIN = timedelta(minutes=5)
 _PER_PAGE = 100
+_ACTIVE_RUN_STATUSES: tuple[Literal["queued", "in_progress"], ...] = ("queued", "in_progress")
 LOGS_UNAVAILABLE = "(logs unavailable)"
 _EDITS_QUERY = """
 query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
@@ -121,6 +122,7 @@ class Gateway(Protocol):
     async def pr_mergeable(self, number: int) -> bool | None: ...
     async def ci_status(self, sha: str, required: Collection[str] = ()) -> CiStatus: ...
     async def failed_job_logs(self, job_ids: Sequence[int], max_chars: int) -> str: ...
+    async def skeleton_ci_active(self) -> bool: ...
     async def branch_rules(self, branch: str) -> list[BranchRule]: ...
     async def ruleset_bypass(self, ruleset_id: int) -> str: ...
     async def installation_permissions(self) -> dict[str, str]: ...
@@ -406,6 +408,22 @@ class GitHubGateway:
             except RequestFailed:
                 logs.append((job_id, LOGS_UNAVAILABLE))
         return format_job_logs(logs, max_chars)
+
+    async def skeleton_ci_active(self) -> bool:
+        rest = self._client.rest
+        for status in _ACTIVE_RUN_STATUSES:
+            runs = rest.paginate(
+                rest.actions.async_list_workflow_runs_for_repo,
+                _key_list("workflow_runs"),
+                self._owner,
+                self._name,
+                status=status,
+                per_page=_PER_PAGE,
+            )
+            async for run in runs:
+                if issue_number_from_branch(str(run.get("head_branch") or "")) is not None:
+                    return True
+        return False
 
     async def branch_rules(self, branch: str) -> list[BranchRule]:
         rest = self._client.rest

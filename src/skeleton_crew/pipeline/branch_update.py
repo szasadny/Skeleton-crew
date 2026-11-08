@@ -1,9 +1,10 @@
 from dataclasses import dataclass
 
 from skeleton_crew.domain.task_state import TaskEvent
+from skeleton_crew.github.gateway import CiState
 from skeleton_crew.pipeline.escalation import Escalation
 from skeleton_crew.pipeline.job_engine import Skip, deliver, iterate
-from skeleton_crew.pipeline.texts import COMMIT_AUTHOR, merge_message
+from skeleton_crew.pipeline.texts import COMMIT_AUTHOR, RERUN_CI_MESSAGE, merge_message
 from skeleton_crew.pipeline.worker_job import WorkerJob
 from skeleton_crew.pipeline.worker_policy import inspect_commit
 from skeleton_crew.runtime.workspace import commit_tree, merge_trees, tree_of
@@ -46,7 +47,7 @@ async def resolve_conflicts(job: WorkerJob, merge: BaseMerge) -> None:
 async def publish_clean_merge(job: WorkerJob, merge: BaseMerge) -> None:
     repo = job.paths.controller_repo
     if merge.tree == await tree_of(repo, merge.head):
-        merged = merge.head
+        merged = await _rerun_failed_ci(job, merge)
     else:
         merged = await commit_tree(
             repo,
@@ -64,3 +65,18 @@ async def publish_clean_merge(job: WorkerJob, merge: BaseMerge) -> None:
     follow_up = await deliver(job, check, merged, None)
     if follow_up is not None:
         await iterate(job, follow_up)
+
+
+async def _rerun_failed_ci(job: WorkerJob, merge: BaseMerge) -> str:
+    ctx = job.ctx
+    status = await ctx.gateway.ci_status(merge.head, ctx.required_checks)
+    if status.state is not CiState.FAILURE:
+        return merge.head
+    # An empty commit restarts CI without giving the App write access to Actions.
+    return await commit_tree(
+        job.paths.controller_repo,
+        tree=merge.tree,
+        parents=[merge.head],
+        message=RERUN_CI_MESSAGE,
+        author=COMMIT_AUTHOR,
+    )

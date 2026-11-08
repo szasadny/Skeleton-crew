@@ -461,3 +461,26 @@ async def test_repo_is_private_only_for_a_literal_true(private: object, expected
     )
 
     assert await make_gateway(AuditLog()).repo_is_private() is expected
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("queued", "running", "active"),
+    [
+        (["main"], ["feature/x"], False),
+        (["main"], ["skeleton/12-fix-it"], True),
+        (["skeleton/12-fix-it"], [], True),
+        (["skeleton/main"], ["skeleton/"], False),
+        ([], [], False),
+    ],
+)
+async def test_skeleton_ci_active_counts_only_skeleton_branches(
+    queued: list[str], running: list[str], active: bool
+) -> None:
+    for status, branches in (("queued", queued), ("in_progress", running)):
+        runs = [{"head_branch": b, "status": status} for b in branches]
+        respx.get(f"{API}/repos/o/r/actions/runs", params={"status": status}).mock(
+            return_value=httpx.Response(200, json={"total_count": len(runs), "workflow_runs": runs})
+        )
+
+    assert await make_gateway(AuditLog()).skeleton_ci_active() is active

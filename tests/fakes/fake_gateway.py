@@ -113,6 +113,8 @@ class FakeGitHubGateway:
         self.ci: dict[str, list[CiStatus]] = {}
         self.ci_required: list[frozenset[str]] = []
         self.job_logs: dict[int, str] = {}
+        self.skeleton_ci = False
+        self.skeleton_ci_reads = 0
         self.permissions: dict[str, str] = {MAINTAINER: "maintain"}
         self.rules: list[BranchRule] = [
             BranchRule("pull_request", 1, {"required_approving_review_count": 1})
@@ -230,6 +232,11 @@ class FakeGitHubGateway:
     async def failed_job_logs(self, job_ids: Sequence[int], max_chars: int) -> str:
         logs = [(i, self.job_logs.get(i, "(logs unavailable)")) for i in job_ids if i > 0]
         return format_job_logs(logs, max_chars)
+
+    async def skeleton_ci_active(self) -> bool:
+        self._maybe_fail("skeleton_ci_active")
+        self.skeleton_ci_reads += 1
+        return self.skeleton_ci
 
     async def branch_rules(self, branch: str) -> list[BranchRule]:
         self._maybe_fail("branch_rules")

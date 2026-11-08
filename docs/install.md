@@ -111,7 +111,7 @@ Optionally, Skeleton Crew runs the CI of its own pull requests on runners on thi
 
 The runners belong to Skeleton Crew alone:
 
-- **Only while needed.** A runner container exists only while a task of a live run waits for CI (`awaiting_ci`); dry runs never start one. Outside that, GitHub shows the runners as offline. That is expected.
+- **Only while needed.** A runner container exists only while a task of a live run waits for CI (`awaiting_ci`), or while GitHub reports a queued or running workflow run on a `skeleton/` branch (checked at most every 30 seconds); dry runs never start one. When that ends, a runner busy with a job finishes it first. Outside that, GitHub shows the runners as offline. That is expected.
 - **Only Skeleton Crew's jobs.** Before every job, the runner checks the branch (`github.head_ref` for pull requests, otherwise the pushed branch). If the branch does not start with `skeleton/`, the job fails at once with: *Not a Skeleton Crew job: These self-hosted runners only run jobs that Skeleton Crew sent …*, and the fix below.
 - **Only private repositories.** A public repo would run jobs of fork PRs on this host. GitHub's "Require approval for all external contributors" setting would cover that, but checking it needs the App permission Administration: read, which the App deliberately does not have. Without that check, Skeleton Crew would have to trust the setting blindly.
 
@@ -131,7 +131,7 @@ Each runner is a container with Sysbox and its own Docker, so jobs can use `dock
    ```
 
    This runs `config.sh --unattended --disableupdate` and writes `.runner`, `.credentials` and `.credentials_rsaparams` to that directory. Treat these files as a secret: they are the runner's identity. Use the same labels as on the CI page.
-3. On the CI page, enable **Run self-hosted runners**. The runners show `standby` until a task waits for CI.
+3. On the CI page, enable **Run self-hosted runners**. The runners show `standby` until CI waits on a skeleton branch.
 
 ### Route Skeleton Crew's pull requests to them
 
@@ -143,7 +143,7 @@ runs-on: ${{ startsWith(github.head_ref, 'skeleton/') && vars.CI_RUNNER || 'ubun
 
 Set the repository variable `CI_RUNNER` to `skeleton-crew` (the label). `github.head_ref` is set only for pull requests, so pushes, manual runs and people's pull requests stay on GitHub. A job that is routed here anyway fails with the message above instead of running.
 
-Jobs wait in GitHub's queue until a runner is online, and GitHub fails a queued job after 24 hours. Skeleton Crew cannot fail such a job sooner, because no runner exists to pick it up. That can happen to a re-run of a skeleton PR's CI outside a run, or while the VM is off. Re-run it while Skeleton Crew waits for that CI, or let it expire.
+Jobs wait in GitHub's queue until a runner is online, and GitHub fails a queued job after 24 hours. A queued job on a skeleton branch, including one you re-run yourself, starts the runners within about 30 seconds. Only while the VM or Skeleton Crew is off, or self-hosted CI is off or the kill switch is on, does such a job wait until it expires.
 
 ### The runner image and egress
 
@@ -156,7 +156,7 @@ Prefer exact hosts over wildcards for storage domains (`*.r2.cloudflarestorage.c
 ### Maintenance
 
 - **Updates**: runners do not update themselves. GitHub stops sending jobs to a runner that is too old, so pull and rerun `sudo scripts/install.sh` regularly; the image pins the runner version.
-- **Expired registrations**: GitHub removes a runner that has not connected for 14 days. Since runners only connect during runs, this happens after 14 days without a live run that waits for CI. The CI page then shows the runner offline with "check its registration". Delete its directory and register it again.
+- **Expired registrations**: GitHub removes a runner that has not connected for 14 days. Since runners only connect while CI waits on a skeleton branch, this happens after 14 days without such CI. The CI page then shows the runner offline with "check its registration". Delete its directory and register it again.
 - **Kill switch and off**: both remove the runner containers within seconds, and no new ones start.
 - **Deregister**: remove the runner in Settings → Actions → Runners, then delete its directory under `/var/lib/skeleton-crew/runners/`. If a registration may have leaked, do this at once and register a new one.
 - **Sizing**: each runner is capped at the CI page's `cpus` and `memory_gb`, on top of the agent containers (see Sizing above).

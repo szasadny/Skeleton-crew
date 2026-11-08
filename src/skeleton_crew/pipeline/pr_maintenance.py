@@ -1,11 +1,12 @@
 import logging
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 from skeleton_crew.core.audit import AuditKind, AuditOutcome
 from skeleton_crew.domain.branch_policy import pushed_by_controller
 from skeleton_crew.domain.task_keys import worker_key
-from skeleton_crew.domain.task_state import TaskEvent, TaskKind
-from skeleton_crew.pipeline.branch_update import merge_base, resolve_conflicts
+from skeleton_crew.domain.task_state import TaskEvent, TaskKind, TaskState
+from skeleton_crew.pipeline.branch_update import merge_base, publish_clean_merge, resolve_conflicts
 from skeleton_crew.pipeline.deps import RunContext
 from skeleton_crew.pipeline.job_engine import Skip, run_job
 from skeleton_crew.pipeline.run_setup import OpenPr
@@ -20,13 +21,19 @@ MERGEABLE_POLL_SECONDS = 5.0
 log = logging.getLogger(__name__)
 
 
-async def choose_pr_updates(ctx: RunContext, open_prs: Sequence[OpenPr]) -> list[OpenPr]:
-    owned: list[OpenPr] = []
+@dataclass(frozen=True)
+class PrUpdate:
+    pr: OpenPr
+    unfinished: bool
+
+
+async def choose_pr_updates(ctx: RunContext, open_prs: Sequence[OpenPr]) -> list[PrUpdate]:
+    owned: list[PrUpdate] = []
     for pr in open_prs:
         async with ctx.deps.sessionmaker() as session:
             last = await runs_store.last_pushed_task(session, pr.issue.number)
-        if pushed_by_controller(pr.pull.head_sha, last.head_sha if last else None):
-            owned.append(pr)
+        if last is not None and pushed_by_controller(pr.pull.head_sha, last.head_sha):
+            owned.append(PrUpdate(pr, unfinished=last.state is not TaskState.DONE))
         else:
             await _skipped(ctx, pr, f"PR #{pr.pull.number} has commits Skeleton Crew did not push")
     return owned
@@ -67,7 +74,7 @@ async def _skipped(ctx: RunContext, pr: OpenPr, reason: str) -> None:
     )
 
 
-async def run_pr_fix(ctx: RunContext, task_id: int, pr: OpenPr) -> None:
+async def run_pr_fix(ctx: RunContext, task_id: int, pr: OpenPr, *, finish: bool) -> None:
     key = worker_key(task_id)
     job = WorkerJob(
         ctx=ctx,
@@ -85,8 +92,11 @@ async def run_pr_fix(ctx: RunContext, task_id: int, pr: OpenPr) -> None:
     async def work(job: WorkerJob) -> None:
         await job.record.fire(TaskEvent.STARTED, branch=job.branch, pr_number=pr.pull.number)
         merge = await merge_base(job)
-        if not merge.conflicts:
+        if merge.conflicts:
+            await resolve_conflicts(job, merge)
+        elif finish:
+            await publish_clean_merge(job, merge)
+        else:
             raise Skip("the PR merges cleanly after all")
-        await resolve_conflicts(job, merge)
 
     await run_job(job, work)

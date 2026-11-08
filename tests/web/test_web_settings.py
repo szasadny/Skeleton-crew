@@ -133,7 +133,7 @@ async def test_schedule_validation_error_rerenders_form(web: Web) -> None:
 
 async def test_limits_page_exposes_model_constraints(web: Web) -> None:
     html = (await web.client.get("/limits")).text
-    assert 'name="limits.issues_per_day" type="number" step="1" min="0" max="50"' in html
+    assert 'name="limits.issues_per_day" type="number" step="1" min="0" max="100"' in html
     assert 'name="limits.worker_timeout_hours" type="number" step="any" min="0" max="24"' in html
     assert 'name="limits.task_retention_days" type="number" step="1" min="1" max="365"' in html
     assert "Max budget USD per session" in html
@@ -154,7 +154,7 @@ async def test_limits_round_trip_and_audit(web: Web) -> None:
 async def test_limits_validation_error(web: Web) -> None:
     status, html = await _post(web, "/limits", _limits_form(issues_per_day=999))
     assert status == 422
-    assert "less than or equal to 50" in html
+    assert "less than or equal to 100" in html
     assert 'value="999"' in html
     assert (await web.settings()).limits == Limits()
 

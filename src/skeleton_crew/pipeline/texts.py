@@ -7,6 +7,7 @@ from skeleton_crew.domain.text_policy import sanitize_agent_text
 
 COMMIT_AUTHOR = "Skeleton Crew <skeleton-crew@users.noreply.github.com>"
 PR_TITLE_PREFIX = "[skeleton] "
+RERUN_CI_MESSAGE = "Re-run CI"
 # Above the schema's 72 so that inserted zero-width spaces never trigger the multi-line suffix.
 PR_TITLE_CHARS = 100
 ISSUE_TITLE_CHARS = 200

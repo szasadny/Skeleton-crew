@@ -28,7 +28,9 @@ Skeleton Crew uses three labels, which are configurable in the UI. Only a human 
 
 ### Keeping PRs up to date
 
-While the issue still has `skeleton`, each run asks GitHub whether its open skeleton PR merges cleanly. A conflict goes to a worker, then CI and review run again, all within `conflict_fixes_per_day`. A PR that merges cleanly, or whose state GitHub has not computed yet, is left as it is. Remove `skeleton` (or push a commit to the branch yourself) and Skeleton Crew leaves the PR alone.
+While the issue still has `skeleton`, each run asks GitHub whether its open skeleton PR merges cleanly. A conflict goes to a worker, then CI and review run again, all within `conflict_fixes_per_day`. A finished PR (its last task approved) that merges cleanly, or whose state GitHub has not computed yet, is left as it is.
+
+A PR whose last task escalated, failed or was aborted is finished in the next run, within the same quota: the base is merged in if it moved, failed CI is started again with an empty `Re-run CI` commit, pending CI is awaited, red CI goes to a worker, and then the reviewer runs. So after an escalation caused by a passing problem (slow CI, a blocked download), fix the cause and swap `skeleton HITL` for `skeleton`. Remove `skeleton` (or push a commit to the branch yourself) and Skeleton Crew leaves the PR alone.
 
 ### Escalation
 
@@ -46,7 +48,7 @@ The controller comments on the issue, removes `skeleton` and adds `skeleton HITL
 - with the injection screen on, the issue text or the CI or check output looks like prompt injection, or the classifier gives no valid answer; edit the text to go on;
 - with the pre-screen on, the classifier is sure the issue is too large or unclear.
 
-To retry an issue whose existing branch escalated, delete the branch `skeleton/<number>-<slug>`, remove `skeleton HITL` and add `skeleton` again. The next run starts a fresh branch.
+To go on after an escalation, remove `skeleton HITL` and add `skeleton` again. With an open PR, the next run finishes that PR (see above). To start over instead, close the PR, delete the branch `skeleton/<number>-<slug>` and then swap the labels; the next run starts a fresh branch.
 
 ### New issues found by a worker
 

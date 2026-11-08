@@ -29,7 +29,9 @@ from skeleton_crew.core.audit import AuditKind, AuditOutcome
 from skeleton_crew.core.git import GitCommandError
 from skeleton_crew.domain.settings import Role
 from skeleton_crew.domain.task_state import TaskKind, TaskState
+from skeleton_crew.github.gateway import CiState, CiStatus, FailedJob
 from skeleton_crew.pipeline.pr_maintenance import MERGEABLE_POLL_SECONDS, MERGEABLE_POLLS
+from skeleton_crew.pipeline.texts import RERUN_CI_MESSAGE
 from skeleton_crew.store import audit_store, runs_store
 
 
@@ -312,7 +314,9 @@ async def test_fix_quota_counts_only_conflicting_prs(harness: Harness) -> None:
     async with harness.sessionmaker() as session:
         run = await runs_store.create_run(session, "manual", False)
         task = await runs_store.add_worker_task(session, run.id, 2, "Add farewell")
-        await runs_store.update_worker_task(session, task.id, head_sha="c" * 40)
+        await runs_store.update_worker_task(
+            session, task.id, state=TaskState.DONE, head_sha="c" * 40
+        )
         await session.commit()
     harness.limits(conflict_fixes_per_day=1)
 
@@ -355,3 +359,120 @@ async def test_dry_run_update_writes_nothing(harness: Harness) -> None:
     assert harness.gateway.writes == []
     assert git(harness.remote, "rev-parse", BRANCH).decode().strip() == head
     assert (AuditKind.GITHUB_WRITE, AuditOutcome.DRY_RUN) in await harness.audit_kinds()
+
+
+UNFINISHED = [TaskState.ESCALATED, TaskState.FAILED, TaskState.ABORTED]
+FAILED_CI = CiStatus(CiState.FAILURE, [FailedJob("tests", 7, "https://ci/7")])
+
+
+def tree_of(harness: Harness, sha: str) -> str:
+    return git(harness.remote, "rev-parse", f"{sha}^{{tree}}").decode().strip()
+
+
+@pytest.mark.parametrize("state", UNFINISHED)
+async def test_unfinished_pr_with_green_ci_is_reviewed(harness: Harness, state: TaskState) -> None:
+    head = await open_pr(harness, {"app.py": HI}, state=state, mergeable=True)
+    harness.backend.script(Role.REVIEWER, review_json())
+
+    run_id = await harness.run()
+
+    task = await only_task(harness, run_id)
+    assert (task.kind, task.state) == (TaskKind.PR_FIX, TaskState.DONE)
+    assert harness.gateway.mergeable_reads == []
+    assert git(harness.remote, "rev-parse", BRANCH).decode().strip() == head
+    assert harness.gateway.review_checks[head][0] is True
+    assert [r.role for r in harness.backend.requests] == [Role.REVIEWER]
+    assert_no_forbidden_writes(harness)
+
+
+async def test_unfinished_pr_with_red_ci_reruns_it_with_an_empty_commit(harness: Harness) -> None:
+    head = await open_pr(harness, {"app.py": HI}, state=TaskState.ESCALATED)
+    harness.gateway.ci_queue = [FAILED_CI, CiStatus(CiState.SUCCESS, [])]
+    harness.backend.script(Role.REVIEWER, review_json())
+
+    run_id = await harness.run()
+
+    task = await only_task(harness, run_id)
+    assert (task.state, task.ci_rounds) == (TaskState.DONE, 0)
+    [(_, rerun)] = harness.gateway.pushes
+    assert parents_of(harness, rerun) == [head]
+    assert tree_of(harness, rerun) == tree_of(harness, head)
+    message = git(harness.remote, "log", "-1", "--format=%s", rerun).decode().strip()
+    assert message == RERUN_CI_MESSAGE
+    assert harness.gateway.leases == [head]
+    assert harness.gateway.review_checks[rerun][0] is True
+    assert [r.role for r in harness.backend.requests] == [Role.REVIEWER]
+    assert_no_forbidden_writes(harness)
+
+
+async def test_ci_that_fails_again_after_the_rerun_goes_to_the_worker(harness: Harness) -> None:
+    await open_pr(harness, {"app.py": HI}, state=TaskState.ESCALATED)
+    harness.gateway.ci_queue = [FAILED_CI, FAILED_CI, CiStatus(CiState.SUCCESS, [])]
+    harness.gateway.job_logs[7] = "AssertionError: boom"
+    workspace_editor(harness, {"app.py": BOTH})
+    harness.backend.script(Role.WORKER, worker_json())
+    harness.backend.script(Role.REVIEWER, review_json())
+
+    run_id = await harness.run()
+
+    task = await only_task(harness, run_id)
+    assert (task.state, task.ci_rounds) == (TaskState.DONE, 1)
+    [worker] = harness.backend.prompts(Role.WORKER)
+    assert worker.resume_session_id is None
+    assert "AssertionError: boom" in worker.prompt
+    rerun, fixed = (sha for _, sha in harness.gateway.pushes)
+    assert parents_of(harness, fixed) == [rerun]
+    assert remote_file(harness, fixed, "app.py") == BOTH
+    assert_no_forbidden_writes(harness)
+
+
+async def test_unfinished_pr_behind_the_base_gets_a_merge_commit(harness: Harness) -> None:
+    head = await open_pr(harness, {"app.py": HI}, state=TaskState.ESCALATED)
+    main = advance_main(harness, {"README.md": "# Demo v2\n"})
+    harness.backend.script(Role.REVIEWER, review_json())
+
+    run_id = await harness.run()
+
+    task = await only_task(harness, run_id)
+    assert task.state is TaskState.DONE
+    [(_, merged)] = harness.gateway.pushes
+    assert parents_of(harness, merged) == [head, main]
+    assert harness.gateway.review_checks[merged][0] is True
+    assert [r.role for r in harness.backend.requests] == [Role.REVIEWER]
+
+
+async def test_unfinished_pr_with_commits_from_someone_else_is_not_finished(
+    harness: Harness,
+) -> None:
+    await open_pr(harness, {"app.py": HI}, state=TaskState.ESCALATED, recorded_head="b" * 40)
+
+    run_id = await harness.run()
+
+    assert await harness.tasks(run_id) == []
+    assert harness.gateway.writes == []
+    assert harness.backend.requests == []
+    assert await _skip_summaries(harness) == ["PR #10 has commits Skeleton Crew did not push"]
+
+
+async def test_unfinished_pr_needs_fix_quota(harness: Harness) -> None:
+    await open_pr(harness, {"app.py": HI}, state=TaskState.ESCALATED)
+    harness.limits(conflict_fixes_per_day=0)
+
+    run_id = await harness.run()
+
+    assert await harness.tasks(run_id) == []
+    assert harness.gateway.writes == []
+
+
+async def test_finishing_a_pr_in_a_dry_run_writes_nothing(harness: Harness) -> None:
+    head = await open_pr(harness, {"app.py": HI}, state=TaskState.ESCALATED)
+    harness.gateway.ci_queue = [FAILED_CI, CiStatus(CiState.SUCCESS, [])]
+    harness.backend.script(Role.REVIEWER, review_json())
+    harness.settings = harness.settings.model_copy(update={"dry_run": True})
+
+    run_id = await harness.run()
+
+    task = await only_task(harness, run_id)
+    assert task.state is TaskState.DONE
+    assert harness.gateway.writes == []
+    assert git(harness.remote, "rev-parse", BRANCH).decode().strip() == head

@@ -64,6 +64,8 @@ Expected: the second PR gets a merge commit from `main` with the conflict resolv
 
 Then push a commit of your own to a skeleton branch and run again: that PR is skipped and the audit log shows `pr_update_skipped`.
 
+To check finishing a PR: let a skeleton PR's CI fail on something outside the code (e.g. remove a needed host from the runner allowlist) so the issue escalates, fix the cause, swap `skeleton HITL` for `skeleton` and click **Run now**. Expected: a `pr_fix` task pushes an empty `Re-run CI` commit (or a merge commit if `main` moved), CI turns green and `skeleton-crew/review` follows; nothing is merged.
+
 ## 6. Repository hooks
 
 1. Commit a `.claude/settings.json` to `main` with a PostToolUse hook that stops the turn once (matcher `""`, a command that prints `{"continue": false}` unless `/tmp/hook-seen` exists, then creates it).
