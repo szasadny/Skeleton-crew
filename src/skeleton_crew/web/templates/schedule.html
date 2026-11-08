@@ -21,6 +21,6 @@
   {{ m.number(window, values, errors) }}
   {{ m.text("schedule.timezone", "Timezone", values, errors, list="timezones") }}
   <datalist id="timezones">{% for tz in timezones %}<option value="{{ tz }}">{% endfor %}</datalist>
-  <button type="submit">Save</button>
+  {{ m.savebar() }}
 </form>
 {% endblock %}

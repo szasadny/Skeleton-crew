@@ -25,6 +25,11 @@
   --cut: 14px;
   /* Straight edges overshoot 1px: borders are pixel-snapped but clip-paths are not. */
   --plate: polygon(-1px -1px, calc(100% - var(--cut) - 1px) -1px, calc(100% + 1px) calc(var(--cut) + 1px), calc(100% + 1px) calc(100% + 1px), calc(var(--cut) + 1px) calc(100% + 1px), -1px calc(100% - var(--cut) - 1px));
+  --backdrop:
+    radial-gradient(ellipse 80% 50% at 70% -10%, rgba(255, 59, 48, 0.09), transparent 70%),
+    linear-gradient(rgba(255, 255, 255, 0.022) 1px, transparent 1px) 0 0 / 32px 32px,
+    linear-gradient(90deg, rgba(255, 255, 255, 0.022) 1px, transparent 1px) 0 0 / 32px 32px,
+    var(--void);
   accent-color: var(--optic);
 }
 
@@ -39,11 +44,7 @@ body {
   font-size: 15px;
   line-height: 1.55;
   color: var(--bone);
-  background:
-    radial-gradient(ellipse 80% 50% at 70% -10%, rgba(255, 59, 48, 0.09), transparent 70%),
-    linear-gradient(rgba(255, 255, 255, 0.022) 1px, transparent 1px) 0 0 / 32px 32px,
-    linear-gradient(90deg, rgba(255, 255, 255, 0.022) 1px, transparent 1px) 0 0 / 32px 32px,
-    var(--void);
+  background: var(--backdrop);
   background-attachment: fixed;
 }
 
@@ -371,6 +372,8 @@ a.vital:hover { text-decoration: none; text-shadow: none; color: var(--bone); bo
   border-bottom: 1px dashed var(--steel);
 }
 .controls form { margin: 0; }
+.controls #flash { flex: 1; min-width: 0; }
+.controls .notice { margin: 0; }
 
 .hazard {
   position: relative;
@@ -407,8 +410,6 @@ a.vital:hover { text-decoration: none; text-shadow: none; color: var(--bone); bo
 
 .editor .card-head { justify-content: flex-start; }
 .editor > .hint { margin: 0 0 1rem 0.4rem; }
-.editor-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 0.75rem; margin-top: 1rem; }
-.editor-actions .hint { margin: 0 auto 0 0; }
 
 legend .state { margin-left: 0.75rem; vertical-align: 0.1em; }
 
@@ -435,13 +436,15 @@ legend .state { margin-left: 0.75rem; vertical-align: 0.1em; }
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 1.25rem;
+  gap: 0.75rem;
   margin-top: 1.5rem;
   padding: 0.85rem 0;
-  background: linear-gradient(180deg, rgba(8, 9, 11, 0.8), var(--void) 60%);
+  background: var(--backdrop);
+  background-attachment: fixed;
   border-top: 1px solid var(--steel);
 }
-.savebar .hint { margin: 0; }
+.savebar .notice { flex: 1; min-width: 0; margin: 0 0.5rem 0 0; }
+.savebar button { flex: none; }
 
 
 body.boot .hud {
@@ -504,6 +507,7 @@ body.boot .hud {
 }
 .notice { color: var(--phosphor); background: rgba(61, 220, 132, 0.06); border: 1px solid rgba(61, 220, 132, 0.35); }
 .notice::before { content: "> "; }
+.notice:empty { visibility: hidden; }
 .alert { color: var(--optic-soft); background: var(--optic-haze); border: 1px solid rgba(255, 59, 48, 0.5); border-left-width: 3px; }
 .alert p { margin: 0.2rem 0; }
 

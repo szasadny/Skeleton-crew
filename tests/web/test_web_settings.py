@@ -365,3 +365,21 @@ async def test_repo_model_level_error_is_shown_at_the_top(web: Web) -> None:
     status, html = await _post(web, "/repo", _repo_form(**{"labels.hitl": "Skeleton"}))
     assert status == 422
     assert '<div class="alert"><p>label names must be distinct</p></div>' in html
+
+
+_EMPTY_NOTICE = '<p class="notice" role="status"></p>'
+
+
+@pytest.mark.parametrize("path", ["/limits", "/repo", "/schedule", "/ci", "/agents"])
+async def test_saved_message_sits_left_of_save_button(web: Web, path: str) -> None:
+    html = (await web.client.get(f"{path}?msg=saved")).text
+    assert html.count('class="notice"') == 1
+    notice = html.index('<p class="notice" role="status">Saved.</p>')
+    assert notice < html.index('<button type="submit">Save</button>')
+
+
+@pytest.mark.parametrize("path", ["/limits", "/repo", "/schedule", "/ci", "/agents"])
+async def test_message_slot_is_reserved_without_message(web: Web, path: str) -> None:
+    html = (await web.client.get(path)).text
+    assert html.count('class="notice"') == 1
+    assert html.index(_EMPTY_NOTICE) < html.index('<button type="submit">Save</button>')

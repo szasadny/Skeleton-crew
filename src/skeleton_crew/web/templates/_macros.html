@@ -1,5 +1,15 @@
 {% macro csrf() %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endmacro %}
 
+{% macro flash() %}<p class="notice" role="status">{{ message or "" }}</p>{% endmacro %}
+
+{% macro savebar() %}
+<div class="savebar">
+  {{ flash() }}
+  {% if caller %}{{ caller() }}{% endif %}
+  <button type="submit">Save</button>
+</div>
+{% endmacro %}
+
 {% macro field_errors(errors, name) %}
 {% for error in errors.get(name, []) %}<p class="field-error">{{ error }}</p>{% endfor %}
 {% endmacro %}

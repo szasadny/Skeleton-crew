@@ -102,3 +102,13 @@ async def test_reset_saves_the_default_as_new_revision(web: Web) -> None:
     assert await _active(web, "selector") == default_rules("selector")
     async with web.sessionmaker() as session:
         assert len(await rules_store.rule_history(session, "selector", 20)) == 2
+
+
+@pytest.mark.parametrize(
+    ("msg", "text"), [("", ""), ("saved", "Saved."), ("rules_reset", "Rules reset to the default.")]
+)
+async def test_rules_message_sits_left_of_save_button(web: Web, msg: str, text: str) -> None:
+    html = (await web.client.get(f"/rules/common?msg={msg}")).text
+    assert html.count('class="notice"') == 1
+    notice = html.index(f'<p class="notice" role="status">{text}</p>')
+    assert notice < html.index('<button type="submit">Save</button>')

@@ -33,6 +33,6 @@
       {% for spec in resources %}{{ m.number(spec, values, errors) }}{% endfor %}
     </div>
   </fieldset>
-  <button type="submit">Save</button>
+  {{ m.savebar() }}
 </form>
 {% endblock %}

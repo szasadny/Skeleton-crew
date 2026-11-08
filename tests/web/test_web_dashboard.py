@@ -164,11 +164,18 @@ async def test_sidebar_puts_monitoring_before_configuration(web: Web) -> None:
     assert '<span class="segment">C6</span>' in html
 
 
-async def test_dashboard_message_sits_between_controls_and_panels(web: Web) -> None:
+async def test_dashboard_message_sits_between_dry_run_and_kill_switch(web: Web) -> None:
     response = await web.post("/actions/kill")
     html = (await web.client.get(response.headers["location"])).text
-    notice = html.index('<p class="notice">Kill switch engaged.')
-    assert html.index("Release kill switch") < notice < html.index("<h2>Last run</h2>")
+    notice = html.index('<p class="notice" role="status">Kill switch engaged.')
+    assert html.index("dry run</button>") < notice < html.index("Release kill switch")
     assert html.count('class="notice"') == 1
     partial = (await web.client.get("/partials/status")).text
-    assert '<div id="flash" hx-preserve></div>' in partial
+    assert '<div id="flash" hx-preserve><p class="notice" role="status"></p></div>' in partial
+
+
+async def test_dashboard_message_slot_sits_in_controls_row(web: Web) -> None:
+    html = (await web.client.get("/")).text
+    slot = html.index('<p class="notice" role="status"></p>')
+    assert html.index("dry run</button>") < slot < html.index("Kill switch</button>")
+    assert html.count('class="notice"') == 1

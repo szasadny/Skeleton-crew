@@ -34,7 +34,6 @@
   {% endif %}
   <main class="hud">
     {% if authenticated %}<p class="kicker">sc://{{ path.strip("/") or "dashboard" }}<span class="cursor"></span></p>{% endif %}
-    {% block flash %}{% if message %}<p class="notice">{{ message }}</p>{% endif %}{% endblock %}
     {% block content %}{% endblock %}
   </main>
 </body>

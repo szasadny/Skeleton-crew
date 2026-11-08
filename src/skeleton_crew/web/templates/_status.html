@@ -31,6 +31,8 @@
     <input type="hidden" name="enabled" value="{{ 'off' if settings.dry_run else 'on' }}">
     <button type="submit" class="secondary big">{{ "Disable dry run" if settings.dry_run else "Enable dry run" }}</button>
   </form>
+  {# Polls carry no message; hx-preserve keeps the one from the page load. #}
+  <div id="flash" hx-preserve>{{ m.flash() }}</div>
   {% if settings.kill_switch %}
   <div class="hazard">
     <form method="post" action="/actions/release">{{ m.csrf() }}<button type="submit" class="secondary big">Release kill switch</button></form>
@@ -42,8 +44,6 @@
   </div>
   {% endif %}
 </section>
-{# Polls carry no message; hx-preserve keeps the one from the page load. #}
-<div id="flash" hx-preserve>{% if message %}<p class="notice">{{ message }}</p>{% endif %}</div>
 
 <div class="split">
   <section class="panel">

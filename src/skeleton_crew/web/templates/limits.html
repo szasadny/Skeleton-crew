@@ -8,6 +8,6 @@
   <div class="grid">
     {% for spec in specs %}{{ m.number(spec, values, errors) }}{% endfor %}
   </div>
-  <button type="submit">Save</button>
+  {{ m.savebar() }}
 </form>
 {% endblock %}
