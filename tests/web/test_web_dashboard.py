@@ -155,12 +155,22 @@ async def test_last_run_without_blockers_shows_no_badge(web: Web) -> None:
 
 async def test_sidebar_puts_monitoring_before_configuration(web: Web) -> None:
     html = (await web.client.get("/")).text
-    links = ["/runs", "/logs", "/repo", "/agents", "/rules/common", "/schedule", "/limits", "/ci"]
+    links = [
+        "/runs",
+        "/blockers",
+        "/logs",
+        "/repo",
+        "/agents",
+        "/rules/common",
+        "/schedule",
+        "/limits",
+        "/ci",
+    ]
     positions = [html.index(f'<a href="{link}" class="vertebra') for link in links]
     assert positions == sorted(positions)
     monitor, configure = html.index(">Monitor<"), html.index(">Configure<")
-    assert monitor < positions[0] < configure < positions[2]
-    assert '<span class="segment">M3</span>' in html
+    assert monitor < positions[0] < configure < positions[3]
+    assert '<span class="segment">M4</span>' in html
     assert '<span class="segment">C6</span>' in html
 
 

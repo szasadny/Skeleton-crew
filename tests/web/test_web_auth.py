@@ -29,7 +29,8 @@ async def _login_events(web: Web) -> list[tuple[AuditOutcome, str, object]]:
 
 
 @pytest.mark.parametrize(
-    "path", ["/", "/schedule", "/limits", "/agents/draft", "/rules/common", "/runs", "/logs"]
+    "path",
+    ["/", "/schedule", "/limits", "/agents/draft", "/rules/common", "/runs", "/blockers", "/logs"],
 )
 async def test_pages_redirect_to_login_without_session(web: Web, path: str) -> None:
     response = await web.client.get(path)

@@ -187,3 +187,16 @@ async def test_expired_ids_only_cover_listed_old_terminal_rows(session: AsyncSes
     assert await runs_store.expired_refine_task_ids(session, refines, earlier) == []
     assert await runs_store.expired_run_ids(session, runs, earlier) == []
     assert await runs_store.expired_worker_task_ids(session, [], later) == []
+
+
+async def test_list_tasks_with_blockers_newest_first_and_paged(session: AsyncSession) -> None:
+    run = await runs_store.create_run(session, "manual", dry_run=True)
+    first, second, third, fourth = [
+        await runs_store.add_worker_task(session, run.id, n, f"Issue {n}") for n in range(1, 5)
+    ]
+    await runs_store.update_worker_task(session, first.id, blockers=["a"])
+    await runs_store.update_worker_task(session, third.id, blockers=["b", "c"])
+    await runs_store.update_worker_task(session, fourth.id, blockers=[])
+    assert second.blockers is None
+    assert await runs_store.list_tasks_with_blockers(session) == [third, first]
+    assert await runs_store.list_tasks_with_blockers(session, limit=1, offset=1) == [first]

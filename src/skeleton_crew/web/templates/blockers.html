@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Blockers{% endblock %}
+{% block content %}
+<h1>Blockers</h1>
+<form method="get" action="/blockers/export" class="filters">
+  <button type="submit" class="secondary">Export CSV</button>
+</form>
+{% if tasks %}
+<table>
+  <thead><tr><th>Run</th><th>Issue</th><th>Kind</th><th>State</th><th>PR</th><th>Updated</th><th>Blockers</th></tr></thead>
+  <tbody>
+  {% for task in tasks %}
+  <tr>
+    <td><a href="/runs/{{ task.run_id }}">{{ task.run_id }}</a></td>
+    <td>#{{ task.issue_number }} {{ task.issue_title }}</td>
+    <td>{{ task.kind.value }}</td>
+    <td>{{ m.state(task.state.value) }}</td>
+    <td>{% if task.pr_number %}<a href="https://github.com/{{ repo }}/pull/{{ task.pr_number }}">#{{ task.pr_number }}</a>{% endif %}</td>
+    <td>{{ task.updated_at | dt }}</td>
+    <td><ul class="blockers">{% for blocker in task.blockers %}<li>{{ blocker }}</li>{% endfor %}</ul></td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>No blockers on this page.</p>
+{% endif %}
+{{ m.pager("/blockers", page, has_next) }}
+{% endblock %}

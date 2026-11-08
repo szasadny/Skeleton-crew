@@ -29,7 +29,12 @@ class NavGroup:
 NAV = (
     NavGroup(
         "Monitor",
-        (("/", "Dashboard", "/"), ("/runs", "Runs", "/runs"), ("/logs", "Logs", "/logs")),
+        (
+            ("/", "Dashboard", "/"),
+            ("/runs", "Runs", "/runs"),
+            ("/blockers", "Blockers", "/blockers"),
+            ("/logs", "Logs", "/logs"),
+        ),
     ),
     NavGroup(
         "Configure",

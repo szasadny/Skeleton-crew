@@ -2,7 +2,7 @@ from collections.abc import Collection
 from datetime import datetime
 from typing import Literal
 
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from skeleton_crew.domain.task_state import (
@@ -129,19 +129,28 @@ async def list_tasks(session: AsyncSession, run_id: int) -> list[WorkerTask]:
     return list(await session.scalars(query))
 
 
+def _has_blockers() -> ColumnElement[bool]:
+    return and_(WorkerTask.blockers.is_not(None), WorkerTask.blockers != [])
+
+
 async def count_tasks_with_blockers(
     session: AsyncSession, run_ids: Collection[int]
 ) -> dict[int, int]:
     query = (
         select(WorkerTask.run_id, func.count())
-        .where(
-            WorkerTask.run_id.in_(run_ids),
-            WorkerTask.blockers.is_not(None),
-            WorkerTask.blockers != [],
-        )
+        .where(WorkerTask.run_id.in_(run_ids), _has_blockers())
         .group_by(WorkerTask.run_id)
     )
     return {run_id: count for run_id, count in (await session.execute(query)).all()}
+
+
+async def list_tasks_with_blockers(
+    session: AsyncSession, limit: int | None = None, offset: int = 0
+) -> list[WorkerTask]:
+    query = select(WorkerTask).where(_has_blockers()).order_by(WorkerTask.id.desc()).offset(offset)
+    if limit is not None:
+        query = query.limit(limit)
+    return list(await session.scalars(query))
 
 
 async def add_refine_task(session: AsyncSession, run_id: int, issue_number: int) -> RefineTask:
