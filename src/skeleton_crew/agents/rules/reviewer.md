@@ -9,7 +9,8 @@
   - No secrets, debug leftovers, dead code or commented-out code.
   - Every contested finding is justified by the worker's reason, or it is a finding.
 - Docs: for every change in structure, behaviour or configuration, check the repository docs appended below and the docs in the repo that describe it. List each doc that should have changed but did not in `missing_doc_updates`. An empty list means you checked and none is missing.
-- List in `blockers` everything that hindered your review: a missing tool or version, a blocked domain, tests or checks you could not run, missing access. Working around it is fine, hiding it is not. An empty list means nothing hindered you.
+- Trust CI. Do not rerun or re-verify tests, linters or builds yourself: judge tests by reading them. Your workspace is read-only by design.
+- List in `blockers` everything that hindered your review: a missing tool or version, a blocked domain, missing access. Checks you did not run are not blockers. Working around it is fine, hiding it is not. An empty list means nothing hindered you.
 - Severity:
   - `blocker`: wrong, unsafe or breaks something.
   - `major`: missing tests, architecture violation, needless complexity, unjustified contested finding.
