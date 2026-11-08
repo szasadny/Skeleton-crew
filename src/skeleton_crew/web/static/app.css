@@ -583,12 +583,24 @@ button {
 }
 button:hover { background: #ff5d53; }
 button:focus-visible { outline: 2px solid var(--bone); outline-offset: -4px; }
-button.secondary { color: var(--bone); background: var(--metal-2); box-shadow: inset 0 0 0 1px var(--steel-hi); }
-button.secondary:hover { background: #26303a; box-shadow: inset 0 0 0 1px var(--chrome); }
+button.secondary, button.ghost { position: relative; }
+/* Outline as a clip-path ring: backgrounds and shadows are pixel-snapped but clip-paths are not. */
+button.secondary::before, button.ghost::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: var(--edge);
+  box-shadow: 0 0 0 1px var(--edge);
+  clip-path: polygon(evenodd, 10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px, 10px 0, 10.4px 1px, calc(100% - 1px) 1px, calc(100% - 1px) calc(100% - 10.4px), calc(100% - 10.4px) calc(100% - 1px), 1px calc(100% - 1px), 1px 10.4px, 10.4px 1px);
+  transition: background 0.15s, box-shadow 0.15s;
+}
+button.secondary { --edge: var(--steel-hi); color: var(--bone); background: var(--metal-2); }
+button.secondary:hover { --edge: var(--chrome); background: #26303a; }
 button.danger { color: #fff; background: #b3121b; }
 button.danger:hover { background: #d4151f; }
-button.ghost { color: var(--ash); background: transparent; box-shadow: inset 0 0 0 1px var(--steel); font-size: 0.75rem; }
-button.ghost:hover { color: var(--bone); box-shadow: inset 0 0 0 1px var(--steel-hi); }
+button.ghost { --edge: var(--steel); color: var(--ash); background: transparent; font-size: 0.75rem; }
+button.ghost:hover { --edge: var(--steel-hi); color: var(--bone); }
 button.big { padding: 0.85rem 1.7rem; font-size: 0.95rem; }
 button:disabled, button:disabled:hover { opacity: 0.35; cursor: not-allowed; filter: grayscale(1); }
 

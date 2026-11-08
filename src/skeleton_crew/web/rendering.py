@@ -22,19 +22,16 @@ templates.env.filters["dt"] = _format_datetime
 
 @dataclass(frozen=True)
 class NavGroup:
-    code: str
     title: str
     links: tuple[tuple[str, str, str], ...]
 
 
 NAV = (
     NavGroup(
-        "C",
         "Monitor",
         (("/", "Dashboard", "/"), ("/runs", "Runs", "/runs"), ("/logs", "Logs", "/logs")),
     ),
     NavGroup(
-        "T",
         "Configure",
         (
             ("/repo", "Repo", "/repo"),

@@ -160,8 +160,8 @@ async def test_sidebar_puts_monitoring_before_configuration(web: Web) -> None:
     assert positions == sorted(positions)
     monitor, configure = html.index(">Monitor<"), html.index(">Configure<")
     assert monitor < positions[0] < configure < positions[2]
-    assert '<span class="segment">C3</span>' in html
-    assert '<span class="segment">T6</span>' in html
+    assert '<span class="segment">M3</span>' in html
+    assert '<span class="segment">C6</span>' in html
 
 
 async def test_dashboard_message_sits_between_controls_and_panels(web: Web) -> None:

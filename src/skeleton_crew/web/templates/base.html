@@ -24,7 +24,7 @@
       <p class="region">{{ group.title }}</p>
       {% for href, label, prefix in group.links %}
       <a href="{{ href }}" class="vertebra{% if (path == "/" if prefix == "/" else path.startswith(prefix)) %} current{% endif %}">
-        <span class="bone"></span><span class="label">{{ label }}</span><span class="segment">{{ group.code }}{{ loop.index }}</span>
+        <span class="bone"></span><span class="label">{{ label }}</span><span class="segment">{{ group.title[0] }}{{ loop.index }}</span>
       </a>
       {% endfor %}
       {% endfor %}
