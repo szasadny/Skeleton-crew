@@ -134,6 +134,12 @@ def test_jsonl_events_skips_garbage(tmp_path: Path) -> None:
     assert list(jsonl_events(tmp_path / "absent")) == []
 
 
+def test_jsonl_events_skips_a_line_nested_too_deep(tmp_path: Path) -> None:
+    path = tmp_path / "out.jsonl"
+    path.write_text("\n".join(['{"a": 1}', '{"x":' + "[" * 100_000, '{"b": 2}']))
+    assert list(jsonl_events(path)) == [{"a": 1}, {"b": 2}]
+
+
 @pytest.mark.parametrize(
     ("value", "expected"),
     [("abc-1_2", "abc-1_2"), ("--resume", None), ("a b", None), ("x" * 101, None), (7, None)],

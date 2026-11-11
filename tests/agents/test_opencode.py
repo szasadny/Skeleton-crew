@@ -385,3 +385,156 @@ def test_parse_ignores_non_numeric_or_negative_cost(tmp_path: Path) -> None:
     negative = _step('{"a": 1}', cost=-5.0)
     path = _stream(tmp_path, *(json.dumps(line) for line in lines), *negative)
     assert _backend().parse(path, 0, False).cost_usd == 0.0
+
+
+def _api_error(*, status: object = 429, body: object = None, **data: Any) -> str:
+    fields: dict[str, Any] = {"message": "Quota exceeded.", "isRetryable": False, **data}
+    if status is not None:
+        fields["statusCode"] = status
+    if body is not None:
+        fields["responseBody"] = body if isinstance(body, str) else json.dumps(body)
+    return _event("error", name="APIError", data=fields)
+
+
+_OPENAI_QUOTA = _api_error(
+    body={
+        "error": {
+            "message": "You exceeded your current quota, please check your plan and billing"
+            " details.",
+            "type": "insufficient_quota",
+            "param": None,
+            "code": "insufficient_quota",
+        }
+    }
+)
+_OPENAI_SPEND_LIMIT = _api_error(
+    body={"error": {"type": "insufficient_quota", "code": "project_spend_limit_exceeded"}}
+)
+_OPENAI_STREAM_QUOTA = _api_error(
+    status=None, body={"type": "error", "error": {"code": "insufficient_quota"}}
+)
+_ANTHROPIC_BILLING = _api_error(
+    status=402,
+    body={"type": "error", "error": {"type": "billing_error", "message": "Billing issue."}},
+)
+_OPENROUTER_CREDITS = _api_error(
+    status=402, body={"error": {"code": 402, "message": "Insufficient credits."}}
+)
+
+
+@pytest.mark.parametrize(
+    "signal",
+    [
+        _OPENAI_QUOTA,
+        _OPENAI_SPEND_LIMIT,
+        _OPENAI_STREAM_QUOTA,
+        _ANTHROPIC_BILLING,
+        _OPENROUTER_CREDITS,
+    ],
+)
+def test_parse_failed_session_with_a_limit_signal_is_usage_limited(
+    tmp_path: Path, signal: str
+) -> None:
+    outcome = _backend().parse(_stream(tmp_path, *_tool_step(), signal), 1, False)
+    assert not outcome.ok
+    assert outcome.error == "session reported an error"
+    assert outcome.usage_limited
+
+
+def test_parse_limit_signal_still_counts_after_a_json_answer(tmp_path: Path) -> None:
+    outcome = _backend().parse(_stream(tmp_path, *_step('{"a": 1}'), _OPENAI_QUOTA), 1, False)
+    assert not outcome.ok
+    assert outcome.usage_limited
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        _event(
+            "text", type="text", text=json.loads(_OPENAI_QUOTA)["error"]["data"]["responseBody"]
+        ),
+        _event(
+            "step_finish",
+            type="step-finish",
+            reason="stop",
+            error=json.loads(_OPENAI_QUOTA)["error"],
+        ),
+        json.dumps({"type": "session.error", "error": json.loads(_ANTHROPIC_BILLING)["error"]}),
+    ],
+)
+def test_parse_successful_session_is_never_usage_limited(tmp_path: Path, line: str) -> None:
+    outcome = _backend().parse(_stream(tmp_path, line, *_step('{"a": 1}')), 0, False)
+    assert outcome.ok
+    assert not outcome.usage_limited
+
+
+@pytest.mark.parametrize(
+    "signal",
+    [
+        _api_error(),
+        _api_error(body={"error": {"type": "rate_limit_error", "message": "Slow down."}}),
+        _api_error(body={"error": {"type": "rate_limit_error", "code": "slow_down"}}),
+        _api_error(status=500, body={"type": "error", "error": {"type": "overloaded_error"}}),
+        _api_error(
+            status=402,
+            body={
+                "error": {
+                    "code": 402,
+                    "message": "In-flight budget exceeded.",
+                    "metadata": {"limit_source": "openrouter_in_flight_budget"},
+                }
+            },
+        ),
+        _event("error", name="UnknownError", data={"message": "insufficient_quota"}),
+        _event("error", name="ProviderAuthError", data={"providerID": "openai", "message": "x"}),
+        _event("error", name="UnknownError", data={"statusCode": 402}),
+    ],
+)
+def test_parse_failed_session_without_a_limit_signal_is_not_usage_limited(
+    tmp_path: Path, signal: str
+) -> None:
+    outcome = _backend().parse(_stream(tmp_path, *_tool_step(), signal), 1, False)
+    assert not outcome.ok
+    assert not outcome.usage_limited
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        None,
+        "insufficient_quota",
+        ["APIError"],
+        {"name": "APIError"},
+        {"name": "APIError", "data": "insufficient_quota"},
+        {"name": "APIError", "data": {"statusCode": "402"}},
+        {"name": "APIError", "data": {"statusCode": True}},
+        {"name": "APIError", "data": {"statusCode": [402]}},
+        {"name": "APIError", "data": {"responseBody": {"error": {"code": "insufficient_quota"}}}},
+        {"name": "APIError", "data": {"responseBody": "not json"}},
+        {"name": "APIError", "data": {"responseBody": '"insufficient_quota"'}},
+        {"name": "APIError", "data": {"responseBody": '["insufficient_quota"]'}},
+        {"name": "APIError", "data": {"responseBody": '{"error": "insufficient_quota"}'}},
+        {
+            "name": "APIError",
+            "data": {"responseBody": '{"error": {"code": ["insufficient_quota"]}}'},
+        },
+        {"name": "APIError", "data": {"responseBody": '{"error": {"type": {"a": 1}}}'}},
+        {"name": "APIError", "data": {"responseBody": '{"code": "insufficient_quota"}'}},
+        {"name": "APIError", "data": {"responseBody": "[" * 100_000 + "]" * 100_000}},
+        {"name": ["APIError"], "data": {"statusCode": 402}},
+    ],
+)
+def test_parse_malformed_limit_fields_are_not_usage_limited(tmp_path: Path, error: object) -> None:
+    line = json.dumps({"type": "error", "sessionID": _SID, "error": error})
+    outcome = _backend().parse(_stream(tmp_path, *_tool_step(), line), 1, False)
+    assert not outcome.ok
+    assert not outcome.usage_limited
+
+
+def test_parse_limit_wording_in_free_text_is_not_usage_limited(tmp_path: Path) -> None:
+    wording = "insufficient_quota credit_balance_exhausted 402 Payment Required usage limit"
+    error = _api_error(status=429, message=wording, body={"error": {"message": wording}})
+    path = _stream(tmp_path, *_step(wording), error)
+    outcome = _backend().parse(path, 1, False)
+    assert not outcome.ok
+    assert not outcome.usage_limited

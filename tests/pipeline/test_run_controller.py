@@ -23,6 +23,7 @@ from pipeline_helpers import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from skeleton_crew.agents.base import failed_outcome
 from skeleton_crew.core.audit import AuditKind, AuditOutcome
 from skeleton_crew.domain.settings import Role
 from skeleton_crew.domain.task_state import RefineState, RunState, TaskKind, TaskState
@@ -291,6 +292,46 @@ async def test_quota_counts_tasks_from_earlier_runs_today(harness: Harness) -> N
 
     assert await harness.tasks(run_id) == []
     assert harness.backend.requests == []
+
+
+async def test_task_aborted_by_the_usage_limit_leaves_the_quota_free(harness: Harness) -> None:
+    harness.limits(issues_per_day=1)
+    harness.add_ready_issue(1)
+    harness.patches = [harness.patch(GREETING)]
+    harness.backend.script(Role.SELECTOR, selection_json([1]), selection_json([1]))
+    harness.backend.script(Role.WORKER, limited_outcome(), worker_json())
+    harness.backend.script(Role.REVIEWER, review_json())
+
+    first = await harness.run()
+    second = await harness.run()
+
+    [aborted] = await harness.tasks(first)
+    assert aborted.state is TaskState.ABORTED
+    [task] = await harness.tasks(second)
+    assert (task.issue_number, task.state) == (1, TaskState.DONE)
+
+
+@pytest.mark.parametrize("final", [TaskState.ESCALATED, TaskState.DONE])
+async def test_escalated_or_done_task_uses_the_quota(harness: Harness, final: TaskState) -> None:
+    harness.limits(issues_per_day=1)
+    harness.add_ready_issue(1)
+    harness.add_ready_issue(2, "Second")
+    harness.patches = [harness.patch(GREETING)]
+    harness.backend.script(Role.SELECTOR, selection_json([1]), selection_json([2]))
+    if final is TaskState.DONE:
+        harness.backend.script(Role.WORKER, worker_json(), worker_json())
+        harness.backend.script(Role.REVIEWER, review_json(), review_json())
+    else:
+        harness.backend.script(Role.WORKER, failed_outcome("session crashed"), worker_json())
+
+    first = await harness.run()
+    second = await harness.run()
+
+    [task] = await harness.tasks(first)
+    assert task.state is final
+    assert await harness.tasks(second) == []
+    assert len(harness.backend.prompts(Role.SELECTOR)) == 1
+    assert len(harness.backend.prompts(Role.WORKER)) == 1
 
 
 async def test_kill_aborts_running_worker_and_removes_containers(harness: Harness) -> None:

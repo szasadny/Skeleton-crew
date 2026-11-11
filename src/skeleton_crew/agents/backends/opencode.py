@@ -3,6 +3,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+from typing import Any
 
 from pydantic import SecretStr
 
@@ -81,6 +82,19 @@ _BASE_ENV = {
     "OPENCODE_DISABLE_LSP_DOWNLOAD": "1",
     "OPENCODE_DISABLE_CLAUDE_CODE": "1",
 }
+# OpenAI billing and spend-limit codes; per its docs, retrying never restores access.
+_QUOTA_CODES = frozenset(
+    {
+        "insufficient_quota",
+        "credit_balance_exhausted",
+        "organization_spend_limit_exceeded",
+        "project_spend_limit_exceeded",
+        "organization_usage_limit_exceeded",
+    }
+)
+_PAYMENT_REQUIRED = 402
+# OpenRouter's one 402 that clears by itself after Retry-After.
+_TRANSIENT_LIMIT_SOURCE = "openrouter_in_flight_budget"
 
 
 def provider_models(model: str, options: Mapping[str, str]) -> bool:
@@ -111,6 +125,34 @@ def session_config(req: SessionRequest) -> str:
         },
     }
     return json.dumps(config, separators=(",", ":"))
+
+
+def _provider_error(body: Any) -> dict[str, Any]:
+    if not isinstance(body, str):
+        return {}
+    try:
+        parsed = json.loads(body)
+    except ValueError, RecursionError:
+        return {}
+    error = parsed.get("error") if isinstance(parsed, dict) else None
+    return error if isinstance(error, dict) else {}
+
+
+def _is_limit_signal(error: Any) -> bool:
+    if not isinstance(error, dict) or error.get("name") != "APIError":
+        return False
+    data = error.get("data")
+    if not isinstance(data, dict):
+        return False
+    provider_error = _provider_error(data.get("responseBody"))
+    codes = (provider_error.get("code"), provider_error.get("type"))
+    if any(isinstance(code, str) and code in _QUOTA_CODES for code in codes):
+        return True
+    metadata = provider_error.get("metadata")
+    transient = (
+        isinstance(metadata, dict) and metadata.get("limit_source") == _TRANSIENT_LIMIT_SOURCE
+    )
+    return data.get("statusCode") == _PAYMENT_REQUIRED and not transient
 
 
 class OpenCodeBackend:
@@ -166,6 +208,7 @@ class OpenCodeBackend:
         turns = 0
         seen = False
         errored = False
+        limited = False
         for event in jsonl_events(stdout_path):
             kind = event.get("type")
             if kind not in ("step_start", "text", "step_finish", "tool_use", "error"):
@@ -185,6 +228,7 @@ class OpenCodeBackend:
                 finish_reason = part.get("reason")
             elif kind == "error":
                 errored = True
+                limited = limited or _is_limit_signal(event.get("error"))
         if not seen:
             missing = "timed out" if timed_out else f"no events in output (exit code {exit_code})"
             return failed_outcome(missing, timed_out=timed_out)
@@ -210,6 +254,7 @@ class OpenCodeBackend:
             error=error,
             timed_out=timed_out,
             stopped_early=stopped_early,
+            usage_limited=limited and error is not None,
         )
 
 

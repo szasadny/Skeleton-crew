@@ -118,7 +118,7 @@ async def test_pr_that_merges_cleanly_after_all_ends_without_writes(harness: Har
     assert git(harness.remote, "rev-parse", BRANCH).decode().strip() == head
     async with harness.sessionmaker() as session:
         since = datetime(2000, 1, 1, tzinfo=UTC)
-        assert await runs_store.count_worker_tasks_since(session, since, TaskKind.PR_FIX) == 1
+        assert await runs_store.count_worker_tasks_since(session, since, TaskKind.PR_FIX) == 0
     assert not (harness.config.tasks_dir / f"worker-{task.id}" / "controller").exists()
 
 

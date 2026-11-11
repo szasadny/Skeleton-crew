@@ -198,7 +198,11 @@ async def count_worker_tasks_since(
     query = (
         select(func.count())
         .select_from(WorkerTask)
-        .where(WorkerTask.created_at >= since, WorkerTask.kind == kind)
+        .where(
+            WorkerTask.created_at >= since,
+            WorkerTask.kind == kind,
+            WorkerTask.state != TaskState.ABORTED,
+        )
     )
     return int(await session.scalar(query) or 0)
 
