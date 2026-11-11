@@ -55,6 +55,7 @@ class SessionOutcome:
     timed_out: bool
     # Short reason code when the session ended cleanly without a result, e.g. a hook stopped it.
     stopped_early: str | None = None
+    usage_limited: bool = False
 
 
 class AgentBackend(Protocol):

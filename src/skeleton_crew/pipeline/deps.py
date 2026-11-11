@@ -1,5 +1,6 @@
+import asyncio
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -41,6 +42,7 @@ class RunContext:
     audit: AuditSink
     required_checks: frozenset[str]
     classifier: Classifier | None
+    halted: asyncio.Event = field(default_factory=asyncio.Event)
 
 
 def audit_sink(sessionmaker: async_sessionmaker[AsyncSession], run_id: int | None) -> AuditSink:

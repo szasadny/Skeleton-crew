@@ -160,7 +160,7 @@ every package → core (core → domain only)
 2. **Candidates**: open issues with the labels that pass the trust rules (`docs/labels.md` § Trust), except issues that also carry `skeleton HITL` (or, for `skeleton`, `skeleton refine`). Issues with an open skeleton PR go to PR maintenance instead. Expired task directories are pruned before this step (§5). With a classifier use case on, each candidate is screened first (§6.5).
 3. **Selector**: orders candidates up to the daily quota. It escalates only issues that are clearly too large, need an owner decision (with the question and options) or are rejected; every other candidate it does not pick stays queued.
 4. **Worker pool** (≤ `max_parallel_workers`), and in parallel the **refine flow**. PR maintenance jobs (§4.4) take slots before new issues.
-5. **Stop** when candidates or quota run out, the window ends, or the kill switch fires.
+5. **Stop** when candidates or quota run out, the window ends, the kill switch fires, or an agent session hits the backend's usage limit (`SessionOutcome.usage_limited`): that task ends `aborted` without escalating, and the run ends `failed`.
 
 **Dry run** (default on): every agent session runs for real, but the gateway only audits its writes. Workers skip the CI wait and go straight to review, so one dry run exercises selector, worker, policy checks, reviewer and refiner without touching GitHub.
 

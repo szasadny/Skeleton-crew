@@ -10,6 +10,7 @@ from skeleton_crew.core.audit import AuditKind, AuditOutcome
 from skeleton_crew.domain.errors import PolicyViolation
 from skeleton_crew.domain.label_policy import LabelChange
 from skeleton_crew.domain.text_policy import TRUNCATION_SUFFIX
+from skeleton_crew.github.gateway import ReviewCheck
 
 ISSUE = f"{API}/repos/o/r/issues/4"
 ALLOWED = (AuditKind.GITHUB_WRITE, AuditOutcome.ALLOWED)
@@ -81,10 +82,11 @@ async def test_dry_run_sends_nothing_for_any_write() -> None:
     await gateway.comment(4, "hello")
     assert await gateway.create_hitl_issue("Found bug", "details") is None
     assert await gateway.open_pr(branch="skeleton/4-fix", title="[skeleton] Fix", body="b") is None
-    await gateway.set_review_check(sha=SHA, success=True, summary="ok")
+    await gateway.set_review_check(sha=SHA, state=ReviewCheck.PENDING, summary="wait")
+    await gateway.set_review_check(sha=SHA, state=ReviewCheck.PASSED, summary="ok")
 
     assert not respx.calls
-    assert audit.kinds() == [DRY] * 5
+    assert audit.kinds() == [DRY] * 6
 
 
 @respx.mock
@@ -172,24 +174,59 @@ async def test_open_pr_blocks_bad_branch_or_title(branch: str, title: str) -> No
     assert audit.kinds() == [BLOCKED]
 
 
+@pytest.mark.parametrize(
+    ("state", "conclusion", "title"),
+    [
+        (ReviewCheck.PASSED, "success", "Review passed"),
+        (ReviewCheck.CHANGES_REQUESTED, "failure", "Changes requested"),
+    ],
+)
 @respx.mock
-async def test_review_check_is_completed_with_conclusion() -> None:
+async def test_review_check_is_completed_with_conclusion(
+    state: ReviewCheck, conclusion: str, title: str
+) -> None:
     route = respx.post(f"{API}/repos/o/r/check-runs").mock(
         return_value=httpx.Response(201, json={})
     )
 
-    await make_gateway(AuditLog()).set_review_check(sha=SHA, success=False, summary="fix x")
+    await make_gateway(AuditLog()).set_review_check(sha=SHA, state=state, summary="fix x")
 
     sent = json.loads(route.calls[0].request.content)
     assert sent["name"] == "skeleton-crew/review"
-    assert (sent["status"], sent["conclusion"]) == ("completed", "failure")
-    assert sent["output"]["summary"] == "fix x"
+    assert (sent["status"], sent["conclusion"]) == ("completed", conclusion)
+    assert sent["output"] == {"title": title, "summary": "fix x"}
 
 
+@respx.mock
+async def test_pending_review_check_is_in_progress_without_conclusion_and_audited() -> None:
+    route = respx.post(f"{API}/repos/o/r/check-runs").mock(
+        return_value=httpx.Response(201, json={})
+    )
+    audit = AuditLog()
+
+    await make_gateway(audit).set_review_check(sha=SHA, state=ReviewCheck.PENDING, summary="w")
+
+    sent = json.loads(route.calls[0].request.content)
+    assert sent["name"] == "skeleton-crew/review"
+    assert sent["head_sha"] == SHA
+    assert sent["status"] == "in_progress"
+    assert "conclusion" not in sent
+    assert sent["output"] == {"title": "Waiting for review", "summary": "w"}
+    assert audit.kinds() == [ALLOWED]
+    payload = audit.events[0][3]
+    assert payload is not None
+    assert payload["state"] == "pending"
+
+
+@pytest.mark.parametrize("state", list(ReviewCheck))
 @respx.mock(assert_all_mocked=True)
-async def test_review_check_rejects_non_sha() -> None:
+async def test_review_check_rejects_non_sha(state: ReviewCheck) -> None:
+    audit = AuditLog()
+
     with pytest.raises(PolicyViolation):
-        await make_gateway(AuditLog()).set_review_check(sha="HEAD", success=True, summary="s")
+        await make_gateway(audit).set_review_check(sha="HEAD", state=state, summary="s")
+
+    assert audit.kinds() == [BLOCKED]
 
 
 @respx.mock

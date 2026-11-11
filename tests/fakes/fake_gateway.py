@@ -16,6 +16,7 @@ from skeleton_crew.github.gateway import (
     CiStatus,
     IssueRef,
     PullRef,
+    ReviewCheck,
     TrustData,
     format_job_logs,
 )
@@ -125,7 +126,7 @@ class FakeGitHubGateway:
         self.failures: dict[str, Exception] = {}
         self.writes: list[WriteRecord] = []
         self.audit_events: list[AuditRecord] = []
-        self.review_checks: dict[str, tuple[bool, str]] = {}
+        self.review_checks: dict[str, tuple[ReviewCheck, str]] = {}
         self.pushes: list[tuple[str, str]] = []
         self.leases: list[str | None] = []
         self.mergeable: dict[int, list[bool | None]] = {}
@@ -335,18 +336,18 @@ class FakeGitHubGateway:
             dry_result=None,
         )
 
-    async def set_review_check(self, *, sha: str, success: bool, summary: str) -> None:
+    async def set_review_check(self, *, sha: str, state: ReviewCheck, summary: str) -> None:
         capped = truncate_text(summary, self.max_comment_chars)
 
         async def perform() -> None:
-            self.review_checks[sha] = (success, capped)
-            self._record("set_review_check", sha=sha, success=success, summary=capped)
+            self.review_checks[sha] = (state, capped)
+            self._record("set_review_check", sha=sha, state=state, summary=capped)
 
         await guarded_write(
             self._audit,
             dry_run=self.dry_run,
             action="set_review_check",
-            payload={"sha": short(sha), "success": success, "summary": short(capped)},
+            payload={"sha": short(sha), "state": state.value, "summary": short(capped)},
             check=lambda: check_sha(sha),
             perform=perform,
             dry_result=None,

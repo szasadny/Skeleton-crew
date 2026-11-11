@@ -44,6 +44,7 @@ from skeleton_crew.store import runs_store, settings_store
 
 KILLED_NOTE = "killed"
 RESTART_NOTE = "interrupted by a controller restart"
+USAGE_LIMIT_NOTE = "agent usage limit reached"
 NOTE_CHARS = 1000
 
 log = logging.getLogger(__name__)
@@ -205,14 +206,16 @@ class RunController:
             group.create_task(self._refines(ctx, candidates.refine, quotas.refines))
             workers = group.create_task(self._workers(ctx, candidates, quotas, screened.efforts))
         note = workers.result()
+        if ctx.halted.is_set():
+            note = USAGE_LIMIT_NOTE if note is None else f"{USAGE_LIMIT_NOTE}; {note}"
         return (RunState.COMPLETED if note is None else RunState.FAILED), note
 
-    def _window_open(self, ctx: RunContext) -> bool:
-        return self._deps.clock() < ctx.deadline
+    def _may_start(self, ctx: RunContext) -> bool:
+        return not ctx.halted.is_set() and self._deps.clock() < ctx.deadline
 
     async def _refines(self, ctx: RunContext, candidates: Sequence[Candidate], quota: int) -> None:
         for candidate in candidates[:quota]:
-            if not self._window_open(ctx):
+            if not self._may_start(ctx):
                 return
             number = candidate.issue.number
             async with self._deps.sessionmaker() as session:
@@ -270,12 +273,12 @@ class RunController:
         remaining = fix_quota
         for update in await choose_pr_updates(ctx, open_prs):
             pr = update.pr
-            if remaining <= 0 or not self._window_open(ctx):
+            if remaining <= 0 or not self._may_start(ctx):
                 return
             if not update.unfinished and not await has_conflicts(ctx, pr):
                 continue
             await slots.acquire()
-            if not self._window_open(ctx):
+            if not self._may_start(ctx):
                 slots.release()
                 return
             remaining -= 1
@@ -293,7 +296,7 @@ class RunController:
     ) -> None:
         for pick in picks:
             await slots.acquire()
-            if not self._window_open(ctx):
+            if not self._may_start(ctx):
                 slots.release()
                 return
             task_id = await self._add_task(ctx, pick.issue, TaskKind.ISSUE)

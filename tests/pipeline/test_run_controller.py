@@ -2,6 +2,7 @@ import asyncio
 from pathlib import Path
 
 import pytest
+from fake_agent import limited_outcome
 from fake_gateway import MAINTAINER, FakePull
 from pipeline_helpers import (
     BOTH,
@@ -26,7 +27,7 @@ from skeleton_crew.core.audit import AuditKind, AuditOutcome
 from skeleton_crew.domain.settings import Role
 from skeleton_crew.domain.task_state import RefineState, RunState, TaskKind, TaskState
 from skeleton_crew.github.gateway import BranchRule, CiState, CiStatus, RulesUnavailable
-from skeleton_crew.pipeline.run_controller import RunController
+from skeleton_crew.pipeline.run_controller import USAGE_LIMIT_NOTE, RunController
 from skeleton_crew.runtime.containers import ContainerHandle
 from skeleton_crew.store import runs_store
 from skeleton_crew.web.ports import RunControl
@@ -177,7 +178,7 @@ async def test_dry_run_makes_no_github_writes(harness: Harness) -> None:
     assert harness.gateway.pushes == []
     assert git(harness.remote, "for-each-ref").strip() == b""
     dry = [k for k, o in await harness.audit_kinds() if o is AuditOutcome.DRY_RUN]
-    assert len(dry) == 6
+    assert len(dry) == 7
     assert (await harness.run_row(run_id)).dry_run is True
 
 
@@ -313,7 +314,7 @@ async def test_kill_aborts_running_worker_and_removes_containers(harness: Harnes
     [task] = await harness.tasks(run_id)
     assert task.state is TaskState.ABORTED
     assert (await harness.run_row(run_id)).state is RunState.ABORTED
-    assert harness.actions() == ["push_branch", "open_pr"]
+    assert harness.actions() == ["push_branch", "set_review_check", "open_pr"]
     assert AuditKind.KILL_SWITCH not in {k for k, _ in await harness.audit_kinds()}
 
 
@@ -335,6 +336,62 @@ async def test_window_end_stops_new_workers(harness: Harness) -> None:
     [task] = await harness.tasks(run_id)
     assert (task.issue_number, task.state) == (1, TaskState.DONE)
     assert (await harness.run_row(run_id)).state is RunState.COMPLETED
+
+
+async def test_usage_limit_stops_new_workers_without_escalating(harness: Harness) -> None:
+    harness.limits(max_parallel_workers=1)
+    harness.add_ready_issue(1)
+    harness.add_ready_issue(2, "Second")
+    harness.backend.script(Role.SELECTOR, selection_json([1, 2]))
+    harness.backend.script(Role.WORKER, limited_outcome(), worker_json())
+
+    run_id = await harness.run()
+
+    [task] = await harness.tasks(run_id)
+    assert (task.issue_number, task.state) == (1, TaskState.ABORTED)
+    assert len(harness.backend.prompts(Role.WORKER)) == 1
+    run = await harness.run_row(run_id)
+    assert (run.state, run.note) == (RunState.FAILED, USAGE_LIMIT_NOTE)
+    assert harness.gateway.writes == []
+    assert harness.gateway.issues[1].labels == {"skeleton"}
+    assert harness.gateway.issues[2].labels == {"skeleton"}
+
+
+async def test_usage_limit_in_the_selector_starts_no_work(harness: Harness) -> None:
+    harness.add_ready_issue(1)
+    harness.add_ready_issue(2, "Add farewell")
+    await open_pr(harness, {"app.py": HI})
+    advance_main(harness, {"app.py": HELLO})
+    workspace_editor(harness, {"app.py": BOTH})
+    harness.backend.script(Role.SELECTOR, limited_outcome(session_id="selector"))
+    harness.backend.script(Role.WORKER, worker_json())
+
+    run_id = await harness.run()
+
+    assert await harness.tasks(run_id) == []
+    assert harness.backend.prompts(Role.WORKER) == []
+    assert harness.gateway.pushes == []
+    run = await harness.run_row(run_id)
+    assert run.state is RunState.FAILED
+    assert str(run.note).startswith(f"{USAGE_LIMIT_NOTE}; selection failed")
+    assert harness.gateway.writes == []
+
+
+async def test_usage_limit_in_a_refine_starts_no_further_refine(harness: Harness) -> None:
+    harness.gateway.add_issue(5, "Idea", labels=["skeleton refine"])
+    harness.gateway.add_issue(6, "Other idea", labels=["skeleton refine"])
+    harness.backend.script(Role.REFINER, limited_outcome(session_id="refine"), refine_json())
+
+    run_id = await harness.run()
+
+    [refine] = await harness.refines(run_id)
+    assert refine.state is RefineState.FAILED
+    assert len(harness.backend.prompts(Role.REFINER)) == 1
+    assert harness.gateway.writes == []
+    assert harness.gateway.issues[5].labels == {"skeleton refine"}
+    assert harness.gateway.issues[6].labels == {"skeleton refine"}
+    run = await harness.run_row(run_id)
+    assert (run.state, run.note) == (RunState.FAILED, USAGE_LIMIT_NOTE)
 
 
 async def test_parallel_workers_and_refines_complete(harness: Harness) -> None:

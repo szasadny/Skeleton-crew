@@ -33,6 +33,16 @@ def stopped_outcome(
     )
 
 
+def limited_outcome(*, session_id: str | None = "worker-session") -> SessionOutcome:
+    return replace(
+        failed_outcome("session reported an error"),
+        session_id=session_id,
+        cost_usd=0.03,
+        turns=1,
+        usage_limited=True,
+    )
+
+
 class FakeBackend:
     def __init__(
         self,

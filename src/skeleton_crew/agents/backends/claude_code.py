@@ -1,5 +1,6 @@
 import json
 from collections.abc import Mapping
+from dataclasses import replace
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -69,12 +70,25 @@ _CREDENTIALS = {
 _BASE_ENV = {"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "DISABLE_AUTOUPDATER": "1"}
 
 
-def _last_result(stdout_path: Path) -> dict[str, Any] | None:
+def _is_limit_signal(event: dict[str, Any]) -> bool:
+    kind = event.get("type")
+    if kind == "assistant":
+        return event.get("error") == "rate_limit"
+    if kind != "rate_limit_event":
+        return False
+    info = event.get("rate_limit_info")
+    return isinstance(info, dict) and info.get("status") == "rejected"
+
+
+def _scan(stdout_path: Path) -> tuple[dict[str, Any] | None, bool]:
     result: dict[str, Any] | None = None
+    limited = False
     for event in jsonl_events(stdout_path):
         if event.get("type") == "result":
             result = event
-    return result
+        elif _is_limit_signal(event):
+            limited = True
+    return result, limited
 
 
 def _structured_output(result: dict[str, Any]) -> str | None:
@@ -143,10 +157,10 @@ class ClaudeCodeBackend:
         return stdin_command("claude", args, prompt_path=req.prompt_path_in_container)
 
     def parse(self, stdout_path: Path, exit_code: int, timed_out: bool) -> SessionOutcome:
-        result = _last_result(stdout_path)
+        result, limited = _scan(stdout_path)
         if result is None:
             missing = "timed out" if timed_out else f"no result in output (exit code {exit_code})"
-            return failed_outcome(missing, timed_out=timed_out)
+            return replace(failed_outcome(missing, timed_out=timed_out), usage_limited=limited)
         session_id = result.get("session_id")
         subtype = result.get("subtype")
         structured = _structured_output(result)
@@ -172,6 +186,8 @@ class ClaudeCodeBackend:
             error=error,
             timed_out=timed_out,
             stopped_early=stopped_early,
+            # A rejected window can still succeed on paid overage, so only a failure counts.
+            usage_limited=limited and error is not None,
         )
 
 

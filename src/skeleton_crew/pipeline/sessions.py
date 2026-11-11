@@ -32,6 +32,10 @@ _STDERR_TAIL_CHARS = 4000
 log = logging.getLogger(__name__)
 
 
+class UsageLimitReached(Exception):
+    pass
+
+
 @dataclass(frozen=True)
 class Sandbox:
     handle: ContainerHandle
@@ -182,7 +186,11 @@ async def run_agent[T: BaseModel](
     outcome = await _continue_stopped(
         ctx, sandbox, request, await _session(ctx, sandbox, request), schema, started
     )
-    if not outcome.ok or outcome.structured_output is None:
+    if outcome.usage_limited:
+        if not ctx.halted.is_set():
+            log.warning("%s session hit the agent usage limit, starting no new work", role.value)
+        ctx.halted.set()
+    if outcome.usage_limited or not outcome.ok or outcome.structured_output is None:
         return AgentReply(outcome, None, _failure(outcome))
     try:
         return AgentReply(outcome, parse_output(output, outcome.structured_output), None)
@@ -216,7 +224,7 @@ async def _continue_stopped(
     cost, turns = outcome.cost_usd, outcome.turns
     prompt = render_prompt(PromptName.CONTINUE, {}, json_schema=schema)
     for _ in range(ctx.settings.limits.max_continues):
-        if outcome.stopped_early is None or outcome.session_id is None:
+        if outcome.stopped_early is None or outcome.session_id is None or outcome.usage_limited:
             break
         elapsed_s = (ctx.deps.clock() - started).total_seconds()
         left = _remaining(request, cost, turns, elapsed_s)

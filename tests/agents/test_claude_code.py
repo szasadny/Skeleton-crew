@@ -270,3 +270,65 @@ def test_parse_ignores_non_numeric_cost(tmp_path: Path) -> None:
     outcome = _backend(AuthMode.SUBSCRIPTION).parse(_stream(tmp_path, line), 0, False)
     assert outcome.cost_usd == 0.0
     assert outcome.turns == 0
+
+
+def _rate_limit(info: object) -> str:
+    return json.dumps({"type": "rate_limit_event", "rate_limit_info": info})
+
+
+_REJECTED = _rate_limit({"status": "rejected", "rateLimitType": "five_hour"})
+_LIMITED_ASSISTANT = json.dumps(
+    {
+        "type": "assistant",
+        "error": "rate_limit",
+        "message": {"content": [{"type": "text", "text": "limit reached"}]},
+    }
+)
+_FAILED = claude_result_line(is_error=True, result="limit reached")
+
+
+@pytest.mark.parametrize("signal", [_REJECTED, _LIMITED_ASSISTANT])
+def test_parse_failed_session_with_a_limit_signal_is_usage_limited(
+    tmp_path: Path, signal: str
+) -> None:
+    outcome = _backend(AuthMode.SUBSCRIPTION).parse(_stream(tmp_path, signal, _FAILED), 1, False)
+    assert not outcome.ok
+    assert outcome.usage_limited
+
+
+@pytest.mark.parametrize(
+    "signal", [_rate_limit({"status": "allowed_warning"}), _REJECTED, _LIMITED_ASSISTANT]
+)
+def test_parse_successful_session_is_never_usage_limited(tmp_path: Path, signal: str) -> None:
+    line = claude_result_line(structured_output={"a": 1})
+    outcome = _backend(AuthMode.SUBSCRIPTION).parse(_stream(tmp_path, signal, line), 0, False)
+    assert outcome.ok
+    assert not outcome.usage_limited
+
+
+@pytest.mark.parametrize(
+    "signal",
+    [
+        _INIT,
+        _rate_limit({"status": "allowed"}),
+        _rate_limit("rejected"),
+        _rate_limit(["rejected"]),
+        json.dumps({"type": "rate_limit_event"}),
+        json.dumps({"type": "assistant", "message": {"error": "rate_limit"}}),
+        json.dumps({"type": "user", "error": "rate_limit"}),
+        json.dumps({"type": "assistant", "message": {"content": [{"text": "rate limit"}]}}),
+    ],
+)
+def test_parse_failed_session_without_a_limit_signal_is_not_usage_limited(
+    tmp_path: Path, signal: str
+) -> None:
+    outcome = _backend(AuthMode.SUBSCRIPTION).parse(_stream(tmp_path, signal, _FAILED), 1, False)
+    assert not outcome.ok
+    assert not outcome.usage_limited
+
+
+def test_parse_limit_signal_without_a_result_is_usage_limited(tmp_path: Path) -> None:
+    outcome = _backend(AuthMode.SUBSCRIPTION).parse(_stream(tmp_path, _INIT, _REJECTED), 1, False)
+    assert not outcome.ok
+    assert outcome.usage_limited
+    assert outcome.session_id is None

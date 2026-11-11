@@ -21,6 +21,7 @@ from skeleton_crew.github._ci import BranchRule as BranchRule
 from skeleton_crew.github._ci import CiState as CiState
 from skeleton_crew.github._ci import CiStatus as CiStatus
 from skeleton_crew.github._ci import FailedJob as FailedJob
+from skeleton_crew.github._ci import ReviewCheck as ReviewCheck
 from skeleton_crew.github._ci import evaluate_ci as evaluate_ci
 from skeleton_crew.github._ci import format_job_logs as format_job_logs
 from skeleton_crew.github._ci import required_checks as required_checks
@@ -131,7 +132,7 @@ class Gateway(Protocol):
     async def comment(self, issue_number: int, body: str) -> None: ...
     async def create_hitl_issue(self, title: str, body: str) -> int | None: ...
     async def open_pr(self, *, branch: str, title: str, body: str) -> PullRef | None: ...
-    async def set_review_check(self, *, sha: str, success: bool, summary: str) -> None: ...
+    async def set_review_check(self, *, sha: str, state: ReviewCheck, summary: str) -> None: ...
     async def clone(self, dest: Path) -> str: ...
     async def fetch_branch(self, repo_dir: Path, branch: str) -> str: ...
     async def branch_head(self, branch: str) -> str | None: ...
@@ -555,19 +556,31 @@ class GitHubGateway:
             dry_result=None,
         )
 
-    async def set_review_check(self, *, sha: str, success: bool, summary: str) -> None:
+    async def set_review_check(self, *, sha: str, state: ReviewCheck, summary: str) -> None:
         capped = truncate_text(summary, self._max_comment_chars)
 
         async def perform() -> None:
-            await self._client.rest.checks.async_create(
+            rest = self._client.rest.checks
+            if state is ReviewCheck.PENDING:
+                await rest.async_create(
+                    self._owner,
+                    self._name,
+                    name=REVIEW_CHECK_NAME,
+                    head_sha=sha,
+                    status="in_progress",
+                    output={"title": "Waiting for review", "summary": capped},
+                )
+                return
+            passed = state is ReviewCheck.PASSED
+            await rest.async_create(
                 self._owner,
                 self._name,
                 name=REVIEW_CHECK_NAME,
                 head_sha=sha,
                 status="completed",
-                conclusion="success" if success else "failure",
+                conclusion="success" if passed else "failure",
                 output={
-                    "title": "Review passed" if success else "Changes requested",
+                    "title": "Review passed" if passed else "Changes requested",
                     "summary": capped,
                 },
             )
@@ -576,7 +589,7 @@ class GitHubGateway:
             self._audit,
             dry_run=self._dry_run,
             action="set_review_check",
-            payload={"sha": short(sha), "success": success, "summary": short(capped)},
+            payload={"sha": short(sha), "state": state.value, "summary": short(capped)},
             check=lambda: check_sha(sha),
             perform=perform,
             dry_result=None,
