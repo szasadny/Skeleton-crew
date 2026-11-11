@@ -132,6 +132,34 @@ async def test_counts_are_per_task_kind(session: AsyncSession) -> None:
     assert await runs_store.count_worker_tasks_since(session, since, TaskKind.PR_UPDATE) == 1
 
 
+@pytest.mark.parametrize("kind", [TaskKind.ISSUE, TaskKind.PR_FIX])
+async def test_count_skips_aborted_tasks_but_counts_every_other_state(
+    session: AsyncSession, kind: TaskKind
+) -> None:
+    run = await runs_store.create_run(session, "manual", dry_run=False)
+    other = TaskKind.PR_FIX if kind is TaskKind.ISSUE else TaskKind.ISSUE
+    counted = [state for state in TaskState if state is not TaskState.ABORTED]
+    for state in [*counted, TaskState.ABORTED, TaskState.ABORTED]:
+        task = await runs_store.add_worker_task(session, run.id, 1, "t", kind)
+        await runs_store.update_worker_task(session, task.id, state=state)
+    lone = await runs_store.add_worker_task(session, run.id, 2, "t", other)
+    await runs_store.update_worker_task(session, lone.id, state=TaskState.DONE)
+    since = run.started_at - timedelta(hours=1)
+    assert await runs_store.count_worker_tasks_since(session, since, kind) == len(counted)
+    assert await runs_store.count_worker_tasks_since(session, since, other) == 1
+
+
+async def test_count_drops_a_task_once_it_is_aborted(
+    session: AsyncSession,
+) -> None:
+    run = await runs_store.create_run(session, "manual", dry_run=False)
+    task = await runs_store.add_worker_task(session, run.id, 1, "t")
+    since = run.started_at - timedelta(hours=1)
+    assert await runs_store.count_worker_tasks_since(session, since) == 1
+    await runs_store.update_worker_task(session, task.id, state=TaskState.ABORTED)
+    assert await runs_store.count_worker_tasks_since(session, since) == 0
+
+
 async def test_last_pushed_task_ignores_dry_runs_and_unpushed_tasks(session: AsyncSession) -> None:
     live = await runs_store.create_run(session, "manual", dry_run=False)
     dry = await runs_store.create_run(session, "manual", dry_run=True)

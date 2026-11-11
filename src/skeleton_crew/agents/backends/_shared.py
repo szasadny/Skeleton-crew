@@ -33,7 +33,7 @@ def jsonl_events(stdout_path: Path) -> Iterator[dict[str, Any]]:
             for line in stream:
                 try:
                     event = json.loads(line)
-                except ValueError:
+                except ValueError, RecursionError:
                     continue
                 if isinstance(event, dict):
                     yield event
