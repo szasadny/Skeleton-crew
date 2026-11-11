@@ -22,6 +22,7 @@ CONTINUED_SUMMARY = (
     "Skeleton Crew continued from an existing branch for this issue "
     "and merged the base branch into it."
 )
+REVIEW_PENDING_SUMMARY = "Skeleton Crew has not reviewed this commit yet."
 REFINE_HEADER = "## Refined spec\n\n"
 REFINE_QUESTIONS_HEADER = "\n\n### Open questions\n\n"
 REFINE_RESERVED_CHARS = len(REFINE_HEADER) + len(REFINE_QUESTIONS_HEADER)

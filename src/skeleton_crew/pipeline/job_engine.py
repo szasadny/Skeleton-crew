@@ -9,15 +9,21 @@ from skeleton_crew.domain.errors import PolicyViolation
 from skeleton_crew.domain.schemas import WorkerResult
 from skeleton_crew.domain.settings import Role
 from skeleton_crew.domain.task_state import TERMINAL_TASK_STATES, TaskEvent, TaskState
-from skeleton_crew.github.gateway import CiState, FailedJob
+from skeleton_crew.github.gateway import CiState, FailedJob, ReviewCheck
 from skeleton_crew.pipeline.ci_watcher import wait_for_ci
 from skeleton_crew.pipeline.classify import injection_reason, screen_output
 from skeleton_crew.pipeline.deps import RunContext
 from skeleton_crew.pipeline.escalation import Escalation, escalate_issue
 from skeleton_crew.pipeline.repo_commands import run_repo_command
-from skeleton_crew.pipeline.sessions import remove_sandbox, run_agent, start_sandbox
+from skeleton_crew.pipeline.sessions import (
+    UsageLimitReached,
+    remove_sandbox,
+    run_agent,
+    start_sandbox,
+)
 from skeleton_crew.pipeline.texts import (
     CONTINUED_SUMMARY,
+    REVIEW_PENDING_SUMMARY,
     new_issue_text,
     pr_body,
     pr_title,
@@ -35,6 +41,7 @@ CI_LOG_CHARS = 20_000
 _REPO_OUTPUT = frozenset({FollowUpKind.CI_FAILED, FollowUpKind.CHECK_FAILED})
 NOTE_CHARS = 1000
 DRY_RUN_CI = "skipped (dry run, nothing was pushed)"
+USAGE_LIMIT_REASON = "the agent usage limit was reached"
 
 log = logging.getLogger(__name__)
 
@@ -59,6 +66,8 @@ async def run_job(job: WorkerJob, work: Work) -> None:
         outcome = Escalation(f"the worker timed out or the run window ended{waiting}")
     except (Escalation, Skip) as exc:
         outcome = exc
+    except UsageLimitReached:
+        outcome = Skip(USAGE_LIMIT_REASON)
     except Exception as exc:
         log.exception("worker for #%d failed", issue.number)
         outcome = exc
@@ -221,6 +230,8 @@ async def _code(job: WorkerJob, follow_up: FollowUp | None) -> WorkerResult:
     if reply.outcome.session_id is not None:
         job.session_id = reply.outcome.session_id
     await job.record.add_cost(reply.outcome.cost_usd, session_id=job.session_id)
+    if reply.outcome.usage_limited:
+        raise UsageLimitReached
     if reply.result is None:
         raise Escalation(f"worker session failed: {reply.error}")
     await job.record.add_blockers(tag_blockers(Role.WORKER, reply.result.blockers))
@@ -265,6 +276,9 @@ async def publish(job: WorkerJob, result: WorkerResult | None, head_sha: str) ->
     job.git.remote_sha = head_sha
     # Recorded only after the push: PR maintenance trusts this as the head the controller owns.
     await job.record.update(head_sha=head_sha)
+    await gw.set_review_check(
+        sha=head_sha, state=ReviewCheck.PENDING, summary=REVIEW_PENDING_SUMMARY
+    )
     if job.pr_requested:
         return
     job.pr_requested = True
@@ -332,10 +346,10 @@ async def review(
     head = job.git.tip_sha
     summary = review_check_summary(result, worker_blockers, max_chars)
     if result.verdict == "approve":
-        await gw.set_review_check(sha=head, success=True, summary=summary)
+        await gw.set_review_check(sha=head, state=ReviewCheck.PASSED, summary=summary)
         await job.record.fire(TaskEvent.REVIEW_APPROVED)
         return None
-    await gw.set_review_check(sha=head, success=False, summary=summary)
+    await gw.set_review_check(sha=head, state=ReviewCheck.CHANGES_REQUESTED, summary=summary)
     if result.verdict == "scope_too_large":
         raise Escalation(f"the reviewer judged the change too large: {result.summary}")
     job.rounds.review += 1

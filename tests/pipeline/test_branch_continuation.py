@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from skeleton_crew.core.audit import AuditKind
 from skeleton_crew.domain.settings import Role
 from skeleton_crew.domain.task_state import TaskKind, TaskState
+from skeleton_crew.github.gateway import ReviewCheck
 from skeleton_crew.store import audit_store
 
 FOREIGN = "the branch has commits Skeleton Crew did not push"
@@ -48,13 +49,19 @@ async def test_existing_branch_is_continued_with_a_comment_and_a_new_pr(harness:
     task = await only_task(harness, run_id)
     assert (task.kind, task.state, task.head_sha) == (TaskKind.ISSUE, TaskState.DONE, head)
     assert [r.role for r in harness.backend.requests] == [Role.SELECTOR, Role.REVIEWER]
-    assert harness.actions() == ["comment", "push_branch", "open_pr", "set_review_check"]
+    assert harness.actions() == [
+        "comment",
+        "push_branch",
+        "set_review_check",
+        "open_pr",
+        "set_review_check",
+    ]
     [comment] = harness.writes("comment")
     assert f"existing branch `{BRANCH}`" in str(comment.args["body"])
     [pr] = harness.writes("open_pr")
     assert pr.args["title"] == "[skeleton] Add greeting"
     assert harness.gateway.leases == [head]
-    assert harness.gateway.review_checks[head][0] is True
+    assert harness.gateway.review_checks[head][0] is ReviewCheck.PASSED
     assert_no_forbidden_writes(harness)
 
 

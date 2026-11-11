@@ -4,7 +4,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from fake_agent import ok_outcome, stopped_outcome
+from fake_agent import limited_outcome, ok_outcome, stopped_outcome
 from fake_runtime import ExecCall
 from pipeline_helpers import (
     BLOCKER,
@@ -23,9 +23,11 @@ from skeleton_crew.agents.base import SessionOutcome, failed_outcome
 from skeleton_crew.core.audit import AuditKind, AuditOutcome
 from skeleton_crew.domain.settings import Role
 from skeleton_crew.domain.task_state import TaskState
-from skeleton_crew.github.gateway import CiState, CiStatus, FailedJob
+from skeleton_crew.github.gateway import CiState, CiStatus, FailedJob, ReviewCheck
+from skeleton_crew.pipeline.job_engine import USAGE_LIMIT_REASON
 from skeleton_crew.pipeline.sessions import AGENT_USER, INBOX, ROLE_LABEL, WORKSPACE
 from skeleton_crew.pipeline.task_record import MAX_STORED_BLOCKERS, WorkerTaskRecord
+from skeleton_crew.pipeline.texts import REVIEW_PENDING_SUMMARY
 from skeleton_crew.runtime.containers import ExecResult
 from skeleton_crew.store import runs_store
 
@@ -61,7 +63,14 @@ async def test_happy_path_opens_pr_and_sets_green_review_check(harness: Harness)
 
     [task] = await harness.tasks(run_id)
     assert task.state is TaskState.DONE
-    assert harness.actions() == ["push_branch", "open_pr", "set_review_check"]
+    assert harness.actions() == ["push_branch", "set_review_check", "open_pr", "set_review_check"]
+    pending, passed = harness.writes("set_review_check")
+    assert pending.args == {
+        "sha": task.head_sha,
+        "state": ReviewCheck.PENDING,
+        "summary": REVIEW_PENDING_SUMMARY,
+    }
+    assert (passed.args["sha"], passed.args["state"]) == (task.head_sha, ReviewCheck.PASSED)
     [push] = harness.writes("push_branch")
     assert push.args == {"branch": BRANCH, "sha": task.head_sha}
     [pr] = harness.writes("open_pr")
@@ -70,7 +79,7 @@ async def test_happy_path_opens_pr_and_sets_green_review_check(harness: Harness)
     assert body.startswith("Closes #1\n\n")
     assert "@octocat" not in body
     assert "Fixes #9" not in body
-    assert harness.gateway.review_checks[str(task.head_sha)][0] is True
+    assert harness.gateway.review_checks[str(task.head_sha)][0] is ReviewCheck.PASSED
     commit = git(harness.remote, "cat-file", "-p", str(task.head_sha)).decode()
     assert f"parent {task.base_sha}" in commit
     assert "author Skeleton Crew" in commit
@@ -129,7 +138,14 @@ async def test_ci_failure_resumes_worker_with_logs_then_passes(harness: Harness)
 
     [task] = await harness.tasks(run_id)
     assert (task.state, task.ci_rounds) == (TaskState.DONE, 1)
-    assert harness.actions() == ["push_branch", "open_pr", "push_branch", "set_review_check"]
+    assert harness.actions() == [
+        "push_branch",
+        "set_review_check",
+        "open_pr",
+        "push_branch",
+        "set_review_check",
+        "set_review_check",
+    ]
     follow_up = harness.backend.prompts(Role.WORKER)[1]
     assert follow_up.resume_session_id == "worker-session"
     assert "AssertionError: boom" in follow_up.prompt
@@ -150,13 +166,15 @@ async def test_review_changes_then_approve(harness: Harness) -> None:
 
     [task] = await harness.tasks(run_id)
     assert (task.state, task.review_rounds) == (TaskState.DONE, 1)
-    checks = [(w.action, w.args.get("success")) for w in harness.gateway.writes]
+    checks = [(w.action, w.args.get("state")) for w in harness.gateway.writes]
     assert checks == [
         ("push_branch", None),
+        ("set_review_check", ReviewCheck.PENDING),
         ("open_pr", None),
-        ("set_review_check", False),
+        ("set_review_check", ReviewCheck.CHANGES_REQUESTED),
         ("push_branch", None),
-        ("set_review_check", True),
+        ("set_review_check", ReviewCheck.PENDING),
+        ("set_review_check", ReviewCheck.PASSED),
     ]
     follow_up = harness.backend.prompts(Role.WORKER)[1]
     assert "Handle empty input." in follow_up.prompt
@@ -175,8 +193,8 @@ async def test_missing_doc_update_alone_requests_changes(harness: Harness) -> No
 
     [task] = await harness.tasks(run_id)
     assert (task.state, task.review_rounds) == (TaskState.DONE, 1)
-    [first_check, _] = [w for w in harness.gateway.writes if w.action == "set_review_check"]
-    assert first_check.args["success"] is False
+    _, first_check, _, _ = harness.writes("set_review_check")
+    assert first_check.args["state"] is ReviewCheck.CHANGES_REQUESTED
     assert "- [docs] README.md: Does not mention the greeting." in str(first_check.args["summary"])
     follow_up = harness.backend.prompts(Role.WORKER)[1]
     assert "- [docs] README.md: Does not mention the greeting." in follow_up.prompt
@@ -208,7 +226,7 @@ async def test_blockers_reach_the_pr_body_the_review_checks_and_the_task(
     ]
     [pr] = harness.writes("open_pr")
     assert str(pr.args["body"]).endswith("### Blockers\n\n- Python 3.13 is missing")
-    first, second = (str(w.args["summary"]) for w in harness.writes("set_review_check"))
+    _, first, _, second = (str(w.args["summary"]) for w in harness.writes("set_review_check"))
     assert first.endswith(
         "### Blockers\n\n- worker: Python 3.13 is missing\n- reviewer: Could not run tests"
     )
@@ -226,7 +244,7 @@ async def test_no_blockers_leave_the_task_and_texts_clean(harness: Harness) -> N
     [task] = await harness.tasks(run_id)
     assert task.blockers is None
     [pr] = harness.writes("open_pr")
-    [check] = harness.writes("set_review_check")
+    _, check = harness.writes("set_review_check")
     assert "Blockers" not in str(pr.args["body"])
     assert "Blockers" not in str(check.args["summary"])
 
@@ -344,6 +362,25 @@ async def test_failed_resumed_review_escalates_and_removes_the_reviewer(harness:
     assert "review session failed: session crashed" in str(task.note)
     assert len(harness.backend.prompts(Role.REVIEWER)) == 2
     assert not harness.runtime.running
+    checks = [(w.args["sha"], w.args["state"]) for w in harness.writes("set_review_check")]
+    assert checks[-1] == (task.head_sha, ReviewCheck.PENDING)
+    assert harness.gateway.review_checks[str(task.head_sha)][0] is ReviewCheck.PENDING
+
+
+async def test_ci_that_never_finishes_leaves_the_review_check_pending(harness: Harness) -> None:
+    harness.limits(ci_timeout_minutes=5)
+    harness.patches = [harness.patch(GREETING)]
+    harness.gateway.ci_queue = [CiStatus(CiState.PENDING, [])]
+    harness.backend.script(Role.WORKER, worker_json())
+
+    run_id = await harness.run()
+
+    [task] = await harness.tasks(run_id)
+    assert task.state is TaskState.ESCALATED
+    assert "CI did not finish in time" in str(task.note)
+    assert harness.backend.prompts(Role.REVIEWER) == []
+    checks = [(w.args["sha"], w.args["state"]) for w in harness.writes("set_review_check")]
+    assert checks == [(task.head_sha, ReviewCheck.PENDING)]
 
 
 async def test_review_rounds_exhausted_escalates(harness: Harness) -> None:
@@ -376,7 +413,13 @@ async def test_ci_rounds_exhausted_escalates(harness: Harness) -> None:
 
     [task] = await harness.tasks(run_id)
     assert task.state is TaskState.ESCALATED
-    assert harness.actions() == ["push_branch", "open_pr", "comment", "change_labels"]
+    assert harness.actions() == [
+        "push_branch",
+        "set_review_check",
+        "open_pr",
+        "comment",
+        "change_labels",
+    ]
 
 
 async def test_worker_scope_too_large_escalates_without_push(harness: Harness) -> None:
@@ -471,6 +514,72 @@ async def test_failed_session_escalates(harness: Harness) -> None:
     assert len(harness.backend.prompts(Role.WORKER)) == 1
 
 
+async def test_usage_limit_in_the_worker_aborts_without_escalating(harness: Harness) -> None:
+    harness.backend.script(Role.WORKER, limited_outcome(), worker_json())
+
+    run_id = await harness.run()
+
+    [task] = await harness.tasks(run_id)
+    assert (task.state, task.note) == (TaskState.ABORTED, USAGE_LIMIT_REASON)
+    assert task.cost_usd == pytest.approx(0.03)
+    assert len(harness.backend.prompts(Role.WORKER)) == 1
+    assert harness.gateway.writes == []
+    assert harness.gateway.issues[1].labels == {"skeleton"}
+    assert AuditKind.TASK_ESCALATED not in {k for k, _ in await harness.audit_kinds()}
+    assert not harness.runtime.running
+
+
+async def test_usage_limit_in_the_reviewer_leaves_the_review_check_pending(
+    harness: Harness,
+) -> None:
+    harness.patches = [harness.patch(GREETING)]
+    harness.backend.script(Role.WORKER, worker_json())
+    harness.backend.script(Role.REVIEWER, limited_outcome(session_id="review"), review_json())
+
+    run_id = await harness.run()
+
+    [task] = await harness.tasks(run_id)
+    assert (task.state, task.note) == (TaskState.ABORTED, USAGE_LIMIT_REASON)
+    assert task.cost_usd == pytest.approx(0.04)
+    assert harness.actions() == ["push_branch", "set_review_check", "open_pr"]
+    checks = [(w.args["sha"], w.args["state"]) for w in harness.writes("set_review_check")]
+    assert checks == [(task.head_sha, ReviewCheck.PENDING)]
+    assert harness.gateway.review_checks[str(task.head_sha)][0] is ReviewCheck.PENDING
+    assert harness.gateway.issues[1].labels == {"skeleton"}
+    assert not harness.runtime.running
+
+
+@pytest.mark.parametrize("role", [Role.WORKER, Role.REVIEWER])
+async def test_usage_limit_with_a_valid_output_is_never_a_result(
+    harness: Harness, role: Role
+) -> None:
+    harness.patches = [harness.patch(GREETING)]
+    output = worker_json() if role is Role.WORKER else review_json()
+    harness.backend.script(role, replace(ok_outcome(output), usage_limited=True))
+    harness.backend.script(Role.WORKER, worker_json())
+    harness.backend.script(Role.REVIEWER, review_json())
+
+    run_id = await harness.run()
+
+    [task] = await harness.tasks(run_id)
+    assert (task.state, task.note) == (TaskState.ABORTED, USAGE_LIMIT_REASON)
+    states = [w.args["state"] for w in harness.writes("set_review_check")]
+    assert set(states) <= {ReviewCheck.PENDING}
+    assert "change_labels" not in harness.actions()
+
+
+async def test_usage_limited_early_stop_is_not_continued(harness: Harness) -> None:
+    harness.backend.script(Role.WORKER, replace(stopped_outcome(), usage_limited=True))
+    harness.backend.script(Role.WORKER, worker_json())
+
+    run_id = await harness.run()
+
+    [task] = await harness.tasks(run_id)
+    assert task.state is TaskState.ABORTED
+    assert len(harness.backend.prompts(Role.WORKER)) == 1
+    assert harness.gateway.writes == []
+
+
 async def test_hook_stop_is_continued_and_the_worker_finishes(harness: Harness) -> None:
     harness.patches = [harness.patch(GREETING)]
     harness.backend.script(Role.WORKER, stopped_outcome(), stopped_outcome(), worker_json())
@@ -480,7 +589,7 @@ async def test_hook_stop_is_continued_and_the_worker_finishes(harness: Harness) 
 
     [task] = await harness.tasks(run_id)
     assert task.state is TaskState.DONE
-    assert harness.actions() == ["push_branch", "open_pr", "set_review_check"]
+    assert harness.actions() == ["push_branch", "set_review_check", "open_pr", "set_review_check"]
     first, *continues = harness.backend.prompts(Role.WORKER)
     assert first.resume_session_id is None
     assert len(continues) == 2
@@ -573,7 +682,13 @@ async def test_worker_timeout_escalates(harness: Harness) -> None:
     [task] = await harness.tasks(run_id)
     assert task.state is TaskState.ESCALATED
     assert "timed out or the run window ended while waiting for CI" in str(task.note)
-    assert harness.actions() == ["push_branch", "open_pr", "comment", "change_labels"]
+    assert harness.actions() == [
+        "push_branch",
+        "set_review_check",
+        "open_pr",
+        "comment",
+        "change_labels",
+    ]
     assert not harness.runtime.running
 
 
@@ -601,7 +716,7 @@ async def test_long_comment_block_goes_back_to_the_worker_before_any_push(
 
     [task] = await harness.tasks(run_id)
     assert (task.state, task.policy_rounds) == (TaskState.DONE, 1)
-    assert harness.actions() == ["push_branch", "open_pr", "set_review_check"]
+    assert harness.actions() == ["push_branch", "set_review_check", "open_pr", "set_review_check"]
     follow_up = harness.backend.prompts(Role.WORKER)[1]
     assert (
         "app.py:1: comment block of 3 lines, limit is 2 (contestable as `comment_block`)"
@@ -625,7 +740,7 @@ async def test_contested_comment_block_is_judged_by_the_reviewer(harness: Harnes
         "[comment_block] app.py:1: comment block of 3 lines, limit is 2; "
         "worker reason: License header" in review.prompt
     )
-    assert harness.actions() == ["push_branch", "open_pr", "set_review_check"]
+    assert harness.actions() == ["push_branch", "set_review_check", "open_pr", "set_review_check"]
 
 
 async def test_comment_block_contested_up_front_costs_no_policy_round(harness: Harness) -> None:
@@ -730,7 +845,7 @@ async def test_failed_check_goes_back_to_the_worker_before_any_push(harness: Har
     assert "repository checks failed" in follow_up.prompt
     assert "`make check` failed (exit 1)" in follow_up.prompt
     assert "FAILED test_app" in follow_up.prompt
-    assert harness.actions() == ["push_branch", "open_pr", "set_review_check"]
+    assert harness.actions() == ["push_branch", "set_review_check", "open_pr", "set_review_check"]
 
 
 async def test_check_rounds_do_not_use_up_ci_rounds(harness: Harness) -> None:

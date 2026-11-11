@@ -7,6 +7,7 @@ from skeleton_crew.domain.settings import Role
 from skeleton_crew.pipeline.escalation import Escalation
 from skeleton_crew.pipeline.sessions import (
     Sandbox,
+    UsageLimitReached,
     remove_sandbox,
     run_agent,
     start_sandbox,
@@ -85,6 +86,8 @@ async def review_change(
         resume_session_id=resume_id,
     )
     await job.record.add_cost(reply.outcome.cost_usd)
+    if reply.outcome.usage_limited:
+        raise UsageLimitReached
     if reply.result is None:
         raise Escalation(f"review session failed: {reply.error}")
     await job.record.add_blockers(tag_blockers(Role.REVIEWER, reply.result.blockers))

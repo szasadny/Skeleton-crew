@@ -21,7 +21,7 @@ Skeleton Crew uses three labels, which are configurable in the UI. Only a human 
 
 1. The selector picks issues labelled `skeleton`, up to the daily quota. Issues it does not pick keep `skeleton` for a later run.
 2. A worker opens a PR from branch `skeleton/<number>-<slug>`, with `Closes #<number>` in the body.
-3. The worker keeps fixing until CI is green and the `skeleton-crew/review` check is green.
+3. The worker keeps fixing until CI is green and the `skeleton-crew/review` check is green. That check is in progress from each push until the reviewer is done, so an unreviewed PR never shows it green; make it a required status check on the base branch so GitHub blocks merging an unreviewed PR.
 4. The issue keeps the `skeleton` label. While a skeleton PR for it is open, no new PR is started for it. An issue with more than one open skeleton PR is skipped entirely.
 5. If the branch already exists without an open PR, Skeleton Crew continues it only when the controller pushed its head itself. A branch with someone else's commits, or whose PR was closed without merging, escalates instead.
 6. A human reviews and merges the PR. Agents never merge.
@@ -47,6 +47,8 @@ The controller comments on the issue, removes `skeleton` and adds `skeleton HITL
 - the worker times out or the run window ends;
 - with the injection screen on, the issue text or the CI or check output looks like prompt injection, or the classifier gives no valid answer; edit the text to go on;
 - with the pre-screen on, the classifier is sure the issue is too large or unclear.
+
+When the agent backend's usage limit is reached, the issue is not escalated: the task stops, the run starts nothing new, and the next run goes on (an open PR is finished and reviewed then).
 
 To go on after an escalation, remove `skeleton HITL` and add `skeleton` again. With an open PR, the next run finishes that PR (see above). To start over instead, close the PR, delete the branch `skeleton/<number>-<slug>` and then swap the labels; the next run starts a fresh branch.
 

@@ -268,6 +268,12 @@ def _run(name: str, status: str, conclusion: str | None, slug: str = "github-act
     [
         ([], [], CiState.NONE),
         ([_run(REVIEW_CHECK_NAME, "completed", "failure")], [], CiState.NONE),
+        ([_run(REVIEW_CHECK_NAME, "in_progress", None)], [], CiState.NONE),
+        (
+            [_run(REVIEW_CHECK_NAME, "in_progress", None), _run("t", "completed", "success")],
+            [],
+            CiState.SUCCESS,
+        ),
         (
             [_run("t", "completed", "success"), _run("l", "completed", "skipped")],
             [],

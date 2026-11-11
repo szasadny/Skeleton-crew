@@ -8,6 +8,12 @@ GITHUB_ACTIONS_SLUG = "github-actions"
 _GREEN_CONCLUSIONS = frozenset({"success", "neutral", "skipped"})
 
 
+class ReviewCheck(StrEnum):
+    PENDING = "pending"
+    PASSED = "passed"
+    CHANGES_REQUESTED = "changes_requested"
+
+
 class CiState(StrEnum):
     PENDING = "pending"
     SUCCESS = "success"
@@ -70,7 +76,7 @@ def required_checks(rules: Sequence[BranchRule]) -> frozenset[str]:
                 for c in checks
                 if isinstance(c, Mapping) and isinstance(c.get("context"), str) and c["context"]
             }
-    # The controller sets the review check only after CI, so waiting for it would never end.
+    # The controller completes the review check only after CI, so waiting for it would never end.
     return frozenset(names - {REVIEW_CHECK_NAME})
 
 

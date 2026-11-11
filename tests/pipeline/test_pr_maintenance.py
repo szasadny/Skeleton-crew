@@ -29,7 +29,7 @@ from skeleton_crew.core.audit import AuditKind, AuditOutcome
 from skeleton_crew.core.git import GitCommandError
 from skeleton_crew.domain.settings import Role
 from skeleton_crew.domain.task_state import TaskKind, TaskState
-from skeleton_crew.github.gateway import CiState, CiStatus, FailedJob
+from skeleton_crew.github.gateway import CiState, CiStatus, FailedJob, ReviewCheck
 from skeleton_crew.pipeline.pr_maintenance import MERGEABLE_POLL_SECONDS, MERGEABLE_POLLS
 from skeleton_crew.pipeline.texts import RERUN_CI_MESSAGE
 from skeleton_crew.store import audit_store, runs_store
@@ -140,7 +140,7 @@ async def test_conflict_is_resolved_by_a_worker_into_a_merge_commit(harness: Har
     assert parents_of(harness, merged) == [head, main]
     assert remote_file(harness, merged, "app.py") == BOTH
     assert harness.gateway.leases == [head]
-    assert harness.gateway.review_checks[merged][0] is True
+    assert harness.gateway.review_checks[merged][0] is ReviewCheck.PASSED
     assert [r.role for r in harness.backend.requests] == [Role.WORKER, Role.REVIEWER]
     assert_no_forbidden_writes(harness)
 
@@ -380,7 +380,7 @@ async def test_unfinished_pr_with_green_ci_is_reviewed(harness: Harness, state: 
     assert (task.kind, task.state) == (TaskKind.PR_FIX, TaskState.DONE)
     assert harness.gateway.mergeable_reads == []
     assert git(harness.remote, "rev-parse", BRANCH).decode().strip() == head
-    assert harness.gateway.review_checks[head][0] is True
+    assert harness.gateway.review_checks[head][0] is ReviewCheck.PASSED
     assert [r.role for r in harness.backend.requests] == [Role.REVIEWER]
     assert_no_forbidden_writes(harness)
 
@@ -400,7 +400,7 @@ async def test_unfinished_pr_with_red_ci_reruns_it_with_an_empty_commit(harness:
     message = git(harness.remote, "log", "-1", "--format=%s", rerun).decode().strip()
     assert message == RERUN_CI_MESSAGE
     assert harness.gateway.leases == [head]
-    assert harness.gateway.review_checks[rerun][0] is True
+    assert harness.gateway.review_checks[rerun][0] is ReviewCheck.PASSED
     assert [r.role for r in harness.backend.requests] == [Role.REVIEWER]
     assert_no_forbidden_writes(harness)
 
@@ -437,7 +437,7 @@ async def test_unfinished_pr_behind_the_base_gets_a_merge_commit(harness: Harnes
     assert task.state is TaskState.DONE
     [(_, merged)] = harness.gateway.pushes
     assert parents_of(harness, merged) == [head, main]
-    assert harness.gateway.review_checks[merged][0] is True
+    assert harness.gateway.review_checks[merged][0] is ReviewCheck.PASSED
     assert [r.role for r in harness.backend.requests] == [Role.REVIEWER]
 
 
