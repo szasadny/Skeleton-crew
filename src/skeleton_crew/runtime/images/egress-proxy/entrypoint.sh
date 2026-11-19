@@ -2,6 +2,7 @@
 set -euo pipefail
 
 install -d -o proxy -g proxy /var/log/squid /run/squid
+rm -f /run/squid/squid.pid
 for log_file in access.log cache.log; do
     install -m 0640 -o proxy -g proxy /dev/null "/var/log/squid/${log_file}"
 done
