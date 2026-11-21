@@ -63,6 +63,22 @@ async def test_selector_too_large_escalates_without_worker(harness: Harness) -> 
     assert_no_forbidden_writes(harness)
 
 
+async def test_selector_duplicate_escalates_and_keeps_the_original(harness: Harness) -> None:
+    harness.add_ready_issue(1)
+    harness.add_ready_issue(2)
+    harness.backend.script(Role.SELECTOR, selection_json([], duplicates={2: 1}))
+
+    run_id = await harness.run()
+
+    assert await harness.tasks(run_id) == []
+    [comment] = harness.writes("comment")
+    assert comment.args["issue"] == 2
+    assert "duplicate of #1" in str(comment.args["body"])
+    assert harness.gateway.issues[2].labels == {"skeleton HITL"}
+    assert harness.gateway.issues[1].labels == {"skeleton"}
+    assert_no_forbidden_writes(harness)
+
+
 async def test_selector_prompt_carries_the_configured_diff_limit(harness: Harness) -> None:
     harness.limits(max_diff_lines=321)
     harness.add_ready_issue(1)

@@ -148,11 +148,18 @@ class SelectionQuestion(_AgentOutput):
     options: list[Text300] = Field(min_length=1, max_length=5)
 
 
+class SelectionDuplicate(_AgentOutput):
+    issue_number: int = Field(ge=1)
+    duplicate_of: int = Field(ge=1)
+    reason: Text300
+
+
 class SelectionResult(_AgentOutput):
     picks: list[SelectionPick] = Field(default_factory=list, max_length=50)
     too_large: list[SelectionPick] = Field(default_factory=list, max_length=50)
     needs_decision: list[SelectionQuestion] = Field(default_factory=list, max_length=50)
     rejected: list[SelectionPick] = Field(default_factory=list, max_length=50)
+    duplicates: list[SelectionDuplicate] = Field(default_factory=list, max_length=50)
 
 
 def json_schema(model: type[BaseModel]) -> str:
@@ -164,18 +171,23 @@ def check_selection(
 ) -> SelectionResult:
     if quota < 0:
         raise PolicyViolation(f"invalid quota: {quota}")
-    entries: list[SelectionPick | SelectionQuestion] = [
+    entries: list[SelectionPick | SelectionQuestion | SelectionDuplicate] = [
         *result.picks,
         *result.too_large,
         *result.needs_decision,
         *result.rejected,
+        *result.duplicates,
     ]
     numbers = [entry.issue_number for entry in entries]
     if len(set(numbers)) != len(numbers):
         raise PolicyViolation("selection lists an issue more than once")
-    unknown = sorted(set(numbers) - set(candidates))
+    kept = [duplicate.duplicate_of for duplicate in result.duplicates]
+    unknown = sorted(set(numbers + kept) - set(candidates))
     if unknown:
         raise PolicyViolation(f"selection lists unknown issues: {unknown}")
+    duplicated = {duplicate.issue_number for duplicate in result.duplicates}
+    if duplicated & set(kept):
+        raise PolicyViolation("a duplicate must point to an issue that stays")
     return result.model_copy(update={"picks": result.picks[:quota]})
 
 

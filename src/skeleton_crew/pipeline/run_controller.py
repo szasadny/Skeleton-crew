@@ -259,6 +259,12 @@ class RunController:
             await self._escalate(
                 ctx, pick.issue_number, f"the selector rejected the issue: {pick.reason}"
             )
+        for duplicate in selection.duplicates:
+            await self._escalate(
+                ctx,
+                duplicate.issue_number,
+                f"the selector found a duplicate of #{duplicate.duplicate_of}: {duplicate.reason}",
+            )
         by_number = {c.issue.number: c for c in candidates}
         return [by_number[pick.issue_number] for pick in selection.picks], None
 

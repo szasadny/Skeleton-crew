@@ -127,6 +127,12 @@ def test_selector_prompt_states_the_diff_limit() -> None:
     assert "exceeds 1500 changed lines" in text
 
 
+def test_selector_prompt_asks_for_duplicates() -> None:
+    text = render_prompt(PromptName.SELECTOR, _CONTEXTS[PromptName.SELECTOR], json_schema=_SCHEMA)
+    assert "Put an issue in `duplicates`" in text
+    assert "`duplicate_of`" in text
+
+
 def test_selector_prompt_requires_the_diff_limit() -> None:
     context = {k: v for k, v in _CONTEXTS[PromptName.SELECTOR].items() if k != "max_diff_lines"}
     with pytest.raises(UndefinedError):

@@ -33,6 +33,13 @@ def test_selector_rules_count_the_diff_line_limit_as_too_large() -> None:
     assert "`too_large` only if" not in text
 
 
+def test_selector_rules_escalate_duplicates() -> None:
+    text = default_rules("selector")
+    assert "`duplicates`" in text
+    assert "`duplicate_of`" in text
+    assert "duplicates or depends" not in text
+
+
 def test_reviewer_rules_require_the_missing_doc_updates_list() -> None:
     text = default_rules("reviewer")
     assert "`missing_doc_updates`" in text

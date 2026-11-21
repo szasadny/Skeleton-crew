@@ -235,6 +235,7 @@ def selection_json(
     too_large: Sequence[int] = (),
     rejected: Sequence[int] = (),
     needs_decision: Sequence[int] = (),
+    duplicates: Mapping[int, int] | None = None,
 ) -> str:
     return json.dumps(
         {
@@ -250,6 +251,10 @@ def selection_json(
                 for n in needs_decision
             ],
             "rejected": [{"issue_number": n, "reason": "unsafe"} for n in rejected],
+            "duplicates": [
+                {"issue_number": n, "duplicate_of": kept, "reason": "same change"}
+                for n, kept in (duplicates or {}).items()
+            ],
         }
     )
 

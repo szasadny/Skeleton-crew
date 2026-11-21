@@ -36,10 +36,11 @@ A PR whose last task escalated, failed or was aborted is finished in the next ru
 
 The controller comments on the issue, removes `skeleton` and adds `skeleton HITL` when:
 
-- the selector judges that the issue asks for a feature, refactor or architecture change it does not work out;
+- the selector judges that the issue asks for a feature, refactor or architecture change it does not work out, or needs a diff over `max_diff_lines`;
 - the selector needs an owner decision; the comment names the problem, the question and the options;
 - the worker or reviewer judges the scope larger than the issue describes;
 - the selector rejects the issue as unsafe or not real work on this repository;
+- the selector finds that the issue duplicates another candidate; the comment names the issue that stays;
 - the worker reports it is blocked, or a worker or reviewer session fails;
 - the setup command fails;
 - the maximum number of check, CI, policy or review rounds is reached, or CI does not report or finish in time;

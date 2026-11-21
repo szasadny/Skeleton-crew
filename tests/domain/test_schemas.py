@@ -13,6 +13,7 @@ from skeleton_crew.domain.schemas import (
     RefineResult,
     ReviewFinding,
     ReviewResult,
+    SelectionDuplicate,
     SelectionPick,
     SelectionQuestion,
     SelectionResult,
@@ -353,6 +354,38 @@ def test_check_selection_validates_beyond_the_quota() -> None:
     result = SelectionResult(picks=[pick(1), pick(99)])
     with pytest.raises(PolicyViolation):
         check_selection(result, {1}, 1)
+
+
+def duplicate(number: int, of: int) -> SelectionDuplicate:
+    return SelectionDuplicate(issue_number=number, duplicate_of=of, reason="same change")
+
+
+def test_check_selection_keeps_duplicates_beyond_the_quota() -> None:
+    result = SelectionResult(picks=[pick(1)], duplicates=[duplicate(2, 1), duplicate(3, 1)])
+    checked = check_selection(result, {1, 2, 3}, 0)
+    assert checked == SelectionResult(duplicates=[duplicate(2, 1), duplicate(3, 1)])
+
+
+@pytest.mark.parametrize(
+    ("picks", "duplicates"),
+    [
+        ([], [(2, 99)]),
+        ([], [(99, 1)]),
+        ([], [(2, 2)]),
+        ([], [(1, 2), (2, 1)]),
+        ([], [(3, 2), (2, 1)]),
+        ([], [(2, 1), (2, 3)]),
+        ([2], [(2, 1)]),
+    ],
+)
+def test_check_selection_rejects_invalid_duplicates(
+    picks: list[int], duplicates: list[tuple[int, int]]
+) -> None:
+    result = SelectionResult(
+        picks=[pick(n) for n in picks], duplicates=[duplicate(n, of) for n, of in duplicates]
+    )
+    with pytest.raises(PolicyViolation):
+        check_selection(result, {1, 2, 3}, 10)
 
 
 def test_check_selection_rejects_negative_quota() -> None:
