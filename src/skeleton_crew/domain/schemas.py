@@ -66,7 +66,7 @@ class Objection(_AgentOutput):
 
 
 class WorkerResult(_AgentOutput):
-    status: Literal["done", "scope_too_large", "blocked"]
+    status: Literal["done", "scope_too_large", "blocked", "already_fixed"]
     summary: Text1500
     pr_title: PrTitle
     note: Text1500 | None = None

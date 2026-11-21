@@ -122,6 +122,11 @@ def test_worker_prompt_states_branch_setup_and_push_rule() -> None:
     assert "`gh`" in text
 
 
+def test_worker_prompt_allows_stopping_on_an_already_fixed_issue() -> None:
+    text = render_prompt(PromptName.WORKER, _CONTEXTS[PromptName.WORKER], json_schema=_SCHEMA)
+    assert "return `already_fixed`" in text
+
+
 def test_selector_prompt_states_the_diff_limit() -> None:
     text = render_prompt(PromptName.SELECTOR, _CONTEXTS[PromptName.SELECTOR], json_schema=_SCHEMA)
     assert "exceeds 1500 changed lines" in text

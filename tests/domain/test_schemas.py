@@ -85,6 +85,7 @@ def test_strings_are_stripped() -> None:
         worker(status="DONE"),
         worker(status="blocked"),
         worker(status="scope_too_large"),
+        worker(status="already_fixed"),
         worker(status="blocked", note="   "),
         worker(summary=""),
         worker(summary="   "),
@@ -137,7 +138,7 @@ def test_invalid_worker_output_fails_closed(raw: str) -> None:
         parse_output(WorkerResult, raw)
 
 
-@pytest.mark.parametrize("status", ["blocked", "scope_too_large"])
+@pytest.mark.parametrize("status", ["blocked", "scope_too_large", "already_fixed"])
 def test_non_done_status_with_note_parses(status: str) -> None:
     assert parse_output(WorkerResult, worker(status=status, note="why")).note == "why"
 

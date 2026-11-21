@@ -14,6 +14,7 @@
 - Status:
   - `done`: the issue is implemented and checks pass.
   - `scope_too_large`: it needs more than the issue describes. Stop early and explain in `note`.
+  - `already_fixed`: the base branch already does what the issue asks. Change nothing, stop, and name the commit or PR that fixed it in `note`.
   - `blocked`: you cannot finish for another reason. Explain in `note`.
 - Merge conflicts: keep the intent of both sides, remove every conflict marker and change only the conflicted files. Other changes it needs follow after CI reports them.
 - Report real problems outside your scope as `new_issues`, not by fixing them.

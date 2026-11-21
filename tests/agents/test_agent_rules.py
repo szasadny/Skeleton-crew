@@ -27,6 +27,10 @@ def test_worker_rules_forbid_pushing() -> None:
     assert "`gh`" in text
 
 
+def test_worker_rules_allow_stopping_on_an_already_fixed_issue() -> None:
+    assert "`already_fixed`" in default_rules("worker")
+
+
 def test_selector_rules_count_the_diff_line_limit_as_too_large() -> None:
     text = default_rules("selector")
     assert "diff line limit" in text

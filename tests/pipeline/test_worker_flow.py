@@ -452,6 +452,21 @@ async def test_worker_scope_too_large_escalates_without_push(harness: Harness) -
     assert_no_forbidden_writes(harness)
 
 
+async def test_worker_already_fixed_escalates_without_push(harness: Harness) -> None:
+    harness.backend.script(Role.WORKER, worker_json("already_fixed", note="Fixed by #932."))
+
+    run_id = await harness.run()
+
+    [task] = await harness.tasks(run_id)
+    assert (task.state, task.policy_rounds) == (TaskState.ESCALATED, 0)
+    assert harness.actions() == ["comment", "change_labels"]
+    [comment] = harness.writes("comment")
+    assert "Fixed by #932." in str(comment.args["body"])
+    assert harness.gateway.issues[1].labels == {"skeleton HITL"}
+    assert not harness.runtime.running
+    assert_no_forbidden_writes(harness)
+
+
 async def test_protected_path_edit_gets_follow_up_then_escalates(harness: Harness) -> None:
     harness.limits(max_policy_rounds=1)
     workflow = {".github/workflows/ci.yml": "on: push\n"}
