@@ -59,7 +59,11 @@ async def _run_selector(
             sandbox,
             role=Role.SELECTOR,
             prompt=PromptName.SELECTOR,
-            context={"candidates": _candidate_context(candidates), "quota": quota},
+            context={
+                "candidates": _candidate_context(candidates),
+                "quota": quota,
+                "max_diff_lines": ctx.settings.limits.max_diff_lines,
+            },
             output=SelectionResult,
         )
     finally:

@@ -27,6 +27,7 @@ def _comments() -> list[dict[str, str]]:
 _CONTEXTS: dict[PromptName, dict[str, object]] = {
     PromptName.SELECTOR: {
         "quota": 2,
+        "max_diff_lines": 1500,
         "candidates": [{**_issue(n), "comments": _comments()} for n in (3, 4)],
     },
     PromptName.REFINER: {"issue": _issue(5), "comments": _comments(), "max_chars": 1400},
@@ -119,6 +120,17 @@ def test_worker_prompt_states_branch_setup_and_push_rule() -> None:
     for part in parts:
         assert part in text
     assert "`gh`" in text
+
+
+def test_selector_prompt_states_the_diff_limit() -> None:
+    text = render_prompt(PromptName.SELECTOR, _CONTEXTS[PromptName.SELECTOR], json_schema=_SCHEMA)
+    assert "exceeds 1500 changed lines" in text
+
+
+def test_selector_prompt_requires_the_diff_limit() -> None:
+    context = {k: v for k, v in _CONTEXTS[PromptName.SELECTOR].items() if k != "max_diff_lines"}
+    with pytest.raises(UndefinedError):
+        render_prompt(PromptName.SELECTOR, context, json_schema=_SCHEMA)
 
 
 def test_worker_prompt_without_setup_or_check_command() -> None:

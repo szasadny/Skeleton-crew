@@ -27,6 +27,12 @@ def test_worker_rules_forbid_pushing() -> None:
     assert "`gh`" in text
 
 
+def test_selector_rules_count_the_diff_line_limit_as_too_large() -> None:
+    text = default_rules("selector")
+    assert "diff line limit" in text
+    assert "`too_large` only if" not in text
+
+
 def test_reviewer_rules_require_the_missing_doc_updates_list() -> None:
     text = default_rules("reviewer")
     assert "`missing_doc_updates`" in text

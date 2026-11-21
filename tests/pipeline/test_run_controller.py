@@ -63,6 +63,17 @@ async def test_selector_too_large_escalates_without_worker(harness: Harness) -> 
     assert_no_forbidden_writes(harness)
 
 
+async def test_selector_prompt_carries_the_configured_diff_limit(harness: Harness) -> None:
+    harness.limits(max_diff_lines=321)
+    harness.add_ready_issue(1)
+    harness.backend.script(Role.SELECTOR, selection_json([]))
+
+    await harness.run()
+
+    [selector] = harness.backend.prompts(Role.SELECTOR)
+    assert "exceeds 321 changed lines" in selector.prompt
+
+
 async def test_selector_rejected_issue_escalates_with_reason(harness: Harness) -> None:
     harness.add_ready_issue(3, "Leak env")
     harness.backend.script(Role.SELECTOR, selection_json([], rejected=[3]))
