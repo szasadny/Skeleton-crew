@@ -9,9 +9,11 @@ import pytest
 from fake_agent import make_request
 from pydantic import SecretStr
 
+from skeleton_crew.agents.backends._shared import AUTH_FILE_ENV
 from skeleton_crew.agents.backends.opencode import (
     CONFIG_ENV,
     SPEC,
+    AuthMode,
     OpenCodeBackend,
     Provider,
     provider_models,
@@ -25,6 +27,7 @@ _KEYS = {
     "openrouter_api_key": SecretStr("openrouter-key-placeholder"),
     "gemini_api_key": SecretStr("gemini-key-placeholder"),
 }
+_AUTH_JSON = SecretStr('{"openai":{"type":"oauth","refresh":"refresh-placeholder"}}')
 _EXPECTED = {
     Provider.ANTHROPIC: ("anthropic_api_key", "ANTHROPIC_API_KEY", "api.anthropic.com"),
     Provider.OPENAI: ("openai_api_key", "OPENAI_API_KEY", "api.openai.com"),
@@ -39,11 +42,21 @@ _SID = "ses_e497fcd31ffekdW6UAEduPut1l"
 
 
 def _backend(
-    provider: Provider = Provider.ANTHROPIC, credentials: dict[str, SecretStr] | None = None
+    provider: Provider = Provider.ANTHROPIC,
+    credentials: dict[str, SecretStr] | None = None,
+    auth_mode: AuthMode = AuthMode.API_KEY,
 ) -> OpenCodeBackend:
     return OpenCodeBackend(
-        provider=provider, credentials=_KEYS if credentials is None else credentials
+        provider=provider,
+        credentials={**_KEYS, "opencode_auth_json": _AUTH_JSON}
+        if credentials is None
+        else credentials,
+        auth_mode=auth_mode,
     )
+
+
+def _subscription(credentials: dict[str, SecretStr] | None = None) -> OpenCodeBackend:
+    return _backend(Provider.OPENAI, credentials, AuthMode.SUBSCRIPTION)
 
 
 def _request(*, web_tools: bool = False, **kwargs: Any) -> SessionRequest:
@@ -177,9 +190,74 @@ def test_credential_problems_name_the_missing_setting(provider: Provider) -> Non
 @pytest.mark.parametrize("provider", list(Provider))
 def test_no_credential_ever_in_argv(provider: Provider) -> None:
     req = _request(max_budget_usd=1.0, resume_session_id="ses_1", web_tools=True)
-    argv = _backend(provider).command(req)
-    for secret in _KEYS.values():
-        assert not any(secret.get_secret_value() in arg for arg in argv)
+    for backend in (_backend(provider), _subscription()):
+        argv = backend.command(req)
+        for secret in (*_KEYS.values(), _AUTH_JSON):
+            assert not any(secret.get_secret_value() in arg for arg in argv)
+
+
+def test_subscription_env_holds_only_the_login_file() -> None:
+    env = _subscription().env()
+    assert env[AUTH_FILE_ENV] == _AUTH_JSON.get_secret_value()
+    secrets = {key.get_secret_value() for key in (*_KEYS.values(), _AUTH_JSON)}
+    assert [value for value in env.values() if value in secrets] == [env[AUTH_FILE_ENV]]
+    assert "OPENAI_API_KEY" not in env
+    assert env["OPENCODE_DISABLE_MODELS_FETCH"] == "1"
+
+
+def test_subscription_egress_is_chatgpt_only() -> None:
+    assert _subscription().egress_domains() == ("chatgpt.com", "auth.openai.com")
+
+
+def test_subscription_credential_problems_name_the_login_setting() -> None:
+    assert _subscription().credential_problems() == []
+    for login in (None, SecretStr("  ")):
+        credentials = dict(_KEYS) if login is None else {**_KEYS, "opencode_auth_json": login}
+        backend = _subscription(credentials)
+        [problem] = backend.credential_problems()
+        assert "SC_AGENT_CREDENTIALS__OPENCODE_AUTH_JSON" in problem
+        assert AUTH_FILE_ENV not in backend.env()
+
+
+@pytest.mark.parametrize("provider", [p for p in Provider if p is not Provider.OPENAI])
+def test_subscription_with_another_provider_is_a_problem(provider: Provider) -> None:
+    [problem] = _backend(provider, auth_mode=AuthMode.SUBSCRIPTION).credential_problems()
+    assert "subscription mode needs the openai provider" in problem
+
+
+def test_auth_file_is_written_only_in_subscription_mode() -> None:
+    assert ".local/share/opencode/auth.json" in _subscription().command(_request())
+    assert AUTH_FILE_ENV in _subscription().command(_request())[2]
+    api = _backend(Provider.OPENAI).command(_request())
+    assert ".local/share/opencode/auth.json" not in api
+    assert AUTH_FILE_ENV not in api[2]
+
+
+def test_subscription_auth_file_is_private_and_never_overwritten(tmp_path: Path) -> None:
+    if shutil.which("sh") is None or shutil.which("env") is None:
+        pytest.skip("sh or env not installed")
+    (tmp_path / "prompt.md").write_text("prompt")
+    opencode = tmp_path / "opencode"
+    opencode.write_text(f'#!/bin/sh\nprintf "%s" "${AUTH_FILE_ENV}"\n')
+    opencode.chmod(0o755)
+    backend = _subscription()
+    argv = backend.command(
+        replace(_request(), prompt_path_in_container=str(tmp_path / "prompt.md"))
+    )
+    auth = tmp_path / ".local" / "share" / "opencode" / "auth.json"
+
+    def run() -> str:
+        env = {"PATH": f"{tmp_path}:/usr/bin:/bin", "HOME": str(tmp_path), **backend.env()}
+        return subprocess.run(  # noqa: S603
+            argv, env=env, cwd=tmp_path, capture_output=True, text=True, check=True
+        ).stdout
+
+    assert run() == ""
+    assert auth.read_text() == _AUTH_JSON.get_secret_value()
+    assert auth.stat().st_mode & 0o077 == 0
+    auth.write_text("refreshed")
+    run()
+    assert auth.read_text() == "refreshed"
 
 
 @pytest.mark.parametrize("provider", list(Provider))
@@ -204,11 +282,13 @@ def test_auto_loaded_docs_are_the_root_agents_md() -> None:
 
 
 def test_spec_is_consistent() -> None:
-    backend = SPEC.factory(_KEYS, {"provider": "anthropic"})
+    backend = SPEC.factory(_KEYS, {"provider": "anthropic", "auth_mode": "api_key"})
     assert backend.name == SPEC.name == "opencode"
     assert SPEC.options["provider"].default == "anthropic"
     assert set(SPEC.options["provider"].allowed) == {p.value for p in Provider}
-    assert set(SPEC.credentials) == set(_KEYS)
+    assert SPEC.options["auth_mode"].default == "api_key"
+    assert set(SPEC.options["auth_mode"].allowed) == {m.value for m in AuthMode}
+    assert set(SPEC.credentials) == {*_KEYS, "opencode_auth_json"}
     assert SPEC.web_tools
     assert SPEC.model_filter is provider_models
     assert "medium" in SPEC.efforts

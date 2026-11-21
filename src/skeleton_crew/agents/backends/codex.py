@@ -43,7 +43,6 @@ MODELS = (
     "gpt-6.1-terra",
     "gpt-5.6-terra",
     "gpt-5.6-luna",
-    "gpt-5.5",
 )
 # "ultra" is left out: it lets the model delegate to sub-agents on its own.
 EFFORTS = ("low", "medium", "high", "xhigh", "max")

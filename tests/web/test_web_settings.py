@@ -255,7 +255,7 @@ async def test_agents_rejects_a_model_of_another_opencode_provider(web: Web) -> 
     )
     status, html = await _post(web, "/agents", form)
     assert status == 422
-    assert "not a OpenCode model for provider=openai" in html
+    assert "not a OpenCode model for auth_mode=api_key, provider=openai" in html
     assert (await web.settings()).agents == AppSettings().agents
 
 

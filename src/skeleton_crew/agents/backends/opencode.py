@@ -8,6 +8,7 @@ from typing import Any
 from pydantic import SecretStr
 
 from skeleton_crew.agents.backends._shared import (
+    AUTH_FILE_ENV,
     jsonl_events,
     number,
     safe_reason,
@@ -26,6 +27,11 @@ from skeleton_crew.agents.output import extract_json_text
 
 NAME = "opencode"
 CONFIG_ENV = "OPENCODE_CONFIG_CONTENT"
+
+
+class AuthMode(StrEnum):
+    API_KEY = "api_key"
+    SUBSCRIPTION = "subscription"
 
 
 class Provider(StrEnum):
@@ -54,6 +60,11 @@ _PROVIDERS = {
         "gemini_api_key", "GOOGLE_GENERATIVE_AI_API_KEY", "generativelanguage.googleapis.com"
     ),
 }
+# A ChatGPT sign-in, which OpenCode supports only for the OpenAI provider.
+SUBSCRIPTION_PROVIDER = Provider.OPENAI
+SUBSCRIPTION_CREDENTIAL = "opencode_auth_json"
+SUBSCRIPTION_DOMAINS = ("chatgpt.com", "auth.openai.com")
+AUTH_FILE = ".local/share/opencode/auth.json"
 # With CLAUDE.md compatibility off, OpenCode loads the root AGENTS.md (CONTEXT.md only without it).
 AUTO_LOADED_DOCS = ("AGENTS.md",)
 # Ids must exist in the model snapshot bundled with the pinned CLI, as catalog fetches are off.
@@ -158,25 +169,45 @@ def _is_limit_signal(error: Any) -> bool:
 class OpenCodeBackend:
     name = NAME
 
-    def __init__(self, *, provider: Provider, credentials: Mapping[str, SecretStr]) -> None:
+    def __init__(
+        self,
+        *,
+        provider: Provider,
+        credentials: Mapping[str, SecretStr],
+        auth_mode: AuthMode = AuthMode.API_KEY,
+    ) -> None:
         self._provider = provider
+        self._auth_mode = auth_mode
         self._credentials = dict(credentials)
 
     def egress_domains(self) -> tuple[str, ...]:
+        if self._auth_mode is AuthMode.SUBSCRIPTION:
+            return SUBSCRIPTION_DOMAINS
         return (_PROVIDERS[self._provider].domain,)
 
     def auto_loaded_docs(self) -> tuple[str, ...]:
         return AUTO_LOADED_DOCS
 
+    def _credential_name(self) -> str:
+        if self._auth_mode is AuthMode.SUBSCRIPTION:
+            return SUBSCRIPTION_CREDENTIAL
+        return _PROVIDERS[self._provider].credential
+
     def _credential(self) -> tuple[str, str | None]:
-        access = _PROVIDERS[self._provider]
-        return access.env_var, secret_value(self._credentials, access.credential)
+        if self._auth_mode is AuthMode.SUBSCRIPTION:
+            var = AUTH_FILE_ENV
+        else:
+            var = _PROVIDERS[self._provider].env_var
+        return var, secret_value(self._credentials, self._credential_name())
 
     def credential_problems(self) -> list[str]:
+        mode = f"{self._provider.value} provider, {self._auth_mode.value} mode"
+        if self._auth_mode is AuthMode.SUBSCRIPTION and self._provider is not SUBSCRIPTION_PROVIDER:
+            return [f"OpenCode ({mode}): subscription mode needs the openai provider"]
         _, value = self._credential()
         if value is None:
-            setting = f"SC_AGENT_CREDENTIALS__{_PROVIDERS[self._provider].credential.upper()}"
-            return [f"OpenCode ({self._provider.value} provider): {setting} is not set"]
+            setting = f"SC_AGENT_CREDENTIALS__{self._credential_name().upper()}"
+            return [f"OpenCode ({mode}): {setting} is not set"]
         return []
 
     def env(self) -> dict[str, str]:
@@ -198,7 +229,13 @@ class OpenCodeBackend:
         ]
         if req.resume_session_id is not None:
             args += ["--session", req.resume_session_id]
-        return stdin_command("env", args, prompt_path=req.prompt_path_in_container)
+        subscription = self._auth_mode is AuthMode.SUBSCRIPTION
+        return stdin_command(
+            "env",
+            args,
+            prompt_path=req.prompt_path_in_container,
+            auth_file=AUTH_FILE if subscription else None,
+        )
 
     def parse(self, stdout_path: Path, exit_code: int, timed_out: bool) -> SessionOutcome:
         session_id: str | None = None
@@ -259,7 +296,11 @@ class OpenCodeBackend:
 
 
 def _create(credentials: Mapping[str, SecretStr], options: Mapping[str, str]) -> OpenCodeBackend:
-    return OpenCodeBackend(provider=Provider(options["provider"]), credentials=credentials)
+    return OpenCodeBackend(
+        provider=Provider(options["provider"]),
+        credentials=credentials,
+        auth_mode=AuthMode(options["auth_mode"]),
+    )
 
 
 SPEC = BackendSpec(
@@ -272,9 +313,15 @@ SPEC = BackendSpec(
         "provider": OptionSpec(
             allowed=tuple(provider.value for provider in Provider),
             default=Provider.ANTHROPIC.value,
-        )
+        ),
+        "auth_mode": OptionSpec(
+            allowed=tuple(mode.value for mode in AuthMode), default=AuthMode.API_KEY.value
+        ),
     },
-    credentials=tuple(access.credential for access in _PROVIDERS.values()),
+    credentials=(
+        *(access.credential for access in _PROVIDERS.values()),
+        SUBSCRIPTION_CREDENTIAL,
+    ),
     web_tools=True,
     model_filter=provider_models,
 )
