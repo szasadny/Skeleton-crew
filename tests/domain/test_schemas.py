@@ -29,6 +29,7 @@ def worker(**overrides: Any) -> str:
         "summary": "Did it.",
         "pr_title": "Add x",
         "blockers": [],
+        "unverified": [],
     }
     data.update(overrides)
     return json.dumps(data)
@@ -65,7 +66,9 @@ def doc(**overrides: Any) -> dict[str, Any]:
 
 def test_minimal_worker_result_parses() -> None:
     result = parse_output(WorkerResult, worker())
-    assert result == WorkerResult(status="done", summary="Did it.", pr_title="Add x", blockers=[])
+    assert result == WorkerResult(
+        status="done", summary="Did it.", pr_title="Add x", blockers=[], unverified=[]
+    )
     assert result.new_issues == []
 
 
@@ -371,9 +374,8 @@ def test_check_selection_rejects_negative_quota() -> None:
 )
 def test_json_schema_is_compact_and_forbids_extra(model: type[BaseModel]) -> None:
     schema = json_schema(model)
-    assert ": " not in schema
-    assert ", " not in schema
     parsed = json.loads(schema)
+    assert schema == json.dumps(parsed, separators=(",", ":"), sort_keys=True)
     assert parsed["additionalProperties"] is False
 
 
@@ -393,9 +395,12 @@ def test_selection_keeps_rejected_issues() -> None:
     assert check_selection(result, [2], 3).rejected[0].issue_number == 2
 
 
-@pytest.mark.parametrize("make", [worker, review])
+_REPORT_LISTS = [(worker, "blockers"), (review, "blockers"), (worker, "unverified")]
+
+
+@pytest.mark.parametrize(("make", "field"), _REPORT_LISTS)
 @pytest.mark.parametrize(
-    "blockers",
+    "value",
     [
         None,
         ["x" * 301],
@@ -411,22 +416,29 @@ def test_selection_keeps_rejected_issues() -> None:
         "Python is missing",
     ],
 )
-def test_invalid_blockers_fail_closed(make: Any, blockers: Any) -> None:
+def test_invalid_report_lists_fail_closed(make: Any, field: str, value: Any) -> None:
     model = WorkerResult if make is worker else ReviewResult
     with pytest.raises(PolicyViolation, match=model.__name__):
-        parse_output(model, make(blockers=blockers))
+        parse_output(model, make(**{field: value}))
 
 
-@pytest.mark.parametrize("model", [WorkerResult, ReviewResult])
-def test_blockers_are_required(model: type[BaseModel]) -> None:
-    data = json.loads(worker() if model is WorkerResult else review())
-    del data["blockers"]
-    with pytest.raises(PolicyViolation, match="blockers"):
+@pytest.mark.parametrize(("make", "field"), _REPORT_LISTS)
+def test_report_lists_are_required(make: Any, field: str) -> None:
+    model = WorkerResult if make is worker else ReviewResult
+    data = json.loads(make())
+    del data[field]
+    with pytest.raises(PolicyViolation, match=field):
         parse_output(model, json.dumps(data))
     schema = json.loads(json_schema(model))
-    assert "blockers" in schema["required"]
-    assert schema["properties"]["blockers"]["maxItems"] == 10
-    assert schema["properties"]["blockers"]["items"]["maxLength"] == 300
+    assert field in schema["required"]
+    assert schema["properties"][field]["maxItems"] == 10
+    assert schema["properties"][field]["items"]["maxLength"] == 300
+
+
+def test_worker_schema_tells_blockers_from_unverified_checks() -> None:
+    properties = json.loads(json_schema(WorkerResult))["properties"]
+    assert "Never checks you skipped" in properties["blockers"]["description"]
+    assert "not blockers" in properties["unverified"]["description"]
 
 
 def test_blockers_parse_stripped_at_the_limit() -> None:

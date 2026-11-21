@@ -45,7 +45,6 @@ def test_rules_require_reporting_blockers(key: str) -> None:
     assert "`blockers`" in text
     assert "hiding it is not" in text
     assert "An empty list means nothing hindered you" in text
-    assert "Checks you did not run are not blockers" in text
 
 
 def test_unknown_rules_key_is_rejected() -> None:

@@ -5,7 +5,8 @@
 - Update docs the repository requires when you change structure, behaviour or configuration.
 - Run the repository's own lint, type checks and tests as its docs describe, and fix what you broke.
 - If a tool the repository needs is missing, run it in a container, e.g. `docker run --rm -v /workspace:/w -w /w python:3.13 python -m pytest`. Never report `blocked` only because a tool is missing.
-- List in `blockers` everything that hindered doing the work: a missing tool or version, a blocked domain, missing access. Checks you did not run are not blockers: CI runs them. Working around it is fine, hiding it is not. An empty list means nothing hindered you.
+- List in `blockers` every sandbox or access problem that hindered the work: a missing tool or version, a blocked domain, missing access. Working around it is fine, hiding it is not. An empty list means nothing hindered you.
+- List in `unverified` every check you did not run or could not verify, such as the full test suite, e2e or a browser check. CI runs the checks, so these are not blockers.
 - Leave your changes in the working tree or commit them locally. Both are fine.
 - Never run `git push`, never use `gh`, never change git remotes or config.
 - Never touch protected paths, CI workflows or secrets, not even to make a check pass.

@@ -72,7 +72,21 @@ class WorkerResult(_AgentOutput):
     note: Text1500 | None = None
     new_issues: list[NewIssue] = Field(default_factory=list, max_length=10)
     objections: list[Objection] = Field(default_factory=list, max_length=20)
-    blockers: list[Line300] = Field(max_length=10)
+    blockers: list[Line300] = Field(
+        max_length=10,
+        description=(
+            "Sandbox or access problems that hindered the work: a missing tool or version,"
+            " a blocked domain, missing access. Never checks you skipped or could not verify."
+        ),
+    )
+    # Validated but never read: it keeps skipped checks out of `blockers`.
+    unverified: list[Line300] = Field(
+        max_length=10,
+        description=(
+            "Checks you did not run or could not verify yourself, e.g. the full test suite,"
+            " e2e or a browser check. CI runs the checks; these are not blockers."
+        ),
+    )
 
     @model_validator(mode="after")
     def _note_explains_non_done(self) -> Self:

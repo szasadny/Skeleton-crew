@@ -249,6 +249,22 @@ async def test_no_blockers_leave_the_task_and_texts_clean(harness: Harness) -> N
     assert "Blockers" not in str(check.args["summary"])
 
 
+async def test_unverified_checks_are_never_reported_as_blockers(harness: Harness) -> None:
+    harness.patches = [harness.patch(GREETING)]
+    harness.backend.script(Role.WORKER, worker_json(unverified=["Full test suite not run"]))
+    harness.backend.script(Role.REVIEWER, review_json())
+
+    run_id = await harness.run()
+
+    [task] = await harness.tasks(run_id)
+    assert (task.state, task.blockers) == (TaskState.DONE, None)
+    [pr] = harness.writes("open_pr")
+    _, check = harness.writes("set_review_check")
+    for text in (str(pr.args["body"]), str(check.args["summary"])):
+        assert "Blockers" not in text
+        assert "Full test suite not run" not in text
+
+
 async def test_blockers_of_a_worker_that_gives_up_are_recorded(harness: Harness) -> None:
     harness.backend.script(
         Role.WORKER, worker_json("blocked", note="No toolchain.", blockers=["Node 22 is missing"])

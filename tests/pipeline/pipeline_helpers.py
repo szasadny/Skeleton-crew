@@ -187,6 +187,7 @@ def worker_json(
     new_issues: Sequence[dict[str, str]] = (),
     objections: Sequence[dict[str, object]] = (),
     blockers: Sequence[str] = (),
+    unverified: Sequence[str] = (),
 ) -> str:
     return json.dumps(
         {
@@ -197,6 +198,7 @@ def worker_json(
             "new_issues": list(new_issues),
             "objections": list(objections),
             "blockers": list(blockers),
+            "unverified": list(unverified),
         }
     )
 
