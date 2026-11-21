@@ -62,13 +62,30 @@
 
   <section class="panel">
     <h2>Active tasks</h2>
-    {% if active_tasks %}
+    {% if step or active_refines or active_tasks %}
     <table>
-      <thead><tr><th>Issue</th><th>State</th><th>PR</th></tr></thead>
+      <thead><tr><th>Task</th><th>Kind</th><th>State</th><th>PR</th></tr></thead>
       <tbody>
+      {% if step %}
+      <tr>
+        <td>{% if last_run %}<a href="/runs/{{ last_run.id }}">Run {{ last_run.id }}</a>{% endif %}</td>
+        <td>{{ step.value }}</td>
+        <td>{{ m.state("running") }}</td>
+        <td></td>
+      </tr>
+      {% endif %}
+      {% for task in active_refines %}
+      <tr>
+        <td>#{{ task.issue_number }}</td>
+        <td>refine</td>
+        <td>{{ m.state(task.state.value) }}</td>
+        <td></td>
+      </tr>
+      {% endfor %}
       {% for task in active_tasks %}
       <tr>
         <td>#{{ task.issue_number }} {{ task.issue_title }}</td>
+        <td>{{ task.kind.value }}</td>
         <td>{{ m.state(task.state.value) }}</td>
         <td>{% if task.pr_number %}<a href="https://github.com/{{ repo }}/pull/{{ task.pr_number }}">#{{ task.pr_number }}</a>{% endif %}</td>
       </tr>

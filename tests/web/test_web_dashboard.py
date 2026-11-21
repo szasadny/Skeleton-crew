@@ -8,7 +8,7 @@ from web_helpers import Web, open_web
 
 from skeleton_crew.core.audit import AuditKind
 from skeleton_crew.domain.settings import AppSettings, Schedule, Weekday
-from skeleton_crew.domain.task_state import TaskState
+from skeleton_crew.domain.task_state import RefineState, RunStep, TaskState
 from skeleton_crew.store import audit_store, runs_store
 from skeleton_crew.store.settings_store import save_settings
 
@@ -63,9 +63,44 @@ async def test_status_partial_lists_active_tasks_with_pr_link(web: Web) -> None:
         await session.commit()
     html = (await web.client.get("/partials/status", headers={"HX-Request": "true"})).text
     assert "#7 Fix &lt;b&gt;parser&lt;/b&gt;" in html
+    assert "<td>issue</td>" in html
     assert "coding" in html
     assert 'href="https://github.com/acme/widgets/pull/42"' in html
     assert f'href="/runs/{run.id}"' in html
+
+
+async def test_status_partial_shows_the_running_selector(web: Web) -> None:
+    async with web.sessionmaker() as session:
+        run = await runs_store.create_run(session, "manual", dry_run=False)
+        await session.commit()
+    web.controller.running = True
+    web.controller.current_step = RunStep.SELECTOR
+    html = (await web.client.get("/partials/status")).text
+    assert f'<a href="/runs/{run.id}">Run {run.id}</a></td>' in html
+    assert "<td>selector</td>" in html
+    assert "No active tasks." not in html
+
+
+async def test_status_partial_hides_a_step_once_idle(web: Web) -> None:
+    web.controller.current_step = RunStep.SELECTOR
+    html = (await web.client.get("/partials/status")).text
+    assert "<td>selector</td>" not in html
+    assert "No active tasks." in html
+
+
+async def test_status_partial_lists_active_refines_only(web: Web) -> None:
+    async with web.sessionmaker() as session:
+        run = await runs_store.create_run(session, "manual", dry_run=False)
+        active = await runs_store.add_refine_task(session, run.id, 5)
+        await runs_store.update_refine_task(session, active.id, state=RefineState.REFINING)
+        done = await runs_store.add_refine_task(session, run.id, 6)
+        await runs_store.update_refine_task(session, done.id, state=RefineState.DONE)
+        await session.commit()
+    html = (await web.client.get("/partials/status")).text
+    assert "<td>#5</td>" in html
+    assert "<td>refine</td>" in html
+    assert 'data-state="refining"' in html
+    assert "<td>#6</td>" not in html
 
 
 async def test_run_now_starts_a_manual_run(web: Web) -> None:

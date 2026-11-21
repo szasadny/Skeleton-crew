@@ -21,14 +21,17 @@ async def _status(request: Request) -> dict[str, Any]:
         last_run = runs[0] if runs else None
         last_tasks = await runs_store.list_tasks(session, last_run.id) if last_run else []
         active = await runs_store.non_terminal_worker_tasks(session)
+        active_refines = await runs_store.non_terminal_refine_tasks(session)
     return {
         "running": state.controller.is_running,
+        "step": state.controller.step,
         "next_run": state.scheduler.next_run_time(),
         "settings": settings,
         "last_run": last_run,
         "last_run_states": sorted(Counter(task.state.value for task in last_tasks).items()),
         "last_run_blocked": sum(1 for task in last_tasks if task.blockers),
         "active_tasks": active,
+        "active_refines": active_refines,
         "repo": state.config.repo,
         "runners": sorted(Counter(r.status.value for r in state.runners.statuses()).items()),
     }

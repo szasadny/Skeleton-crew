@@ -54,6 +54,12 @@ class RunState(StrEnum):
     ABORTED = "aborted"
 
 
+class RunStep(StrEnum):
+    PREFLIGHT = "preflight"
+    CANDIDATES = "candidates"
+    SELECTOR = "selector"
+
+
 TERMINAL_TASK_STATES = frozenset(
     {TaskState.DONE, TaskState.ESCALATED, TaskState.FAILED, TaskState.ABORTED}
 )

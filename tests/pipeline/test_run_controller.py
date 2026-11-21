@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from skeleton_crew.agents.base import failed_outcome
 from skeleton_crew.core.audit import AuditKind, AuditOutcome
 from skeleton_crew.domain.settings import Role
-from skeleton_crew.domain.task_state import RefineState, RunState, TaskKind, TaskState
+from skeleton_crew.domain.task_state import RefineState, RunState, RunStep, TaskKind, TaskState
 from skeleton_crew.github.gateway import BranchRule, CiState, CiStatus, RulesUnavailable
 from skeleton_crew.pipeline.run_controller import USAGE_LIMIT_NOTE, RunController
 from skeleton_crew.runtime.containers import ContainerHandle
@@ -44,6 +44,21 @@ def harness(tmp_path: Path, sessionmaker: async_sessionmaker[AsyncSession]) -> H
 def test_run_controller_satisfies_run_control(harness: Harness) -> None:
     control: RunControl = harness.controller
     assert control.is_running is False
+
+
+async def test_step_shows_the_selector_only_while_it_runs(harness: Harness) -> None:
+    harness.add_ready_issue(1)
+    harness.patches = [harness.patch(GREETING)]
+    harness.backend.script(Role.SELECTOR, selection_json([1]))
+    harness.backend.script(Role.WORKER, worker_json())
+    harness.backend.script(Role.REVIEWER, review_json())
+    steps: dict[str, RunStep | None] = {}
+    harness.session_hook = lambda call: steps.setdefault(call.argv[1], harness.controller.step)
+
+    await harness.run()
+
+    assert steps == {"selector": RunStep.SELECTOR, "worker": None, "reviewer": None}
+    assert harness.controller.step is None
 
 
 async def test_selector_too_large_escalates_without_worker(harness: Harness) -> None:

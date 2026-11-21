@@ -284,6 +284,7 @@ class Harness:
         self.patches: list[bytes] = []
         self.patch_from_workspace: Callable[[ExecCall], bytes] | None = None
         self.session_seconds = 0.0
+        self.session_hook: Callable[[ExecCall], object] | None = None
         self.sleeps: list[float] = []
         self.sleep_hook: asyncio.Event | None = None
         self.sleeping = asyncio.Event()
@@ -302,6 +303,8 @@ class Harness:
         return ok(self.patches.pop(0) if len(self.patches) > 1 else self.patches[0])
 
     def _session(self, call: ExecCall) -> Any:
+        if self.session_hook is not None:
+            self.session_hook(call)
         self.clock.advance(self.session_seconds)
         return ok(call.argv[1].encode())
 

@@ -11,6 +11,7 @@ from skeleton_crew.domain.settings import AppSettings
 from skeleton_crew.domain.task_state import (
     RefineState,
     RunState,
+    RunStep,
     TaskEvent,
     TaskKind,
     transition,
@@ -58,10 +59,15 @@ class RunController:
         self._runners = runners
         self._lock = asyncio.Lock()
         self._task: asyncio.Task[None] | None = None
+        self._step: RunStep | None = None
 
     @property
     def is_running(self) -> bool:
         return self._task is not None and not self._task.done()
+
+    @property
+    def step(self) -> RunStep | None:
+        return self._step if self.is_running else None
 
     async def start(self, trigger: Literal["schedule", "manual"]) -> int | None:
         async with self._lock:
@@ -142,6 +148,8 @@ class RunController:
         except Exception as exc:
             log.exception("run %d failed", run_id)
             state, note = RunState.FAILED, f"error: {type(exc).__name__}"
+        finally:
+            self._step = None
         async with self._deps.sessionmaker() as session:
             await runs_store.finish_run(session, run_id, state, note and note[:NOTE_CHARS])
             await session.commit()
@@ -150,6 +158,7 @@ class RunController:
     async def _run(self, run_id: int, settings: AppSettings, sink: AuditSink) -> Outcome:
         deps = self._deps
         started = deps.clock()
+        self._step = RunStep.PREFLIGHT
         gw = deps.gateway_factory(settings, sink)
         checked = await preflight(deps, settings, gw)
         problems, backends = checked.problems, checked.backends
@@ -198,10 +207,12 @@ class RunController:
             required_checks=required,
             classifier=checked.classifier,
         )
+        self._step = RunStep.CANDIDATES
         screened = await screen_candidates(ctx, await find_candidates(deps, settings, gw, sink))
         for number, reason in screened.escalations.items():
             await self._escalate(ctx, number, reason)
         candidates = screened.candidates
+        self._step = None
         async with asyncio.TaskGroup() as group:
             group.create_task(self._refines(ctx, candidates.refine, quotas.refines))
             workers = group.create_task(self._workers(ctx, candidates, quotas, screened.efforts))
@@ -240,11 +251,14 @@ class RunController:
     async def _select(
         self, ctx: RunContext, candidates: Sequence[Candidate], quota: int
     ) -> tuple[list[Candidate], str | None]:
+        self._step = RunStep.SELECTOR
         try:
             selection = await select_issues(ctx, candidates, quota)
         except Exception as exc:
             log.exception("selection failed")
             return [], f"selection failed: {type(exc).__name__}: {exc}"
+        finally:
+            self._step = None
         for pick in selection.too_large:
             await self._escalate(
                 ctx, pick.issue_number, f"the selector judged the issue too large: {pick.reason}"

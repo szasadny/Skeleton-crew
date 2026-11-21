@@ -1,18 +1,24 @@
 from typing import Literal
 
 from skeleton_crew.domain.runner_policy import RunnerState
+from skeleton_crew.domain.task_state import RunStep
 
 
 class FakeRunControl:
     def __init__(self, start_result: int | None = 1) -> None:
         self.start_result = start_result
         self.running = False
+        self.current_step: RunStep | None = None
         self.starts: list[str] = []
         self.kills = 0
 
     @property
     def is_running(self) -> bool:
         return self.running
+
+    @property
+    def step(self) -> RunStep | None:
+        return self.current_step if self.running else None
 
     async def start(self, trigger: Literal["schedule", "manual"]) -> int | None:
         self.starts.append(trigger)
