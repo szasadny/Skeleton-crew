@@ -2,11 +2,25 @@ import re
 from enum import StrEnum
 
 
+class RepoCommand(StrEnum):
+    SETUP = "setup"
+    CHECK = "check"
+
+
 class KeyKind(StrEnum):
     WORKER = "worker"
     REFINE = "refine"
     SELECTOR = "selector"
 
+
+TRANSCRIPTS_DIR = "transcripts"
+SESSION_SUFFIX = ".jsonl"
+COMMAND_SUFFIX = ".log"
+_COMMANDS = "|".join(re.escape(command) for command in RepoCommand)
+_TRANSCRIPT_RE = re.compile(
+    rf"[a-z]+-\d+{re.escape(SESSION_SUFFIX)}|({_COMMANDS})-\d+{re.escape(COMMAND_SUFFIX)}",
+    re.ASCII,
+)
 
 _FORMATS: dict[KeyKind, tuple[str, str]] = {
     KeyKind.WORKER: ("worker-", ""),
@@ -48,3 +62,20 @@ def parse_task_key(key: str) -> tuple[KeyKind, int] | None:
     if match is None or match.lastindex is None:
         return None
     return _KINDS[match.lastindex - 1], int(match[match.lastindex])
+
+
+def container_name(prefix: str, task_key: str, role: str, nonce: str) -> str:
+    return f"{prefix}{task_key}-{role}-{nonce}"
+
+
+def numbered_name(stem: str, number: int, suffix: str) -> str:
+    return f"{stem}-{number}{suffix}"
+
+
+def name_number(name: str, stem: str, suffix: str) -> int | None:
+    match = re.fullmatch(rf"{re.escape(stem)}-(\d+){re.escape(suffix)}", name, re.ASCII)
+    return int(match[1]) if match else None
+
+
+def is_transcript_name(name: str) -> bool:
+    return _TRANSCRIPT_RE.fullmatch(name) is not None

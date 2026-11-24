@@ -1,15 +1,35 @@
+import pytest
+
+from skeleton_crew.domain.job_policy import CiResult
 from skeleton_crew.domain.schemas import (
     MissingDocUpdate,
     RefineResult,
     ReviewFinding,
     ReviewResult,
+    SelectionDuplicate,
+    SelectionPick,
+    SelectionQuestion,
+    SelectionResult,
 )
+from skeleton_crew.domain.task_state import TaskState
 from skeleton_crew.domain.text_policy import TRUNCATION_SUFFIX
 from skeleton_crew.pipeline.texts import (
+    CI_ESCALATIONS,
+    CONFLICTS_MESSAGE,
+    UNREADABLE_PATCH,
+    WORKER_NOT_RESUMABLE,
+    branch_taken_over,
+    merge_breaks_policy,
     pr_body,
     refine_comment,
     review_check_summary,
     review_text,
+    review_too_large,
+    selection_escalations,
+    session_failed,
+    setup_failed,
+    worker_gave_up,
+    worker_timeout_reason,
 )
 
 
@@ -114,3 +134,64 @@ def test_refine_comment_without_questions_is_only_the_spec() -> None:
 def test_refine_comment_sanitises_questions() -> None:
     result = RefineResult(spec_markdown="Goal.", open_questions=["Ask @owner?"])
     assert "@owner" not in refine_comment(result, 1500)
+
+
+def test_escalation_reasons_keep_their_exact_text() -> None:
+    assert WORKER_NOT_RESUMABLE == "the worker session cannot be resumed"
+    assert UNREADABLE_PATCH == "could not read the worker's changes from its workspace"
+    assert CONFLICTS_MESSAGE == "Unresolved merge (local only)"
+    assert CI_ESCALATIONS == {
+        CiResult.NOT_REPORTED: "no CI was reported for the change",
+        CiResult.TIMED_OUT: "CI did not finish in time",
+    }
+    assert setup_failed("exit 2") == "the setup command failed (exit 2)"
+    assert session_failed("review", "boom") == "review session failed: boom"
+    assert session_failed("worker", None) == "worker session failed: None"
+    assert worker_gave_up("blocked", "No toolchain.") == "worker reported blocked: No toolchain."
+    assert worker_gave_up("scope_too_large", None) == "worker reported scope_too_large: None"
+    assert review_too_large("Huge.") == "the reviewer judged the change too large: Huge."
+    assert branch_taken_over("skeleton/1-a", "PR #3 was closed without merging") == (
+        "`skeleton/1-a`: PR #3 was closed without merging"
+    )
+    assert merge_breaks_policy(["a: protected path", "b: symlink"]) == (
+        "merging the base branch breaks policy: a: protected path; b: symlink"
+    )
+
+
+@pytest.mark.parametrize(
+    ("state", "reason"),
+    [
+        (
+            TaskState.AWAITING_CI,
+            "the worker timed out or the run window ended while waiting for CI",
+        ),
+        (TaskState.CODING, "the worker timed out or the run window ended"),
+        (TaskState.REVIEWING, "the worker timed out or the run window ended"),
+    ],
+)
+def test_the_timeout_says_when_it_hit_the_ci_wait(state: TaskState, reason: str) -> None:
+    assert worker_timeout_reason(state) == reason
+
+
+def test_selection_escalations_keep_their_text_and_order() -> None:
+    selection = SelectionResult(
+        picks=[SelectionPick(issue_number=9, reason="small")],
+        too_large=[SelectionPick(issue_number=2, reason="huge")],
+        needs_decision=[
+            SelectionQuestion(
+                issue_number=4, problem="Unclear.", question="Which?", options=["a", "b"]
+            )
+        ],
+        rejected=[SelectionPick(issue_number=3, reason="unsafe")],
+        duplicates=[SelectionDuplicate(issue_number=5, duplicate_of=1, reason="same change")],
+    )
+    assert selection_escalations(selection) == [
+        (2, "the selector judged the issue too large: huge"),
+        (4, "the selector needs a decision: Unclear.\n\nQuestion: Which?\n\nOptions:\n- a\n- b"),
+        (3, "the selector rejected the issue: unsafe"),
+        (5, "the selector found a duplicate of #1: same change"),
+    ]
+
+
+def test_a_plain_selection_escalates_nothing() -> None:
+    assert selection_escalations(SelectionResult()) == []

@@ -1,17 +1,15 @@
-import re
 from pathlib import Path
 
 from skeleton_crew.core.logging import redact
-from skeleton_crew.domain.task_keys import is_task_key
+from skeleton_crew.domain.task_keys import TRANSCRIPTS_DIR, is_task_key, is_transcript_name
 
 MAX_TRANSCRIPT_BYTES = 500 * 1024
-_NAME_RE = re.compile(r"[a-z]+-\d+\.jsonl|(setup|check)-\d+\.log", re.ASCII)
 
 
 def _transcripts_dir(tasks_dir: Path, key: str) -> Path | None:
     if not is_task_key(key):
         return None
-    directory = tasks_dir / key / "transcripts"
+    directory = tasks_dir / key / TRANSCRIPTS_DIR
     return directory if directory.is_dir() and not directory.is_symlink() else None
 
 
@@ -28,7 +26,7 @@ def list_transcripts(tasks_dir: Path, key: str) -> list[str]:
         (
             path.name
             for path in directory.iterdir()
-            if _NAME_RE.fullmatch(path.name) and path.is_file() and not path.is_symlink()
+            if is_transcript_name(path.name) and path.is_file() and not path.is_symlink()
         ),
         key=_order,
     )
@@ -38,7 +36,7 @@ def read_transcript(
     tasks_dir: Path, key: str, name: str, secrets: list[str]
 ) -> tuple[str, bool] | None:
     directory = _transcripts_dir(tasks_dir, key)
-    if directory is None or not _NAME_RE.fullmatch(name):
+    if directory is None or not is_transcript_name(name):
         return None
     path = directory / name
     if path.is_symlink() or not path.is_file():

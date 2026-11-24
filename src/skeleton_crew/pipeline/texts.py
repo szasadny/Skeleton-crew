@@ -1,13 +1,28 @@
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from skeleton_crew.domain.diff_parse import FileChange
-from skeleton_crew.domain.schemas import NewIssue, RefineResult, ReviewResult, SelectionQuestion
+from skeleton_crew.domain.job_policy import CiResult
+from skeleton_crew.domain.schemas import (
+    NewIssue,
+    RefineResult,
+    ReviewResult,
+    SelectionQuestion,
+    SelectionResult,
+)
 from skeleton_crew.domain.settings import Role
-from skeleton_crew.domain.text_policy import sanitize_agent_text
+from skeleton_crew.domain.task_state import TaskState
+from skeleton_crew.domain.text_policy import questions_budget, sanitize_agent_text, text_room
 
 COMMIT_AUTHOR = "Skeleton Crew <skeleton-crew@users.noreply.github.com>"
 PR_TITLE_PREFIX = "[skeleton] "
 RERUN_CI_MESSAGE = "Re-run CI"
+CONFLICTS_MESSAGE = "Unresolved merge (local only)"
+WORKER_NOT_RESUMABLE = "the worker session cannot be resumed"
+UNREADABLE_PATCH = "could not read the worker's changes from its workspace"
+CI_ESCALATIONS: Mapping[CiResult, str] = {
+    CiResult.NOT_REPORTED: "no CI was reported for the change",
+    CiResult.TIMED_OUT: "CI did not finish in time",
+}
 # Above the schema's 72 so that inserted zero-width spaces never trigger the multi-line suffix.
 PR_TITLE_CHARS = 100
 ISSUE_TITLE_CHARS = 200
@@ -30,7 +45,7 @@ BLOCKERS_HEADER = "\n\n### Blockers\n\n"
 
 
 def _cap(text: str, max_chars: int, reserved: int) -> str:
-    return sanitize_agent_text(text, max(max_chars - reserved, 100))
+    return sanitize_agent_text(text, text_room(max_chars, reserved))
 
 
 def escalation_comment(reason: str, max_chars: int) -> str:
@@ -41,6 +56,30 @@ def escalation_comment(reason: str, max_chars: int) -> str:
 def decision_reason(decision: SelectionQuestion) -> str:
     options = "\n".join(f"- {option}" for option in decision.options)
     return f"{decision.problem}\n\nQuestion: {decision.question}\n\nOptions:\n{options}"
+
+
+def selection_escalations(selection: SelectionResult) -> list[tuple[int, str]]:
+    return [
+        *(
+            (pick.issue_number, f"the selector judged the issue too large: {pick.reason}")
+            for pick in selection.too_large
+        ),
+        *(
+            (ask.issue_number, f"the selector needs a decision: {decision_reason(ask)}")
+            for ask in selection.needs_decision
+        ),
+        *(
+            (pick.issue_number, f"the selector rejected the issue: {pick.reason}")
+            for pick in selection.rejected
+        ),
+        *(
+            (
+                dup.issue_number,
+                f"the selector found a duplicate of #{dup.duplicate_of}: {dup.reason}",
+            )
+            for dup in selection.duplicates
+        ),
+    ]
 
 
 def continued_comment(branch: str) -> str:
@@ -86,10 +125,9 @@ def refine_comment(result: RefineResult, max_chars: int) -> str:
     budget = max_chars - len(REFINE_HEADER)
     questions = ""
     if result.open_questions:
-        # The owner acts on the questions, so they keep their room and the spec is cut instead.
         listed = "\n".join(f"- {q}" for q in result.open_questions)
         questions = REFINE_QUESTIONS_HEADER + _cap(
-            listed, budget // 2, len(REFINE_QUESTIONS_HEADER)
+            listed, questions_budget(budget), len(REFINE_QUESTIONS_HEADER)
         )
     spec = _cap(result.spec_markdown, budget, len(questions))
     return REFINE_HEADER + spec + questions
@@ -120,3 +158,32 @@ def diff_stats(changes: Sequence[FileChange]) -> str:
         counts = "binary" if change.added is None else f"+{change.added} -{change.removed}"
         lines.append(f"{change.status.value} {change.path} ({counts})")
     return "\n".join(lines)
+
+
+def worker_timeout_reason(state: TaskState) -> str:
+    waiting = " while waiting for CI" if state is TaskState.AWAITING_CI else ""
+    return f"the worker timed out or the run window ended{waiting}"
+
+
+def setup_failed(status: str) -> str:
+    return f"the setup command failed ({status})"
+
+
+def session_failed(what: str, error: str | None) -> str:
+    return f"{what} session failed: {error}"
+
+
+def worker_gave_up(status: str, note: str | None) -> str:
+    return f"worker reported {status}: {note}"
+
+
+def review_too_large(summary: str) -> str:
+    return f"the reviewer judged the change too large: {summary}"
+
+
+def branch_taken_over(branch: str, problem: str) -> str:
+    return f"`{branch}`: {problem}"
+
+
+def merge_breaks_policy(violations: Sequence[str]) -> str:
+    return f"merging the base branch breaks policy: {'; '.join(violations)}"

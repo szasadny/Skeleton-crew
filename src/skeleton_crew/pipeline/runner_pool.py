@@ -1,23 +1,29 @@
 import asyncio
 import logging
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import replace
 from pathlib import Path
 
 from skeleton_crew.core.config import BootstrapConfig
 from skeleton_crew.domain.branch_policy import BRANCH_PREFIX
 from skeleton_crew.domain.runner_policy import (
     DRAINING_REASON,
-    PUBLIC_REPO_PROBLEM,
-    STANDBY_REASON,
+    NO_RUNNER_REGISTERED,
+    STOPPED_REASON,
+    RunnerSlot,
     RunnerState,
     RunnerStatus,
+    after_exit,
+    after_start_failure,
     eligibility_problem,
-    is_crash,
-    restart_delay,
+    is_definite,
+    retry_reason,
     runner_names,
+    settings_blocker,
+    standby_state,
+    unreadable_visibility,
 )
 from skeleton_crew.domain.settings import AppSettings
 from skeleton_crew.github.gateway import Gateway
@@ -40,6 +46,7 @@ from skeleton_crew.store import runs_store, settings_store
 RUNNER_ROLE = "runner"
 CONFIG_MOUNT = "/runner-config"
 REGISTRATION_FILE = ".runner"
+_BRANCH_PREFIX_ENV = "SC_BRANCH_PREFIX"
 _EXTRA_LOCAL_HOSTS = ("::1",)
 # By process name: the exec's own timeout wrapper has "Runner.Worker" in its command line.
 BUSY_ARGV = ("pgrep", "-x", "Runner.Worker")
@@ -47,17 +54,25 @@ TICK_S = 5.0
 ELIGIBILITY_TTL_S = 600.0
 CI_DEMAND_TTL_S = 30.0
 _EXEC_TIMEOUT_S = 10.0
+_FOUND_EXIT = 0
 _NOT_FOUND_EXIT = 1
 
 log = logging.getLogger(__name__)
 
 
-@dataclass
-class _Slot:
-    started_at: float = 0.0
-    failures: int = 0
-    not_before: float = 0.0
-    reason: str = ""
+class _TtlValue[T]:
+    def __init__(self, ttl_s: float, monotonic: Callable[[], float]) -> None:
+        self._ttl_s = ttl_s
+        self._monotonic = monotonic
+        self._entry: tuple[float, T] | None = None
+
+    async def get(self, load: Callable[[], Awaitable[tuple[T, bool]]]) -> T:
+        now = self._monotonic()
+        if self._entry is not None and now - self._entry[0] <= self._ttl_s:
+            return self._entry[1]
+        value, keep = await load()
+        self._entry = (now, value) if keep else None
+        return value
 
 
 def container_name(runner: str) -> str:
@@ -68,9 +83,12 @@ def config_dir(deps: PipelineDeps, runner: str) -> Path:
     return deps.config.runners_dir / runner
 
 
+def _is_registered(deps: PipelineDeps, runner: str) -> bool:
+    return (config_dir(deps, runner) / REGISTRATION_FILE).is_file()
+
+
 def registered_runners(deps: PipelineDeps, settings: AppSettings) -> list[str]:
-    names = runner_names(settings.ci.runners)
-    return [n for n in names if (config_dir(deps, n) / REGISTRATION_FILE).is_file()]
+    return [n for n in runner_names(settings.ci.runners) if _is_registered(deps, n)]
 
 
 def runner_target(config: BootstrapConfig) -> SandboxTarget:
@@ -85,7 +103,7 @@ def runner_target(config: BootstrapConfig) -> SandboxTarget:
 
 def runner_env(proxy_url: str, no_proxy: Sequence[str]) -> dict[str, str]:
     env = proxy_env(proxy_url, (*_EXTRA_LOCAL_HOSTS, *no_proxy))
-    return env | {"SC_BRANCH_PREFIX": BRANCH_PREFIX}
+    return env | {_BRANCH_PREFIX_ENV: BRANCH_PREFIX}
 
 
 def runner_spec(deps: PipelineDeps, settings: AppSettings, runner: str) -> ContainerSpec:
@@ -108,7 +126,7 @@ async def visibility_problem(gw: Gateway) -> str | None:
     try:
         private = await gw.repo_is_private()
     except Exception as exc:
-        return f"cannot read the repository visibility: {type(exc).__name__}"
+        return unreadable_visibility(type(exc).__name__)
     return eligibility_problem(private=private)
 
 
@@ -120,14 +138,8 @@ async def runner_problems(deps: PipelineDeps, settings: AppSettings, gw: Gateway
     if problem is not None:
         problems.append(problem)
     if not registered_runners(deps, settings):
-        problems.append("self-hosted CI is on, but no runner is registered")
+        problems.append(NO_RUNNER_REGISTERED)
     return problems
-
-
-def _standby(runner: str, *, registered: bool) -> RunnerState:
-    if registered:
-        return RunnerState(runner, RunnerStatus.STANDBY, STANDBY_REASON)
-    return RunnerState(runner, RunnerStatus.NOT_REGISTERED)
 
 
 class RunnerPool:
@@ -135,10 +147,10 @@ class RunnerPool:
         self._deps = deps
         self._monotonic = monotonic
         self._lock = asyncio.Lock()
-        self._slots: dict[str, _Slot] = {}
+        self._slots: dict[str, RunnerSlot] = {}
         self._states: list[RunnerState] = []
-        self._eligibility: tuple[float, str | None] | None = None
-        self._demand: tuple[float, bool] | None = None
+        self._eligibility = _TtlValue[str | None](ELIGIBILITY_TTL_S, monotonic)
+        self._demand = _TtlValue[bool](CI_DEMAND_TTL_S, monotonic)
         self._allowlist: frozenset[str] | None = None
         self._task: asyncio.Task[None] | None = None
 
@@ -160,7 +172,9 @@ class RunnerPool:
         restart = self._task is not None
         await self.close()
         await self._remove_all()
-        self._states = [RunnerState(s.name, RunnerStatus.OFFLINE, "stopped") for s in self._states]
+        self._states = [
+            RunnerState(s.name, RunnerStatus.OFFLINE, STOPPED_REASON) for s in self._states
+        ]
         if restart:
             self.start()
 
@@ -195,64 +209,54 @@ class RunnerPool:
 
     async def _drain(self, settings: AppSettings, names: list[str]) -> None:
         registered = registered_runners(self._deps, settings)
-        containers = {
-            info.handle.name: info
-            for info in await self._deps.runtime.list_labeled(ROLE_LABEL, RUNNER_ROLE)
-        }
+        containers = await self._runner_containers()
         states: list[RunnerState] = []
         for name in names:
             info = containers.pop(container_name(name), None)
-            busy = info is not None and info.running and await self._is_busy(info.handle)
-            if busy:
+            if info is not None and info.running and await self._is_busy(info.handle):
                 states.append(RunnerState(name, RunnerStatus.BUSY, DRAINING_REASON))
                 continue
-            if info is not None:
-                await self._deps.runtime.remove(info.handle)
+            await self._remove(info)
             self._slots.pop(name, None)
-            states.append(_standby(name, registered=name in registered))
+            states.append(standby_state(name, registered=name in registered))
         for info in containers.values():
-            await self._deps.runtime.remove(info.handle)
+            await self._remove(info)
         self._states = states
 
     async def _run(self, settings: AppSettings, names: list[str]) -> None:
-        containers = {
-            info.handle.name: info
-            for info in await self._deps.runtime.list_labeled(ROLE_LABEL, RUNNER_ROLE)
-        }
+        containers = await self._runner_containers()
         wanted = {container_name(n) for n in names}
         for name, info in containers.items():
             if name not in wanted:
-                await self._deps.runtime.remove(info.handle)
+                await self._remove(info)
         self._states = [
             await self._reconcile(settings, n, containers.get(container_name(n))) for n in names
         ]
 
+    async def _runner_containers(self) -> dict[str, ContainerInfo]:
+        listed = await self._deps.runtime.list_labeled(ROLE_LABEL, RUNNER_ROLE)
+        return {info.handle.name: info for info in listed}
+
     async def _blocker(self, settings: AppSettings) -> str | None:
-        if not settings.ci.enabled:
-            return "self-hosted CI is off"
-        if settings.kill_switch:
-            return "kill switch is engaged"
-        now = self._monotonic()
-        if self._eligibility is not None and now - self._eligibility[0] <= ELIGIBILITY_TTL_S:
-            return self._eligibility[1]
+        blocker = settings_blocker(settings)
+        if blocker is not None:
+            return blocker
+        return await self._eligibility.get(lambda: self._read_visibility(settings))
+
+    async def _read_visibility(self, settings: AppSettings) -> tuple[str | None, bool]:
         problem = await visibility_problem(self._gateway(settings))
         # Only a definite answer is cached; a failed read is retried on the next tick.
-        definite = problem in (None, PUBLIC_REPO_PROBLEM)
-        self._eligibility = (now, problem) if definite else None
-        return problem
+        return problem, is_definite(problem)
 
     async def _github_demand(self, settings: AppSettings) -> bool:
-        now = self._monotonic()
-        if self._demand is not None and now - self._demand[0] <= CI_DEMAND_TTL_S:
-            return self._demand[1]
+        return await self._demand.get(lambda: self._read_demand(settings))
+
+    async def _read_demand(self, settings: AppSettings) -> tuple[bool, bool]:
         try:
-            active = await self._gateway(settings).skeleton_ci_active()
+            return await self._gateway(settings).skeleton_ci_active(), True
         except Exception:
             log.exception("could not read the CI runs of Skeleton Crew branches")
-            self._demand = None
-            return False
-        self._demand = (now, active)
-        return active
+            return False, False
 
     def _gateway(self, settings: AppSettings) -> Gateway:
         return self._deps.gateway_factory(settings, audit_sink(self._deps.sessionmaker, None))
@@ -267,36 +271,30 @@ class RunnerPool:
     async def _reconcile(
         self, settings: AppSettings, runner: str, info: ContainerInfo | None
     ) -> RunnerState:
-        slot = self._slots.setdefault(runner, _Slot())
         now = self._monotonic()
-        if not (config_dir(self._deps, runner) / REGISTRATION_FILE).is_file():
-            if info is not None:
-                await self._deps.runtime.remove(info.handle)
-            self._slots[runner] = _Slot()
+        if not _is_registered(self._deps, runner):
+            await self._remove(info)
+            self._slots.pop(runner, None)
             return RunnerState(runner, RunnerStatus.NOT_REGISTERED)
         if info is not None and info.running:
             return RunnerState(runner, await self._activity(info.handle))
+        slot = self._slots.get(runner, RunnerSlot())
         if info is not None:
-            await self._deps.runtime.remove(info.handle)
-            if is_crash(now - slot.started_at):
-                slot.failures += 1
-                slot.reason = "the runner stopped right after starting; check its registration"
-            else:
-                slot.failures = 0
-            slot.not_before = now + restart_delay(slot.failures)
-        if now < slot.not_before:
-            wait = slot.not_before - now
-            return RunnerState(
-                runner, RunnerStatus.OFFLINE, f"{slot.reason} (retry in {wait:.0f}s)"
-            )
-        slot.started_at = now
+            await self._remove(info)
+            slot = after_exit(slot, now)
+        waiting = retry_reason(slot, now)
+        if waiting is not None:
+            self._slots[runner] = slot
+            return RunnerState(runner, RunnerStatus.OFFLINE, waiting)
+        self._slots[runner] = replace(slot, started_at=now)
+        return await self._start(settings, runner, now)
+
+    async def _start(self, settings: AppSettings, runner: str, now: float) -> RunnerState:
         try:
             await self._deps.runtime.start(runner_spec(self._deps, settings, runner))
         except ContainerStartError as exc:
-            slot.failures += 1
-            slot.not_before = now + restart_delay(slot.failures)
-            slot.reason = str(exc)
-            return RunnerState(runner, RunnerStatus.OFFLINE, slot.reason)
+            self._slots[runner] = after_start_failure(self._slots[runner], now, str(exc))
+            return RunnerState(runner, RunnerStatus.OFFLINE, str(exc))
         return RunnerState(runner, RunnerStatus.STARTING)
 
     async def _activity(self, handle: ContainerHandle) -> RunnerStatus:
@@ -305,12 +303,16 @@ class RunnerPool:
             result = await self._deps.runtime.exec(handle, request)
         except Exception:
             return RunnerStatus.OFFLINE
-        if result.exit_code == 0:
+        if result.exit_code == _FOUND_EXIT:
             return RunnerStatus.BUSY
         return RunnerStatus.IDLE if result.exit_code == _NOT_FOUND_EXIT else RunnerStatus.OFFLINE
 
     async def _is_busy(self, handle: ContainerHandle) -> bool:
         return await self._activity(handle) is RunnerStatus.BUSY
+
+    async def _remove(self, info: ContainerInfo | None) -> None:
+        if info is not None:
+            await self._deps.runtime.remove(info.handle)
 
     async def _remove_all(self) -> None:
         try:

@@ -1,9 +1,19 @@
 import re
 import unicodedata
+from enum import StrEnum
 
 from skeleton_crew.domain.errors import PolicyViolation
+from skeleton_crew.domain.task_state import TaskState
 
 BRANCH_PREFIX = "skeleton/"
+
+
+class Mergeability(StrEnum):
+    CONFLICTS = "conflicts"
+    CLEAN = "clean"
+    UNKNOWN = "unknown"
+
+
 _SLUG_MAX = 40
 _ISSUE_DIGITS = 10
 _MAX_ISSUE = 10**_ISSUE_DIGITS - 1
@@ -61,3 +71,13 @@ def continuation_problem(head: str, last_pushed: str | None, closed_pr: int | No
     if closed_pr is not None:
         return f"PR #{closed_pr} was closed without merging"
     return None
+
+
+def needs_finishing(last_state: TaskState) -> bool:
+    return last_state is not TaskState.DONE
+
+
+def mergeability(mergeable: bool | None) -> Mergeability:
+    if mergeable is None:
+        return Mergeability.UNKNOWN
+    return Mergeability.CLEAN if mergeable else Mergeability.CONFLICTS

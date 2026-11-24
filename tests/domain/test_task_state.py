@@ -3,14 +3,22 @@ import itertools
 import pytest
 
 from skeleton_crew.domain.errors import InvalidTransition
+from skeleton_crew.domain.settings import Limits
 from skeleton_crew.domain.task_state import (
+    NOTE_CHARS,
     QUOTA_FREE_TASK_STATES,
+    ROUND_RULES,
     TERMINAL_TASK_STATES,
+    FollowUpKind,
+    JobMode,
     RunTrigger,
     TaskEvent,
     TaskState,
+    cap_note,
     merge_blockers,
+    rounds_exhausted,
     transition,
+    works_on_existing_branch,
 )
 
 HAPPY_PATH = [
@@ -114,3 +122,56 @@ def test_merge_blockers_caps_new_entries() -> None:
     assert merge_blockers(["a", "b", "c"], ["d"], 3) == ["a", "b", "c"]
     assert merge_blockers(["a", "b", "c", "d"], ["e"], 3) == ["a", "b", "c", "d"]
     assert merge_blockers([], [], 3) == []
+
+
+EXHAUSTED = {
+    FollowUpKind.CHECK_FAILED: "the check command still fails after 2 fix rounds",
+    FollowUpKind.POLICY_FAILED: "the change still breaks policy after 2 fix rounds",
+    FollowUpKind.CI_FAILED: "CI still fails after 2 fix rounds",
+    FollowUpKind.REVIEW_CHANGES: "the reviewer still requests changes after 2 fix rounds",
+}
+LIMIT_FIELDS = {
+    FollowUpKind.CHECK_FAILED: "max_check_rounds",
+    FollowUpKind.POLICY_FAILED: "max_policy_rounds",
+    FollowUpKind.CI_FAILED: "max_ci_rounds",
+    FollowUpKind.REVIEW_CHANGES: "max_review_rounds",
+}
+
+
+@pytest.mark.parametrize("kind", list(FollowUpKind))
+def test_every_follow_up_kind_has_a_round_rule(kind: FollowUpKind) -> None:
+    rule = ROUND_RULES[kind]
+    assert rule.event.value == kind.value
+    assert rule.counter_field == kind.value.split("_")[0] + "_rounds"
+
+
+@pytest.mark.parametrize("kind", list(FollowUpKind))
+def test_rounds_count_up_to_their_own_limit(kind: FollowUpKind) -> None:
+    limits = Limits.model_validate({LIMIT_FIELDS[kind]: 2})
+    assert rounds_exhausted(kind, 1, limits) is None
+    assert rounds_exhausted(kind, 2, limits) is None
+    assert rounds_exhausted(kind, 3, limits) == EXHAUSTED[kind]
+
+
+@pytest.mark.parametrize("kind", list(FollowUpKind))
+def test_a_limit_of_zero_escalates_on_the_first_round(kind: FollowUpKind) -> None:
+    limits = Limits.model_validate({LIMIT_FIELDS[kind]: 0})
+    assert rounds_exhausted(kind, 1, limits) == EXHAUSTED[kind].replace("2", "0")
+
+
+def test_other_limits_do_not_count() -> None:
+    limits = Limits.model_validate({"max_check_rounds": 0, "max_ci_rounds": 5})
+    assert rounds_exhausted(FollowUpKind.CI_FAILED, 1, limits) is None
+
+
+def test_follow_up_kinds_are_the_events_that_loop_back_to_coding() -> None:
+    assert {k.value for k in FollowUpKind} == {event.value for _, event, _ in LOOPS_BACK}
+
+
+def test_notes_are_capped() -> None:
+    assert cap_note("x" * (NOTE_CHARS + 5)) == "x" * NOTE_CHARS
+    assert cap_note("short") == "short"
+
+
+def test_only_a_fresh_job_starts_without_an_existing_branch() -> None:
+    assert [m for m in JobMode if not works_on_existing_branch(m)] == [JobMode.FRESH]

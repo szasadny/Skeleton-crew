@@ -13,11 +13,11 @@ from skeleton_crew.domain.ci_policy import (
     format_job_logs,
 )
 from skeleton_crew.domain.label_policy import LabelChange, has_label
-from skeleton_crew.domain.repo_policy import REQUIRED_PERMISSIONS
+from skeleton_crew.domain.repo_policy import NEVER_BYPASS, REQUIRED_PERMISSIONS
 from skeleton_crew.domain.settings import LabelNames, Limits
 from skeleton_crew.domain.text_policy import truncate_text
 from skeleton_crew.domain.trust_policy import ContentEdit, IssueComment, LabelEvent
-from skeleton_crew.domain.write_policy import check_sha
+from skeleton_crew.domain.write_policy import check_sha, new_issue_labels
 from skeleton_crew.github._git import (
     GitRemote,
     git_branch_head,
@@ -30,7 +30,6 @@ from skeleton_crew.github.write_guard import (
     WriteGuard,
     comment_spec,
     label_spec,
-    new_issue_labels,
     new_issue_spec,
     open_pr_spec,
     push_spec,
@@ -106,7 +105,7 @@ class FakeGitHubGateway:
         self.rules: list[BranchRule] = [
             BranchRule("pull_request", 1, {"required_approving_review_count": 1})
         ]
-        self.ruleset_bypasses: dict[int, str] = {1: "never"}
+        self.ruleset_bypasses: dict[int, str] = {1: NEVER_BYPASS}
         self.installation_perms: dict[str, str] = dict(REQUIRED_PERMISSIONS)
         self.private = True
         self.failures: dict[str, Exception] = {}

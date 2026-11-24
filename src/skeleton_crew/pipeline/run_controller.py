@@ -1,57 +1,20 @@
 import asyncio
-import logging
-from collections.abc import Awaitable, Callable, Mapping, Sequence
-from contextlib import suppress
-from datetime import timedelta
-from functools import partial
+from collections.abc import Iterator
+from contextlib import contextmanager, suppress
 
-from skeleton_crew.core.audit import AuditEntry, AuditKind, AuditOutcome, AuditSink
-from skeleton_crew.domain.settings import AppSettings
-from skeleton_crew.domain.task_state import (
-    RefineState,
-    RunState,
-    RunStep,
-    RunTrigger,
-    TaskEvent,
-    TaskKind,
-    transition,
+from skeleton_crew.core.audit import AuditEntry, AuditKind, AuditOutcome
+from skeleton_crew.domain.task_state import RunStep, RunTrigger
+from skeleton_crew.pipeline.deps import PipelineDeps, audit_sink
+from skeleton_crew.pipeline.recovery import (
+    KILLED_NOTE,
+    RESTART_NOTE,
+    abort_leftovers,
+    comment_interrupted,
+    remove_managed_containers,
 )
-from skeleton_crew.github.gateway import IssueRef
-from skeleton_crew.models.worker_task import ISSUE_TITLE_LENGTH
-from skeleton_crew.pipeline.classify import screen_candidates
-from skeleton_crew.pipeline.deps import PipelineDeps, RunContext, audit_sink
-from skeleton_crew.pipeline.escalation import escalate_issue
-from skeleton_crew.pipeline.pr_maintenance import choose_pr_updates, has_conflicts, run_pr_fix
-from skeleton_crew.pipeline.refine_flow import run_refine
-from skeleton_crew.pipeline.retention import prune_task_dirs
-from skeleton_crew.pipeline.run_setup import (
-    Candidate,
-    Candidates,
-    OpenPr,
-    Quotas,
-    apply_egress,
-    collect_repo_docs,
-    find_candidates,
-    load_required_checks,
-    load_rules,
-    preflight,
-    remaining_quotas,
-)
+from skeleton_crew.pipeline.run_flow import RunStart, execute_run
 from skeleton_crew.pipeline.runner_pool import RunnerPool
-from skeleton_crew.pipeline.selector import select_issues
-from skeleton_crew.pipeline.texts import INTERRUPTED_COMMENT, decision_reason
-from skeleton_crew.pipeline.worker_flow import run_worker
-from skeleton_crew.runtime.containers import MANAGED_LABEL, MANAGED_VALUE
 from skeleton_crew.store import runs_store, settings_store
-
-KILLED_NOTE = "killed"
-RESTART_NOTE = "interrupted by a controller restart"
-USAGE_LIMIT_NOTE = "agent usage limit reached"
-NOTE_CHARS = 1000
-
-log = logging.getLogger(__name__)
-
-type Outcome = tuple[RunState, str | None]
 
 
 class RunController:
@@ -84,7 +47,8 @@ class RunController:
             await sink(
                 AuditEntry(AuditKind.RUN_STARTED, AuditOutcome.INFO, f"run {run.id} started")
             )
-            self._task = asyncio.create_task(self._execute(run.id, settings, sink))
+            start = RunStart(run.id, settings, sink)
+            self._task = asyncio.create_task(execute_run(self._deps, start, self._in_step))
             return run.id
 
     async def wait(self) -> None:
@@ -101,251 +65,20 @@ class RunController:
                     await task
             if self._runners is not None:
                 await self._runners.stop()
-            await self._remove_containers()
-            await self._abort_leftovers(KILLED_NOTE)
+            await remove_managed_containers(self._deps)
+            await abort_leftovers(self._deps, KILLED_NOTE)
 
     async def reconcile_on_startup(self) -> None:
         async with self._lock:
-            await self._remove_containers()
-            interrupted = await self._abort_leftovers(RESTART_NOTE)
+            await remove_managed_containers(self._deps)
+            interrupted = await abort_leftovers(self._deps, RESTART_NOTE)
             if interrupted:
-                await self._comment_interrupted(interrupted)
+                await comment_interrupted(self._deps, interrupted)
 
-    async def _remove_containers(self) -> None:
+    @contextmanager
+    def _in_step(self, step: RunStep) -> Iterator[None]:
+        self._step = step
         try:
-            await self._deps.runtime.remove_labeled(MANAGED_LABEL, MANAGED_VALUE)
-        except Exception:
-            log.exception("could not remove managed containers")
-
-    async def _abort_leftovers(self, note: str) -> list[int]:
-        live_issues: list[int] = []
-        async with self._deps.sessionmaker() as session:
-            for task in await runs_store.non_terminal_worker_tasks(session):
-                state = transition(task.state, TaskEvent.ABORT)
-                await runs_store.update_worker_task(session, task.id, state=state, note=note)
-                run = await runs_store.get_run(session, task.run_id)
-                if run is not None and not run.dry_run:
-                    live_issues.append(task.issue_number)
-            for refine in await runs_store.non_terminal_refine_tasks(session):
-                await runs_store.update_refine_task(
-                    session, refine.id, state=RefineState.ABORTED, error=note
-                )
-            for run in await runs_store.running_runs(session):
-                await runs_store.finish_run(session, run.id, RunState.ABORTED, note)
-            await session.commit()
-        return sorted(set(live_issues))
-
-    async def _comment_interrupted(self, issues: Sequence[int]) -> None:
-        try:
-            async with self._deps.sessionmaker() as session:
-                settings = await settings_store.load_settings(session)
-            gw = self._deps.gateway_factory(settings, audit_sink(self._deps.sessionmaker, None))
-            for number in issues:
-                await gw.comment(number, INTERRUPTED_COMMENT)
-        except Exception:
-            log.exception("could not comment on interrupted issues")
-
-    async def _execute(self, run_id: int, settings: AppSettings, sink: AuditSink) -> None:
-        try:
-            state, note = await self._run(run_id, settings, sink)
-        except Exception as exc:
-            log.exception("run %d failed", run_id)
-            state, note = RunState.FAILED, f"error: {type(exc).__name__}"
+            yield
         finally:
             self._step = None
-        async with self._deps.sessionmaker() as session:
-            await runs_store.finish_run(session, run_id, state, note and note[:NOTE_CHARS])
-            await session.commit()
-        finished = f"run {run_id} {state.value}"
-        await sink(AuditEntry(AuditKind.RUN_FINISHED, AuditOutcome.INFO, finished))
-
-    async def _run(self, run_id: int, settings: AppSettings, sink: AuditSink) -> Outcome:
-        deps = self._deps
-        started = deps.clock()
-        self._step = RunStep.PREFLIGHT
-        gw = deps.gateway_factory(settings, sink)
-        checked = await preflight(deps, settings, gw)
-        problems, backends = checked.problems, checked.backends
-        required: frozenset[str] = frozenset()
-        if not problems:
-            try:
-                required = await load_required_checks(gw, settings.repo.base_branch)
-            except Exception as exc:
-                log.exception("required checks could not be read")
-                problems = [f"required checks could not be read: {type(exc).__name__}"]
-        if not problems:
-            try:
-                await apply_egress(deps, settings, backends)
-            except Exception as exc:
-                log.exception("egress allowlist could not be applied")
-                problems = [f"egress allowlist could not be applied: {type(exc).__name__}"]
-        repo_docs: dict[str, str] = {}
-        if not problems:
-            try:
-                repo_docs = await collect_repo_docs(deps, gw, run_id, backends)
-            except Exception as exc:
-                log.exception("repository docs could not be read")
-                problems = [f"repository docs could not be read: {type(exc).__name__}"]
-        if problems:
-            await sink(
-                AuditEntry(
-                    AuditKind.PREFLIGHT_FAILED,
-                    AuditOutcome.BLOCKED,
-                    "preflight failed",
-                    {"problems": problems},
-                )
-            )
-            return RunState.PREFLIGHT_FAILED, "; ".join(problems)
-        await prune_task_dirs(deps, started, settings.limits.task_retention_days)
-        async with deps.sessionmaker() as session:
-            rules = await load_rules(session)
-            quotas = await remaining_quotas(session, settings, started)
-        ctx = RunContext(
-            deps=deps,
-            settings=settings,
-            run_id=run_id,
-            gateway=gw,
-            backends=backends,
-            rules=rules,
-            repo_docs=repo_docs,
-            deadline=started + timedelta(hours=settings.schedule.window_hours),
-            audit=sink,
-            required_checks=required,
-            classifier=checked.classifier,
-        )
-        self._step = RunStep.CANDIDATES
-        screened = await screen_candidates(ctx, await find_candidates(deps, settings, gw, sink))
-        for number, reason in screened.escalations.items():
-            await self._escalate(ctx, number, reason)
-        candidates = screened.candidates
-        self._step = None
-        async with asyncio.TaskGroup() as group:
-            group.create_task(self._refines(ctx, candidates.refine, quotas.refines))
-            workers = group.create_task(self._workers(ctx, candidates, quotas, screened.efforts))
-        note = workers.result()
-        if ctx.halted.is_set():
-            note = USAGE_LIMIT_NOTE if note is None else f"{USAGE_LIMIT_NOTE}; {note}"
-        return (RunState.COMPLETED if note is None else RunState.FAILED), note
-
-    def _may_start(self, ctx: RunContext) -> bool:
-        return not ctx.halted.is_set() and self._deps.clock() < ctx.deadline
-
-    async def _refines(self, ctx: RunContext, candidates: Sequence[Candidate], quota: int) -> None:
-        for candidate in candidates[:quota]:
-            if not self._may_start(ctx):
-                return
-            number = candidate.issue.number
-            async with self._deps.sessionmaker() as session:
-                task = await runs_store.add_refine_task(session, ctx.run_id, number)
-                await session.commit()
-            await run_refine(ctx, task.id, candidate.issue, candidate.comments)
-
-    async def _workers(
-        self,
-        ctx: RunContext,
-        candidates: Candidates,
-        quotas: Quotas,
-        efforts: Mapping[int, str],
-    ) -> str | None:
-        picks, note = await self._select(ctx, candidates.ready, quotas.issues)
-        slots = asyncio.Semaphore(ctx.settings.limits.max_parallel_workers)
-        async with asyncio.TaskGroup() as group:
-            await self._start_pr_fixes(ctx, group, slots, candidates.open_prs, quotas.fixes)
-            await self._start_issues(ctx, group, slots, picks, efforts)
-        return note
-
-    async def _select(
-        self, ctx: RunContext, candidates: Sequence[Candidate], quota: int
-    ) -> tuple[list[Candidate], str | None]:
-        self._step = RunStep.SELECTOR
-        try:
-            selection = await select_issues(ctx, candidates, quota)
-        except Exception as exc:
-            log.exception("selection failed")
-            return [], f"selection failed: {type(exc).__name__}: {exc}"
-        finally:
-            self._step = None
-        for pick in selection.too_large:
-            await self._escalate(
-                ctx, pick.issue_number, f"the selector judged the issue too large: {pick.reason}"
-            )
-        for decision in selection.needs_decision:
-            await self._escalate(
-                ctx,
-                decision.issue_number,
-                f"the selector needs a decision: {decision_reason(decision)}",
-            )
-        for pick in selection.rejected:
-            await self._escalate(
-                ctx, pick.issue_number, f"the selector rejected the issue: {pick.reason}"
-            )
-        for duplicate in selection.duplicates:
-            await self._escalate(
-                ctx,
-                duplicate.issue_number,
-                f"the selector found a duplicate of #{duplicate.duplicate_of}: {duplicate.reason}",
-            )
-        by_number = {c.issue.number: c for c in candidates}
-        return [by_number[pick.issue_number] for pick in selection.picks], None
-
-    async def _start_pr_fixes(
-        self,
-        ctx: RunContext,
-        group: asyncio.TaskGroup,
-        slots: asyncio.Semaphore,
-        open_prs: Sequence[OpenPr],
-        fix_quota: int,
-    ) -> None:
-        remaining = fix_quota
-        for update in await choose_pr_updates(ctx, open_prs):
-            pr = update.pr
-            if remaining <= 0 or not self._may_start(ctx):
-                return
-            if not update.unfinished and not await has_conflicts(ctx, pr):
-                continue
-            await slots.acquire()
-            if not self._may_start(ctx):
-                slots.release()
-                return
-            remaining -= 1
-            task_id = await self._add_task(ctx, pr.issue, TaskKind.PR_FIX)
-            work = partial(run_pr_fix, ctx, task_id, pr, finish=update.unfinished)
-            group.create_task(self._in_slot(slots, work))
-
-    async def _start_issues(
-        self,
-        ctx: RunContext,
-        group: asyncio.TaskGroup,
-        slots: asyncio.Semaphore,
-        picks: Sequence[Candidate],
-        efforts: Mapping[int, str],
-    ) -> None:
-        for pick in picks:
-            await slots.acquire()
-            if not self._may_start(ctx):
-                slots.release()
-                return
-            task_id = await self._add_task(ctx, pick.issue, TaskKind.ISSUE)
-            effort = efforts.get(pick.issue.number)
-            work = partial(run_worker, ctx, task_id, pick.issue, pick.comments, effort=effort)
-            group.create_task(self._in_slot(slots, work))
-
-    async def _add_task(self, ctx: RunContext, issue: IssueRef, kind: TaskKind) -> int:
-        async with self._deps.sessionmaker() as session:
-            task = await runs_store.add_worker_task(
-                session, ctx.run_id, issue.number, issue.title[:ISSUE_TITLE_LENGTH], kind
-            )
-            await session.commit()
-        return task.id
-
-    async def _in_slot(self, slots: asyncio.Semaphore, work: Callable[[], Awaitable[None]]) -> None:
-        try:
-            await work()
-        finally:
-            slots.release()
-
-    async def _escalate(self, ctx: RunContext, number: int, reason: str) -> None:
-        try:
-            await escalate_issue(ctx, number, reason)
-        except Exception:
-            log.exception("could not escalate #%d", number)

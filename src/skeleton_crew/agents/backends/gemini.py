@@ -172,5 +172,4 @@ SPEC = BackendSpec(
     factory=GeminiBackend.create,
     options={"auth_mode": auth_mode_option(AuthMode.API_KEY)},
     credentials=GeminiBackend.credential_names(),
-    web_tools=True,
 )

@@ -19,7 +19,7 @@
         {{ m.select(p ~ "model", "Model", view.models, values, errors) }}
         {{ m.select(p ~ "effort", "Effort", view.spec.efforts if view.spec else (), values, errors) }}
       </div>
-      {{ m.checkbox(p ~ "web_tools", "Web tools", values, errors, disabled=not (view.spec and view.spec.web_tools)) }}
+      {{ m.checkbox(p ~ "web_tools", "Web tools", values, errors, disabled=not view.spec) }}
     </fieldset>
     {% endfor %}
   </div>
@@ -62,8 +62,8 @@
     <div class="routing">
       <p class="routing-title">Worker effort per issue size</p>
       <div class="grid">
-        {% for size in issue_sizes %}
-        {{ m.select(c ~ "effort_" ~ size, size | capitalize ~ " issues", routed_efforts, values, errors) }}
+        {% for size, field in routed_effort_fields.items() %}
+        {{ m.select(c ~ field, size | capitalize ~ " issues", routed_efforts, values, errors) }}
         {% endfor %}
       </div>
     </div>

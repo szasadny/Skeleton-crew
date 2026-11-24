@@ -24,8 +24,8 @@ from skeleton_crew.core.audit import AuditKind, AuditOutcome
 from skeleton_crew.domain.ci_policy import CiState, CiStatus, FailedJob, ReviewCheck
 from skeleton_crew.domain.settings import Role
 from skeleton_crew.domain.task_state import RunTrigger, TaskState
-from skeleton_crew.pipeline.job_engine import USAGE_LIMIT_REASON
-from skeleton_crew.pipeline.sessions import INBOX
+from skeleton_crew.pipeline.outcomes import USAGE_LIMIT_REASON
+from skeleton_crew.pipeline.sandbox import INBOX
 from skeleton_crew.pipeline.task_record import MAX_STORED_BLOCKERS, WorkerTaskRecord
 from skeleton_crew.pipeline.texts import REVIEW_PENDING_SUMMARY
 from skeleton_crew.runtime.containers import AGENT_USER, ROLE_LABEL, WORKSPACE, ExecResult
@@ -336,8 +336,8 @@ async def test_second_review_resumes_the_reviewer_in_the_same_container(harness:
     assert second.resume_session_id == "review-session"
     assert second.prompt.startswith("# Task: review the updated change")
     assert [(snap["app.py"], snap["inbox"]) for snap in seen] == [
-        (GREETING["app.py"], "changes.diff prompt.md rules.md schema.json"),
-        ("print(1)\n", "changes.diff prompt.md rules.md schema.json since-review.diff"),
+        (GREETING["app.py"], "changes.diff prompt.md rules.md"),
+        ("print(1)\n", "changes.diff prompt.md rules.md since-review.diff"),
     ]
     assert [snap["prompt"] for snap in seen] == [first.prompt, second.prompt]
     assert not harness.runtime.running
@@ -410,7 +410,8 @@ async def test_review_rounds_exhausted_escalates(harness: Harness) -> None:
 
     [task] = await harness.tasks(run_id)
     assert task.state is TaskState.ESCALATED
-    assert "reviewer still requests changes after 1 fix rounds" in str(task.note)
+    assert task.note == "the reviewer still requests changes after 1 fix rounds"
+    assert task.review_rounds == 1
     assert harness.actions()[-2:] == ["comment", "change_labels"]
     labels = harness.writes("change_labels")
     assert [("change_labels", dict(w.args)) for w in labels] == escalation_writes()
@@ -429,6 +430,7 @@ async def test_ci_rounds_exhausted_escalates(harness: Harness) -> None:
 
     [task] = await harness.tasks(run_id)
     assert task.state is TaskState.ESCALATED
+    assert (task.note, task.ci_rounds) == ("CI still fails after 0 fix rounds", 0)
     assert harness.actions() == [
         "push_branch",
         "set_review_check",
@@ -477,7 +479,7 @@ async def test_protected_path_edit_gets_follow_up_then_escalates(harness: Harnes
 
     [task] = await harness.tasks(run_id)
     assert (task.state, task.policy_rounds) == (TaskState.ESCALATED, 1)
-    assert "still breaks policy after 1 fix rounds" in str(task.note)
+    assert task.note == "the change still breaks policy after 1 fix rounds"
     assert harness.actions() == ["comment", "change_labels"]
     follow_up = harness.backend.prompts(Role.WORKER)[1]
     assert ".github/workflows/ci.yml: protected path" in follow_up.prompt
@@ -922,7 +924,8 @@ async def test_check_rounds_exhausted_escalates_without_push(harness: Harness) -
 
     [task] = await harness.tasks(run_id)
     assert task.state is TaskState.ESCALATED
-    assert "check command still fails after 0 fix rounds" in str(task.note)
+    assert task.note == "the check command still fails after 0 fix rounds"
+    assert task.check_rounds == 0
     assert harness.actions() == ["comment", "change_labels"]
 
 

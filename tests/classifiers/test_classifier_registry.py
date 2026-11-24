@@ -5,6 +5,7 @@ from skeleton_crew.classifiers.registry import (
     available_classifiers,
     credential_problems,
     field_problems,
+    settings_problems,
 )
 from skeleton_crew.domain.settings import (
     DEFAULT_CLASSIFIER,
@@ -37,6 +38,13 @@ def test_unknown_provider_and_foreign_model_are_rejected() -> None:
     assert field_problems(_settings(provider="openai_decisions", model="jev-latest")) == {
         "classifier.model": ["not a OpenAI Decisions model"]
     }
+
+
+def test_settings_problems_name_the_field() -> None:
+    assert settings_problems(_settings(provider="nope")) == [
+        "classifier.provider: unknown classifier nope"
+    ]
+    assert settings_problems(AppSettings()) == []
 
 
 @pytest.mark.parametrize("effort", ["", "x" * 40, "low; rm -rf /"])

@@ -1,30 +1,47 @@
-import shutil
+from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from enum import StrEnum
 from pathlib import Path
+from typing import Self
 
+from skeleton_crew.domain.branch_policy import branch_name
 from skeleton_crew.domain.contest_policy import ObjectionKey
-from skeleton_crew.domain.task_state import TaskKind
+from skeleton_crew.domain.schemas import WorkerResult
+from skeleton_crew.domain.task_keys import worker_key
+from skeleton_crew.domain.task_state import (
+    ROUND_RULES,
+    JobMode,
+    rounds_exhausted,
+    works_on_existing_branch,
+)
+from skeleton_crew.domain.task_state import FollowUpKind as FollowUpKind
 from skeleton_crew.domain.trust_policy import IssueComment
 from skeleton_crew.github.gateway import IssueRef
+from skeleton_crew.pipeline.candidates import Candidate, OpenPr
 from skeleton_crew.pipeline.deps import RunContext
-from skeleton_crew.pipeline.sessions import Sandbox
+from skeleton_crew.pipeline.outcomes import Escalation
+from skeleton_crew.pipeline.sandbox import Sandbox
 from skeleton_crew.pipeline.task_record import WorkerTaskRecord
+from skeleton_crew.pipeline.texts import CONTINUED_SUMMARY
+from skeleton_crew.runtime.containers import DEFAULT_MAX_STDOUT_BYTES, ExecRequest, ExecResult
 from skeleton_crew.runtime.task_dirs import TaskPaths
-
-
-class FollowUpKind(StrEnum):
-    CI_FAILED = "ci_failed"
-    REVIEW_CHANGES = "review_changes"
-    POLICY_FAILED = "policy_failed"
-    CHECK_FAILED = "check_failed"
 
 
 @dataclass(frozen=True)
 class FollowUp:
     kind: FollowUpKind
     details: str
+
+
+@dataclass(frozen=True)
+class WorkerReport:
+    title: str
+    summary: str
+    blockers: Sequence[str]
+
+    @classmethod
+    def of(cls, result: WorkerResult) -> Self:
+        return cls(result.pr_title, result.summary, result.blockers)
 
 
 @dataclass
@@ -39,12 +56,16 @@ class GitState:
     def start_at(self, sha: str) -> None:
         self.base_sha = self.patch_base_sha = self.tip_sha = sha
 
-    def continue_from(self, sha: str) -> None:
+    def merged(self, base: str, sha: str) -> None:
+        self.base_sha = base
         self.patch_base_sha = self.tip_sha = sha
 
-    def resolve_merge(self, conflicted: str, head: str, conflicts: tuple[str, ...]) -> None:
+    def resolve_merge(
+        self, conflicted: str, head: str, base: str, conflicts: tuple[str, ...]
+    ) -> None:
+        self.base_sha = base
         self.patch_base_sha, self.tip_sha = conflicted, head
-        self.merge_parents, self.conflicts = (head, self.base_sha), conflicts
+        self.merge_parents, self.conflicts = (head, base), conflicts
 
     def committed(self, sha: str) -> None:
         self.tip_sha, self.merge_parents = sha, ()
@@ -55,15 +76,6 @@ class GitState:
 
 
 @dataclass
-class Rounds:
-    check: int = 0
-    ci: int = 0
-    review: int = 0
-    policy: int = 0
-    new_issues: int = 0
-
-
-@dataclass
 class ReviewerState:
     sandbox: Sandbox | None = None
     session_id: str | None = None
@@ -71,34 +83,95 @@ class ReviewerState:
 
 
 @dataclass
+class JobProgress:
+    mode: JobMode = JobMode.FRESH
+    pr_requested: bool = False
+    sandbox: Sandbox | None = None
+    session_id: str | None = None
+    objections: dict[ObjectionKey, str] = field(default_factory=dict)
+    rounds: Counter[FollowUpKind] = field(default_factory=Counter)
+    new_issues: int = 0
+
+
+@dataclass(frozen=True)
 class WorkerJob:
     ctx: RunContext
     record: WorkerTaskRecord
     issue: IssueRef
     comments: Sequence[IssueComment]
-    key: str
-    paths: TaskPaths
     branch: str
-    kind: TaskKind = TaskKind.ISSUE
     effort: str | None = None
-    continues_branch: bool = False
-    pr_requested: bool = False
     git: GitState = field(default_factory=GitState)
-    rounds: Rounds = field(default_factory=Rounds)
-    sandbox: Sandbox | None = None
-    session_id: str | None = None
-    objections: dict[ObjectionKey, str] = field(default_factory=dict)
     reviewer: ReviewerState = field(default_factory=ReviewerState)
+    progress: JobProgress = field(default_factory=JobProgress)
+
+    @classmethod
+    def for_issue(
+        cls,
+        ctx: RunContext,
+        record: WorkerTaskRecord,
+        candidate: Candidate,
+        effort: str | None,
+    ) -> Self:
+        issue = candidate.issue
+        branch = branch_name(issue.number, issue.title)
+        return cls(ctx, record, issue, candidate.comments, branch, effort)
+
+    @classmethod
+    def for_pr(cls, ctx: RunContext, record: WorkerTaskRecord, pr: OpenPr) -> Self:
+        return cls(
+            ctx,
+            record,
+            pr.issue,
+            pr.candidate.comments,
+            pr.pull.head_ref,
+            git=GitState(remote_sha=pr.pull.head_sha),
+            progress=JobProgress(mode=JobMode.PR_FIX, pr_requested=True),
+        )
+
+    @property
+    def key(self) -> str:
+        return worker_key(self.record.task_id)
+
+    @property
+    def paths(self) -> TaskPaths:
+        return self.ctx.task_paths(self.key)
+
+    @property
+    def base_branch(self) -> str:
+        return self.ctx.settings.repo.base_branch
 
     @property
     def on_existing_branch(self) -> bool:
-        return self.kind is not TaskKind.ISSUE or self.continues_branch
+        return works_on_existing_branch(self.progress.mode)
+
+    def continued_report(self) -> WorkerReport:
+        return WorkerReport(self.issue.title, CONTINUED_SUMMARY, ())
+
+    def require_sandbox(self) -> Sandbox:
+        if self.progress.sandbox is None:
+            raise RuntimeError("worker container is not running")
+        return self.progress.sandbox
+
+    async def exec_as_agent(
+        self,
+        argv: Sequence[str],
+        *,
+        timeout_s: float,
+        stdout_path: Path | None = None,
+        max_stdout_bytes: int = DEFAULT_MAX_STDOUT_BYTES,
+    ) -> ExecResult:
+        request = ExecRequest.as_agent(
+            argv, timeout_s=timeout_s, stdout_path=stdout_path, max_stdout_bytes=max_stdout_bytes
+        )
+        return await self.ctx.deps.runtime.exec(self.require_sandbox().handle, request)
 
 
-def review_root(paths: TaskPaths) -> Path:
-    return paths.root / "review"
-
-
-def remove_work_dirs(paths: TaskPaths) -> None:
-    for path in (paths.agent_repo, paths.inbox, paths.controller_repo, review_root(paths)):
-        shutil.rmtree(path, ignore_errors=True)
+async def next_round(job: WorkerJob, kind: FollowUpKind) -> None:
+    rounds = job.progress.rounds
+    rounds[kind] += 1
+    exhausted = rounds_exhausted(kind, rounds[kind], job.ctx.settings.limits)
+    if exhausted is not None:
+        raise Escalation(exhausted)
+    rule = ROUND_RULES[kind]
+    await job.record.fire(rule.event, **{rule.counter_field: rounds[kind]})

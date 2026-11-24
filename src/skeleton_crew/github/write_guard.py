@@ -15,6 +15,7 @@ from skeleton_crew.domain.write_policy import (
     check_sha,
     short,
 )
+from skeleton_crew.domain.write_policy import new_issue_labels as new_issue_labels
 
 
 class WriteAction(StrEnum):
@@ -39,10 +40,6 @@ def label_payload(change: LabelChange) -> dict[str, object]:
         "add": sorted(short(n) for n in change.add),
         "remove": sorted(short(n) for n in change.remove),
     }
-
-
-def new_issue_labels(labels: LabelNames) -> list[str]:
-    return sorted({labels.hitl})
 
 
 def label_spec(change: LabelChange, labels: LabelNames) -> WriteSpec:

@@ -1,55 +1,39 @@
 import asyncio
 import logging
-import re
-import secrets
-import shutil
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from datetime import datetime
 from pathlib import Path
+from typing import Protocol
 
 from pydantic import BaseModel
 
 from skeleton_crew.agents.base import ExecOutcome, Executor, SessionOutcome, SessionRequest
 from skeleton_crew.agents.prompting import PromptName, render_prompt
 from skeleton_crew.agents.session import run_session
-from skeleton_crew.core.config import BootstrapConfig
 from skeleton_crew.domain.errors import PolicyViolation
 from skeleton_crew.domain.schemas import json_schema, parse_output
+from skeleton_crew.domain.session_policy import SessionBudget, may_continue, remaining_budget
 from skeleton_crew.domain.settings import Role
+from skeleton_crew.domain.task_keys import SESSION_SUFFIX
 from skeleton_crew.pipeline.deps import RunContext
-from skeleton_crew.runtime.containers import (
-    AGENT_USER,
-    CONTAINER_PREFIX,
-    ROLE_LABEL,
-    TASK_LABEL,
-    WORKSPACE,
-    ContainerHandle,
-    ContainerSpec,
-    ExecRequest,
-    Mount,
-    SandboxTarget,
-    proxy_env,
-)
+from skeleton_crew.pipeline.outcomes import SessionFailed, UsageLimitReached
+from skeleton_crew.pipeline.sandbox import INBOX, RULES_FILE, Sandbox, update_inbox
+from skeleton_crew.pipeline.texts import session_failed
+from skeleton_crew.runtime.containers import AGENT_USER, WORKSPACE, ContainerHandle, ExecRequest
+from skeleton_crew.runtime.task_dirs import next_numbered
 
-INBOX = "/skeleton-in"
-RULES_FILE = "rules.md"
 PROMPT_FILE = "prompt.md"
-SCHEMA_FILE = "schema.json"
-_STDERR_TAIL_CHARS = 4000
 
 log = logging.getLogger(__name__)
 
 
-class UsageLimitReached(Exception):
-    pass
-
-
 @dataclass(frozen=True)
-class Sandbox:
-    handle: ContainerHandle
-    inbox: Path
-    transcripts: Path
+class AgentCall[T: BaseModel]:
+    prompt: PromptName
+    context: Mapping[str, object]
+    output: type[T]
+    resume: str | None = None
+    effort: str | None = None
 
 
 @dataclass(frozen=True)
@@ -59,69 +43,8 @@ class AgentReply[T: BaseModel]:
     error: str | None
 
 
-def agent_target(config: BootstrapConfig) -> SandboxTarget:
-    return SandboxTarget(
-        image=config.agent_image,
-        network=config.agent_network,
-        proxy_url=config.egress_proxy_url,
-        proxy_container=config.egress_proxy_container,
-        allowlist_path=config.egress_allowlist_path,
-    )
-
-
-def container_spec(
-    ctx: RunContext, *, task_key: str, role: Role, workspace: Path, writable: bool, inbox: Path
-) -> ContainerSpec:
-    target, limits = agent_target(ctx.deps.config), ctx.settings.runtime
-    return ContainerSpec(
-        name=f"{CONTAINER_PREFIX}{task_key}-{role.value}-{secrets.token_hex(4)}",
-        image=target.image,
-        network=target.network,
-        mounts=[
-            Mount(workspace, WORKSPACE, read_only=not writable),
-            Mount(inbox, INBOX, read_only=True),
-        ],
-        env=proxy_env(target.proxy_url),
-        cpus=limits.cpus,
-        memory_gb=limits.memory_gb,
-        pids=limits.pids,
-        labels={TASK_LABEL: task_key, ROLE_LABEL: role.value},
-    )
-
-
-def write_inbox(inbox: Path, rules: str, files: Mapping[str, bytes]) -> None:
-    if inbox.exists():
-        shutil.rmtree(inbox)
-    inbox.mkdir(parents=True)
-    (inbox / RULES_FILE).write_text(rules, encoding="utf-8")
-    update_inbox(inbox, files)
-
-
-def update_inbox(inbox: Path, files: Mapping[str, bytes]) -> None:
-    for name, content in files.items():
-        (inbox / name).write_bytes(content)
-
-
-async def start_sandbox(
-    ctx: RunContext,
-    *,
-    task_key: str,
-    role: Role,
-    workspace: Path,
-    writable: bool,
-    inbox: Path,
-    transcripts: Path,
-    files: Mapping[str, bytes] | None = None,
-) -> Sandbox:
-    rules = ctx.rules[role]
-    docs = ctx.repo_docs[ctx.settings.agents[role].backend]
-    if docs:
-        rules = f"{rules}\n{docs}"
-    await asyncio.to_thread(write_inbox, inbox, rules, files or {})
-    spec = container_spec(
-        ctx, task_key=task_key, role=role, workspace=workspace, writable=writable, inbox=inbox
-    )
-    return Sandbox(await ctx.deps.runtime.start(spec), inbox, transcripts)
+class TaskRecorder(Protocol):
+    async def add_cost(self, cost_usd: float, **fields: object) -> None: ...
 
 
 def container_executor(ctx: RunContext, handle: ContainerHandle) -> Executor:
@@ -135,118 +58,106 @@ def container_executor(ctx: RunContext, handle: ContainerHandle) -> Executor:
     ) -> ExecOutcome:
         request = ExecRequest(argv, AGENT_USER, cwd, timeout_s, env=env, stdout_path=stdout_path)
         result = await ctx.deps.runtime.exec(handle, request)
-        tail = result.stderr.decode(errors="replace")[-_STDERR_TAIL_CHARS:]
-        return ExecOutcome(result.exit_code, result.timed_out, tail)
+        stderr = result.stderr.decode(errors="replace")
+        return ExecOutcome(result.exit_code, result.timed_out, stderr)
 
     return execute
 
 
-def next_numbered(directory: Path, stem: str, suffix: str) -> Path:
-    directory.mkdir(parents=True, exist_ok=True)
-    pattern = re.compile(rf"{re.escape(stem)}-(\d+){re.escape(suffix)}", re.ASCII)
-    used = (int(m[1]) for path in directory.iterdir() if (m := pattern.fullmatch(path.name)))
-    return directory / f"{stem}-{max(used, default=0) + 1}{suffix}"
-
-
-def next_transcript(transcripts: Path, role: Role) -> Path:
-    return next_numbered(transcripts, role.value, ".jsonl")
-
-
-async def run_agent[T: BaseModel](
-    ctx: RunContext,
-    sandbox: Sandbox,
-    *,
-    role: Role,
-    prompt: PromptName,
-    context: Mapping[str, object],
-    output: type[T],
-    resume_session_id: str | None = None,
-    effort: str | None = None,
-) -> AgentReply[T]:
+def _request[T: BaseModel](ctx: RunContext, role: Role, call: AgentCall[T]) -> SessionRequest:
     agent = ctx.settings.agents[role]
-    if effort is not None:
-        agent = agent.model_copy(update={"effort": effort})
+    if call.effort is not None:
+        agent = agent.model_copy(update={"effort": call.effort})
     limits = ctx.settings.limits
-    schema = json_schema(output)
-    request = SessionRequest(
+    schema = json_schema(call.output)
+    return SessionRequest(
         role=role,
-        prompt=render_prompt(prompt, context, json_schema=schema),
+        prompt=render_prompt(call.prompt, call.context, json_schema=schema),
         agent=agent,
         max_turns=limits.max_turns,
         timeout_s=limits.session_timeout_s,
         json_schema=schema,
         rules_path_in_container=f"{INBOX}/{RULES_FILE}",
         prompt_path_in_container=f"{INBOX}/{PROMPT_FILE}",
-        schema_path_in_container=f"{INBOX}/{SCHEMA_FILE}",
         cwd=WORKSPACE,
-        resume_session_id=resume_session_id,
+        resume_session_id=call.resume,
         max_budget_usd=limits.max_budget_usd_per_session,
     )
-    started = ctx.deps.clock()
-    outcome = await _continue_stopped(
-        ctx, sandbox, request, await _session(ctx, sandbox, request), schema, started
-    )
-    if outcome.usage_limited:
-        if not ctx.halted.is_set():
-            log.warning("%s session hit the agent usage limit, starting no new work", role.value)
-        ctx.halted.set()
+
+
+async def run_agent[T: BaseModel](
+    ctx: RunContext, sandbox: Sandbox, call: AgentCall[T]
+) -> AgentReply[T]:
+    outcome = await _run_with_continues(ctx, sandbox, _request(ctx, sandbox.role, call))
     if outcome.usage_limited or not outcome.ok or outcome.structured_output is None:
         return AgentReply(outcome, None, _failure(outcome))
     try:
-        return AgentReply(outcome, parse_output(output, outcome.structured_output), None)
+        return AgentReply(outcome, parse_output(call.output, outcome.structured_output), None)
     except PolicyViolation as exc:
-        log.warning("%s output rejected: %s", role.value, exc)
+        log.warning("%s output rejected: %s", sandbox.role.value, exc)
         return AgentReply(outcome, None, str(exc))
 
 
+def require_result[T: BaseModel](reply: AgentReply[T], what: str, halted: asyncio.Event) -> T:
+    if reply.outcome.usage_limited:
+        if not halted.is_set():
+            log.warning("%s session hit the agent usage limit, starting no new work", what)
+        halted.set()
+        raise UsageLimitReached()
+    if reply.result is None:
+        raise SessionFailed(session_failed(what, reply.error))
+    return reply.result
+
+
+async def settle[T: BaseModel](
+    ctx: RunContext, record: TaskRecorder, reply: AgentReply[T], what: str, **fields: object
+) -> T:
+    await record.add_cost(reply.outcome.cost_usd, **fields)
+    return require_result(reply, what, ctx.halted)
+
+
 async def _session(ctx: RunContext, sandbox: Sandbox, request: SessionRequest) -> SessionOutcome:
-    files = {
-        PROMPT_FILE: request.prompt.encode("utf-8"),
-        SCHEMA_FILE: request.json_schema.encode("utf-8"),
-    }
+    files = {PROMPT_FILE: request.prompt.encode("utf-8")}
     await asyncio.to_thread(update_inbox, sandbox.inbox, files)
     return await run_session(
         ctx.backends[request.agent.backend],
         container_executor(ctx, sandbox.handle),
         request,
-        await asyncio.to_thread(next_transcript, sandbox.transcripts, request.role),
+        await asyncio.to_thread(next_numbered, sandbox.transcripts, sandbox.role, SESSION_SUFFIX),
     )
 
 
-async def _continue_stopped(
-    ctx: RunContext,
-    sandbox: Sandbox,
-    request: SessionRequest,
-    outcome: SessionOutcome,
-    schema: str,
-    started: datetime,
+def _budget(request: SessionRequest) -> SessionBudget:
+    return SessionBudget(request.max_turns, request.timeout_s, request.max_budget_usd)
+
+
+async def _run_with_continues(
+    ctx: RunContext, sandbox: Sandbox, request: SessionRequest
 ) -> SessionOutcome:
+    started = ctx.deps.clock()
+    outcome = await _session(ctx, sandbox, request)
     cost, turns = outcome.cost_usd, outcome.turns
-    prompt = render_prompt(PromptName.CONTINUE, {}, json_schema=schema)
+    prompt = render_prompt(PromptName.CONTINUE, {}, json_schema=request.json_schema)
     for _ in range(ctx.settings.limits.max_continues):
-        if outcome.stopped_early is None or outcome.session_id is None or outcome.usage_limited:
+        if not may_continue(outcome.stopped_early, outcome.session_id, outcome.usage_limited):
             break
         elapsed_s = (ctx.deps.clock() - started).total_seconds()
-        left = _remaining(request, cost, turns, elapsed_s)
+        left = remaining_budget(_budget(request), cost, turns, elapsed_s)
         if left is None:
             log.info("%s session used up its limits, not continuing", request.role)
             break
         log.info("%s session stopped early (%s), continuing", request.role, outcome.stopped_early)
-        resumed = replace(left, prompt=prompt, resume_session_id=outcome.session_id)
+        resumed = replace(
+            request,
+            prompt=prompt,
+            resume_session_id=outcome.session_id,
+            max_turns=left.max_turns,
+            timeout_s=left.timeout_s,
+            max_budget_usd=left.max_budget_usd,
+        )
         outcome = await _session(ctx, sandbox, resumed)
         cost, turns = cost + outcome.cost_usd, turns + outcome.turns
     return replace(outcome, cost_usd=cost, turns=turns)
-
-
-def _remaining(
-    request: SessionRequest, cost: float, turns: int, elapsed_s: float
-) -> SessionRequest | None:
-    max_turns = request.max_turns - turns
-    timeout_s = request.timeout_s - elapsed_s
-    budget = None if request.max_budget_usd is None else request.max_budget_usd - cost
-    if max_turns < 1 or timeout_s <= 0 or (budget is not None and budget <= 0):
-        return None
-    return replace(request, max_turns=max_turns, timeout_s=timeout_s, max_budget_usd=budget)
 
 
 def _failure(outcome: SessionOutcome) -> str:
@@ -254,12 +165,3 @@ def _failure(outcome: SessionOutcome) -> str:
     if outcome.stopped_early is None:
         return error
     return f"{error} (stopped early: {outcome.stopped_early})"
-
-
-async def remove_sandbox(ctx: RunContext, sandbox: Sandbox | None) -> None:
-    if sandbox is None:
-        return
-    try:
-        await ctx.deps.runtime.remove(sandbox.handle)
-    except Exception:
-        log.exception("could not remove container %s", sandbox.handle.name)

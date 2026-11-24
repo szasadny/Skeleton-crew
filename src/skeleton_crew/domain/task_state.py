@@ -1,7 +1,9 @@
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from enum import StrEnum
 
 from skeleton_crew.domain.errors import InvalidTransition
+from skeleton_crew.domain.settings import Limits
 
 
 class RunTrigger(StrEnum):
@@ -43,6 +45,19 @@ class TaskEvent(StrEnum):
     ABORT = "abort"
 
 
+class JobMode(StrEnum):
+    FRESH = "fresh"
+    CONTINUED = "continued"
+    PR_FIX = "pr_fix"
+
+
+class FollowUpKind(StrEnum):
+    CI_FAILED = "ci_failed"
+    REVIEW_CHANGES = "review_changes"
+    POLICY_FAILED = "policy_failed"
+    CHECK_FAILED = "check_failed"
+
+
 class RefineState(StrEnum):
     QUEUED = "queued"
     REFINING = "refining"
@@ -72,6 +87,8 @@ TERMINAL_TASK_STATES = frozenset(
 TERMINAL_REFINE_STATES = frozenset({RefineState.DONE, RefineState.FAILED, RefineState.ABORTED})
 
 QUOTA_FREE_TASK_STATES = frozenset({TaskState.ABORTED})
+
+NOTE_CHARS = 1000
 
 _TRANSITIONS: dict[tuple[TaskState, TaskEvent], TaskState] = {
     (TaskState.QUEUED, TaskEvent.STARTED): TaskState.PREPARING,
@@ -107,3 +124,53 @@ def transition(state: TaskState, event: TaskEvent) -> TaskState:
 def merge_blockers(existing: Sequence[str], new: Iterable[str], cap: int) -> list[str]:
     added = [b for b in dict.fromkeys(new) if b not in existing]
     return [*existing, *added[: max(cap - len(existing), 0)]]
+
+
+def cap_note(note: str) -> str:
+    return note[:NOTE_CHARS]
+
+
+@dataclass(frozen=True)
+class RoundRule:
+    limit: Callable[[Limits], int]
+    event: TaskEvent
+    counter_field: str
+    exhausted_text: str
+
+
+ROUND_RULES: Mapping[FollowUpKind, RoundRule] = {
+    FollowUpKind.CHECK_FAILED: RoundRule(
+        lambda limits: limits.max_check_rounds,
+        TaskEvent.CHECK_FAILED,
+        "check_rounds",
+        "the check command still fails after {limit} fix rounds",
+    ),
+    FollowUpKind.POLICY_FAILED: RoundRule(
+        lambda limits: limits.max_policy_rounds,
+        TaskEvent.POLICY_FAILED,
+        "policy_rounds",
+        "the change still breaks policy after {limit} fix rounds",
+    ),
+    FollowUpKind.CI_FAILED: RoundRule(
+        lambda limits: limits.max_ci_rounds,
+        TaskEvent.CI_FAILED,
+        "ci_rounds",
+        "CI still fails after {limit} fix rounds",
+    ),
+    FollowUpKind.REVIEW_CHANGES: RoundRule(
+        lambda limits: limits.max_review_rounds,
+        TaskEvent.REVIEW_CHANGES,
+        "review_rounds",
+        "the reviewer still requests changes after {limit} fix rounds",
+    ),
+}
+
+
+def rounds_exhausted(kind: FollowUpKind, rounds: int, limits: Limits) -> str | None:
+    rule = ROUND_RULES[kind]
+    limit = rule.limit(limits)
+    return rule.exhausted_text.format(limit=limit) if rounds > limit else None
+
+
+def works_on_existing_branch(mode: JobMode) -> bool:
+    return mode is not JobMode.FRESH

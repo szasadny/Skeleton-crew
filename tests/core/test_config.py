@@ -1,8 +1,8 @@
 from pathlib import Path
-from typing import Any
 
 import pytest
 from pydantic import SecretStr, ValidationError
+from web_helpers import make_config
 
 from skeleton_crew.core.config import (
     BootstrapConfig,
@@ -13,22 +13,11 @@ from skeleton_crew.core.config import (
 
 _HASH = "$argon2id$v=19$m=65536,t=3,p=4$c2FsdHNhbHQ$aGFzaGhhc2g"
 _SESSION_SECRET = "s" * 32
-
-
-def _config(**overrides: Any) -> BootstrapConfig:
-    values: dict[str, Any] = {
-        "repo": "acme/widgets",
-        "github_app_id": 1,
-        "github_app_private_key_path": "/nonexistent/key.pem",
-        "ui_password_hash": _HASH,
-        "session_secret": _SESSION_SECRET,
-    }
-    values.update(overrides)
-    return BootstrapConfig.model_validate(values)
+_DATA = Path("/data")
 
 
 def test_valid_config_derives_paths_and_repo_url() -> None:
-    config = _config(data_dir="/data")
+    config = make_config(_DATA)
     assert config.repo_url == "https://github.com/acme/widgets"
     assert config.tasks_dir == Path("/data/tasks")
     assert config.db_path.parent == Path("/data")
@@ -36,7 +25,7 @@ def test_valid_config_derives_paths_and_repo_url() -> None:
 
 
 def test_missing_private_key_file_is_not_checked_at_load() -> None:
-    assert not _config().github_app_private_key_path.exists()
+    assert not make_config(_DATA).github_app_private_key_path.exists()
 
 
 @pytest.mark.parametrize(
@@ -45,26 +34,26 @@ def test_missing_private_key_file_is_not_checked_at_load() -> None:
 )
 def test_invalid_repo_is_rejected(repo: str) -> None:
     with pytest.raises(ValidationError):
-        _config(repo=repo)
+        make_config(_DATA, repo=repo)
 
 
 def test_short_session_secret_is_rejected() -> None:
     with pytest.raises(ValidationError):
-        _config(session_secret="s" * 31)
+        make_config(_DATA, session_secret="s" * 31)
 
 
 def test_plain_password_instead_of_hash_is_rejected() -> None:
     with pytest.raises(ValidationError):
-        _config(ui_password_hash="hunter2hunter2")  # noqa: S106
+        make_config(_DATA, ui_password_hash="hunter2hunter2")  # noqa: S106
 
 
 def test_invalid_bot_login_is_rejected() -> None:
     with pytest.raises(ValidationError):
-        _config(github_bot_login="bad login")
+        make_config(_DATA, github_bot_login="bad login")
 
 
 def test_secret_values_lists_set_secrets_and_repr_hides_them() -> None:
-    config = _config(agent_credentials={"some_key": "sk-test-not-a-real-key"})
+    config = make_config(_DATA, agent_credentials={"some_key": "sk-test-not-a-real-key"})
     assert "sk-test-not-a-real-key" in config.secret_values()
     assert _SESSION_SECRET in config.secret_values()
     assert "sk-test-not-a-real-key" not in repr(config)
@@ -73,12 +62,12 @@ def test_secret_values_lists_set_secrets_and_repr_hides_them() -> None:
 @pytest.mark.parametrize("name", ["bad-name", "1key", "a b", ""])
 def test_invalid_credential_names_are_rejected(name: str) -> None:
     with pytest.raises(ValidationError):
-        _config(agent_credentials={name: "fake-credential-value"})
+        make_config(_DATA, agent_credentials={name: "fake-credential-value"})
 
 
 def test_credential_names_differing_only_in_case_are_rejected() -> None:
     with pytest.raises(ValidationError):
-        _config(agent_credentials={"key": "fake-value-one", "KEY": "fake-value-two"})
+        make_config(_DATA, agent_credentials={"key": "fake-value-one", "KEY": "fake-value-two"})
 
 
 def _set_required_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -119,7 +108,7 @@ def test_get_config_reads_prefixed_env_and_is_cached(
 
 
 def test_required_dirs_hold_every_data_directory() -> None:
-    config = _config(data_dir="/data", runner_allowlist_file="/etc/runners/allowlist.txt")
+    config = make_config(_DATA, runner_allowlist_file="/etc/runners/allowlist.txt")
     assert config.required_dirs == (
         Path("/data"),
         Path("/data/tasks"),

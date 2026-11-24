@@ -13,6 +13,7 @@ REQUIRED_PERMISSIONS: Mapping[str, str] = {
 }
 RULESETS_UNAVAILABLE = "rulesets are unavailable for this repository"
 MISSING_RULESET_ID = "pull request rule without a ruleset id"
+NEVER_BYPASS = "never"
 _LEVELS = {"read": 1, "write": 2, "admin": 3}
 _UNPROTECTED_HINT = "enable 'Allow unprotected base branch' to run without one"
 
@@ -43,7 +44,7 @@ def unprotected_problems(problem: str, *, allow_unprotected: bool) -> list[str]:
 
 
 def bypass_problem(ruleset_id: int, bypass: str) -> str | None:
-    if bypass == "never":
+    if bypass == NEVER_BYPASS:
         return None
     return f"the App can bypass ruleset {ruleset_id} ({bypass or 'unknown'})"
 

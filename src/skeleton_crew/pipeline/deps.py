@@ -9,10 +9,12 @@ from skeleton_crew.agents.base import AgentBackend
 from skeleton_crew.classifiers.base import Classifier
 from skeleton_crew.core.audit import AuditEntry, AuditSink
 from skeleton_crew.core.config import BootstrapConfig
+from skeleton_crew.domain.job_policy import may_start_work
 from skeleton_crew.domain.settings import AppSettings, Role
 from skeleton_crew.github.gateway import Gateway
 from skeleton_crew.runtime.containers import ContainerRuntime
-from skeleton_crew.store import audit_store
+from skeleton_crew.runtime.task_dirs import TaskPaths, task_paths
+from skeleton_crew.store import audit_store, settings_store
 
 
 @dataclass(frozen=True)
@@ -26,6 +28,16 @@ class PipelineDeps:
     secret_scanner: Callable[[bytes], Awaitable[list[str]]]
     clock: Callable[[], datetime]
     sleep: Callable[[float], Awaitable[None]]
+
+    def gateway(self, settings: AppSettings, run_id: int | None = None) -> Gateway:
+        return self.gateway_factory(settings, audit_sink(self.sessionmaker, run_id))
+
+    async def load_settings(self) -> AppSettings:
+        async with self.sessionmaker() as session:
+            return await settings_store.load_settings(session)
+
+    def task_paths(self, key: str) -> TaskPaths:
+        return task_paths(self.config.tasks_dir, key)
 
 
 @dataclass(frozen=True)
@@ -41,7 +53,17 @@ class RunContext:
     audit: AuditSink
     required_checks: frozenset[str]
     classifier: Classifier | None
+    docs_clone: TaskPaths
     halted: asyncio.Event = field(default_factory=asyncio.Event)
+
+    def task_paths(self, key: str) -> TaskPaths:
+        return self.deps.task_paths(key)
+
+    def session(self) -> AsyncSession:
+        return self.deps.sessionmaker()
+
+    def may_start(self) -> bool:
+        return may_start_work(self.halted.is_set(), self.deps.clock(), self.deadline)
 
 
 def audit_sink(sessionmaker: async_sessionmaker[AsyncSession], run_id: int | None) -> AuditSink:

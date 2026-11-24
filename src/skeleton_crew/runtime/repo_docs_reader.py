@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from skeleton_crew.core.git import run_git_sync
+from skeleton_crew.domain.diff_parse import REGULAR_FILE_MODES
 from skeleton_crew.domain.repo_docs import (
     MAX_CANDIDATES,
     MAX_DOC_BYTES,
@@ -12,8 +13,6 @@ from skeleton_crew.domain.repo_docs import (
     linked_paths,
 )
 from skeleton_crew.runtime.controller_git import LOCAL_GIT_TIMEOUT_S
-
-_REGULAR_FILE_MODES = frozenset({"100644", "100755"})
 
 
 @dataclass(frozen=True)
@@ -27,7 +26,7 @@ def _regular_tracked(repo: Path) -> set[str]:
     found = set()
     for entry in listing.decode(errors="surrogateescape").split("\0"):
         info, _, path = entry.partition("\t")
-        if info.split(" ", 1)[0] in _REGULAR_FILE_MODES:
+        if info.split(" ", 1)[0] in REGULAR_FILE_MODES:
             found.add(path)
     return found
 

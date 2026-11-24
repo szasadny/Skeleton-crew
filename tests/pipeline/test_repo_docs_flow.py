@@ -21,7 +21,7 @@ from skeleton_crew.agents.base import SessionOutcome
 from skeleton_crew.domain.settings import Role
 from skeleton_crew.domain.task_keys import selector_key
 from skeleton_crew.domain.task_state import RunState, TaskKind, TaskState
-from skeleton_crew.pipeline.sessions import INBOX, RULES_FILE
+from skeleton_crew.pipeline.sandbox import INBOX, RULES_FILE
 from skeleton_crew.runtime.containers import ROLE_LABEL
 
 DOCS = {

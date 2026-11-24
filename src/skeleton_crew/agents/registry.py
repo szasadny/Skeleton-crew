@@ -4,7 +4,7 @@ from pydantic import SecretStr
 
 from skeleton_crew.agents.backends import claude_code, codex, gemini, opencode
 from skeleton_crew.agents.base import AgentBackend, BackendSpec
-from skeleton_crew.domain.settings import AppSettings, Role
+from skeleton_crew.domain.settings import AppSettings, Role, problem_lines, routed_effort_field
 
 __all__ = [
     "BackendSpec",
@@ -81,8 +81,6 @@ def _role_problems(settings: AppSettings) -> dict[str, list[str]]:
             errors[f"{prefix}.model"] = [problem]
         if agent.effort not in spec.efforts:
             errors[f"{prefix}.effort"] = [f"not a {spec.display_name} effort"]
-        if agent.web_tools and not spec.web_tools:
-            errors[f"{prefix}.web_tools"] = [f"{spec.display_name} has no web tools"]
     return errors
 
 
@@ -110,18 +108,14 @@ def _routed_effort_problems(settings: AppSettings) -> dict[str, list[str]]:
     if not settings.classifier.effort_routing or spec is None:
         return {}
     return {
-        f"classifier.effort_{size}": [f"not a {spec.display_name} effort"]
+        f"classifier.{routed_effort_field(size)}": [f"not a {spec.display_name} effort"]
         for size, effort in settings.classifier.routed_efforts.items()
         if effort not in spec.efforts
     }
 
 
 def settings_problems(settings: AppSettings) -> list[str]:
-    return [
-        f"{field}: {message}"
-        for field, messages in field_problems(settings).items()
-        for message in messages
-    ]
+    return problem_lines(field_problems(settings))
 
 
 def backend_for(

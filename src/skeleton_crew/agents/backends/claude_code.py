@@ -160,5 +160,4 @@ SPEC = BackendSpec(
     factory=ClaudeCodeBackend.create,
     options={"auth_mode": auth_mode_option(AuthMode.SUBSCRIPTION)},
     credentials=ClaudeCodeBackend.credential_names(),
-    web_tools=True,
 )

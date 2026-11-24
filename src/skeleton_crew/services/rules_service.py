@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from skeleton_crew.agents.rules import default_rules
+from skeleton_crew.agents.rules import effective_rules as effective_rules
 from skeleton_crew.core.audit import AuditEntry, AuditKind, AuditOutcome
 from skeleton_crew.domain.settings import check_rule_key
 from skeleton_crew.models.rule_revision import RuleRevision
@@ -17,10 +18,6 @@ class RulesEditor:
     content: str
     is_default: bool
     history: list[RuleRevision]
-
-
-def effective_rules(key: str, active: str | None) -> str:
-    return active or default_rules(key)
 
 
 def _known(key: str) -> None:

@@ -143,5 +143,4 @@ SPEC = BackendSpec(
     factory=CodexBackend.create,
     options={"auth_mode": auth_mode_option(AuthMode.API_KEY)},
     credentials=CodexBackend.credential_names(),
-    web_tools=True,
 )

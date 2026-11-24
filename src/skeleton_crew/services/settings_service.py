@@ -1,4 +1,4 @@
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -99,3 +99,8 @@ async def set_flags(
         )
     await session.commit()
     return new
+
+
+async def engage_kill_switch(session: AsyncSession, stop: Callable[[], Awaitable[None]]) -> None:
+    await set_flags(session, kill_switch=True)
+    await stop()

@@ -6,7 +6,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from skeleton_crew.core.audit import AuditKind
 from skeleton_crew.domain.settings import AppSettings, Limits, RepoPolicy, with_updates
 from skeleton_crew.services.errors import GENERAL
-from skeleton_crew.services.settings_service import InvalidSettings, set_flags, update_settings
+from skeleton_crew.services.settings_service import (
+    InvalidSettings,
+    engage_kill_switch,
+    set_flags,
+    update_settings,
+)
+from skeleton_crew.store import settings_store
 from skeleton_crew.store.settings_store import load_settings, save_settings
 
 
@@ -143,3 +149,35 @@ async def test_flags_leave_other_settings_alone(session: AsyncSession) -> None:
 async def test_no_flags_change_nothing(session: AsyncSession) -> None:
     assert await set_flags(session) == AppSettings()
     assert await audit_events(session) == []
+
+
+async def test_kill_switch_is_saved_and_audited_before_the_run_stops(
+    sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    seen: list[tuple[bool, list[str]]] = []
+
+    async def stop() -> None:
+        async with sessionmaker() as other:
+            events = [e.summary for e in await audit_events(other)]
+            seen.append(((await load_settings(other)).kill_switch, events))
+
+    async with sessionmaker() as session:
+        await engage_kill_switch(session, stop)
+    assert seen == [(True, ["settings changed: kill_switch", "kill switch engaged from the UI"])]
+
+
+async def test_a_failed_kill_switch_save_does_not_stop_the_run(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stops: list[bool] = []
+
+    async def stop() -> None:
+        stops.append(True)
+
+    async def broken(_session: AsyncSession, _settings: AppSettings) -> None:
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(settings_store, "save_settings", broken)
+    with pytest.raises(RuntimeError):
+        await engage_kill_switch(session, stop)
+    assert stops == []

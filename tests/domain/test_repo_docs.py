@@ -1,6 +1,7 @@
 import pytest
 
 from skeleton_crew.domain.repo_docs import (
+    MAX_DOC_BYTES,
     MAX_DOC_CHARS,
     MAX_DOCS,
     MAX_LISTED,
@@ -178,3 +179,7 @@ def test_fence_cannot_be_closed_by_the_doc() -> None:
 def test_short_doc_uses_a_normal_fence() -> None:
     out = render_repo_docs(RepoDocs((RepoDoc("AGENTS.md", "plain `code`"),), ()))
     assert "```markdown\nplain `code`\n```" in out
+
+
+def test_the_byte_cap_reads_one_character_past_the_doc_cap() -> None:
+    assert MAX_DOC_BYTES == 320_004

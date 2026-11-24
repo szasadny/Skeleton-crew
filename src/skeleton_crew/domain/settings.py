@@ -1,5 +1,5 @@
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import time
 from enum import StrEnum
 from functools import partial
@@ -295,6 +295,10 @@ CLASSIFIER_USE_CASES = ("injection_screen", "prescreen", "effort_routing")
 ISSUE_SIZES = ("small", "medium", "large")
 
 
+def routed_effort_field(size: str) -> str:
+    return f"effort_{size}"
+
+
 class ClassifierSettings(_Frozen):
     provider: _ProviderName = DEFAULT_CLASSIFIER
     model: _ModelName = DEFAULT_CLASSIFIER_MODEL
@@ -307,15 +311,11 @@ class ClassifierSettings(_Frozen):
 
     @property
     def enabled(self) -> bool:
-        return self.injection_screen or self.prescreen or self.effort_routing
+        return any(getattr(self, use_case) for use_case in CLASSIFIER_USE_CASES)
 
     @property
     def routed_efforts(self) -> dict[str, str]:
-        return {
-            "small": self.effort_small,
-            "medium": self.effort_medium,
-            "large": self.effort_large,
-        }
+        return {size: getattr(self, routed_effort_field(size)) for size in ISSUE_SIZES}
 
 
 class AppSettings(_Frozen):
@@ -353,6 +353,10 @@ class AppSettings(_Frozen):
                 if not _OPTION_VALUE_RE.fullmatch(option):
                     raise ValueError(f"{backend}.{key} contains unsupported characters")
         return value
+
+
+def problem_lines(problems: Mapping[str, Sequence[str]]) -> list[str]:
+    return [f"{field}: {message}" for field, messages in problems.items() for message in messages]
 
 
 def with_updates(settings: AppSettings, updates: Mapping[str, object]) -> AppSettings:

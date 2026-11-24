@@ -288,6 +288,5 @@ SPEC = BackendSpec(
         "auth_mode": auth_mode_option(AuthMode.API_KEY),
     },
     credentials=(*(key.name for key in _PROVIDERS.values()), _SUBSCRIPTION.name),
-    web_tools=True,
     model_filter=provider_models,
 )

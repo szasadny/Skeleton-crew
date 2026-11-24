@@ -446,6 +446,65 @@ async def test_busy_runner_finishes_its_job_when_demand_ends(
     assert len(runner_starts(harness)) == 2
 
 
+async def test_shown_reasons_are_unchanged(
+    harness: Harness, pool: RunnerPool, clock: Clock
+) -> None:
+    register(harness, "runner-1")
+    await tick(harness, pool)
+    harness.runtime.exit(next(iter(harness.runtime.running.values())))
+    clock.now += 5
+
+    await tick(harness, pool)
+    crashed = pool.statuses()[0].reason
+    await pool.stop()
+    stopped = {s.reason for s in pool.statuses()}
+    harness.settings = harness.settings.model_copy(update={"kill_switch": True})
+    await tick(harness, pool)
+
+    crash = "the runner stopped right after starting; check its registration"
+    assert crashed == f"{crash} (retry in 10s)"
+    assert stopped == {"stopped"}
+    assert {s.reason for s in pool.statuses()} == {"kill switch is engaged"}
+
+
+async def test_ci_off_shows_no_runner(harness: Harness, pool: RunnerPool) -> None:
+    register(harness, "runner-1")
+    harness.settings = harness.settings.model_copy(update={"ci": SelfHostedCi(runners=2)})
+
+    await tick(harness, pool)
+
+    assert pool.statuses() == []
+
+
+async def test_start_failure_reason_and_retry_text(
+    harness: Harness, pool: RunnerPool, clock: Clock
+) -> None:
+    register(harness, "runner-1")
+
+    async def refuse(spec: ContainerSpec) -> ContainerHandle:
+        raise ContainerStartError("no room")
+
+    harness.runtime.start = refuse  # type: ignore[method-assign]
+    await tick(harness, pool)
+    first = pool.statuses()[0].reason
+    clock.now += 4
+    await tick(harness, pool)
+
+    assert first == "no room"
+    assert pool.statuses()[0].reason == "no room (retry in 6s)"
+
+
+async def test_unreadable_visibility_reason_names_the_error(
+    harness: Harness, pool: RunnerPool
+) -> None:
+    harness.gateway.failures["repo_is_private"] = RuntimeError("down")
+
+    await tick(harness, pool)
+
+    reasons = {s.reason for s in pool.statuses()}
+    assert reasons == {"cannot read the repository visibility: RuntimeError"}
+
+
 async def test_kill_switch_removes_a_busy_runner(harness: Harness, pool: RunnerPool) -> None:
     register(harness, "runner-1")
     await tick(harness, pool)

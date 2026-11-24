@@ -36,7 +36,9 @@ from skeleton_crew.domain.task_state import (
     TaskState,
 )
 from skeleton_crew.github.gateway import RulesUnavailable
-from skeleton_crew.pipeline.run_controller import USAGE_LIMIT_NOTE, RunController
+from skeleton_crew.pipeline.outcomes import USAGE_LIMIT_REASON
+from skeleton_crew.pipeline.run_controller import RunController
+from skeleton_crew.pipeline.run_flow import USAGE_LIMIT_NOTE
 from skeleton_crew.runtime.containers import MANAGED_LABEL, MANAGED_VALUE, ContainerHandle
 from skeleton_crew.store import runs_store
 from skeleton_crew.web.ports import RunControl
@@ -476,13 +478,59 @@ async def test_usage_limit_in_a_refine_starts_no_further_refine(harness: Harness
     run_id = await harness.run()
 
     [refine] = await harness.refines(run_id)
-    assert refine.state is RefineState.FAILED
+    assert refine.state is RefineState.ABORTED
     assert len(harness.backend.prompts(Role.REFINER)) == 1
     assert harness.gateway.writes == []
     assert harness.gateway.issues[5].labels == {"skeleton refine"}
     assert harness.gateway.issues[6].labels == {"skeleton refine"}
     run = await harness.run_row(run_id)
     assert (run.state, run.note) == (RunState.FAILED, USAGE_LIMIT_NOTE)
+
+
+async def test_usage_limit_in_a_refine_aborts_it_without_escalating(harness: Harness) -> None:
+    harness.gateway.add_issue(5, "Idea", labels=["skeleton refine"])
+    harness.backend.script(Role.REFINER, limited_outcome(session_id="refine"))
+
+    run_id = await harness.run()
+
+    [refine] = await harness.refines(run_id)
+    assert (refine.state, refine.error) == (RefineState.ABORTED, USAGE_LIMIT_REASON)
+    assert refine.cost_usd == pytest.approx(0.03)
+    assert harness.gateway.writes == []
+    assert harness.gateway.issues[5].labels == {"skeleton refine"}
+    assert AuditKind.TASK_ESCALATED not in {k for k, _ in await harness.audit_kinds()}
+    run = await harness.run_row(run_id)
+    assert (run.state, run.note) == (RunState.FAILED, USAGE_LIMIT_NOTE)
+
+
+async def test_failed_refine_session_fails_the_refine_only(harness: Harness) -> None:
+    harness.gateway.add_issue(5, "Idea", labels=["skeleton refine"])
+    harness.backend.script(Role.REFINER, failed_outcome("session crashed"))
+
+    run_id = await harness.run()
+
+    [refine] = await harness.refines(run_id)
+    assert (refine.state, refine.error) == (
+        RefineState.FAILED,
+        "refiner session failed: session crashed",
+    )
+    assert harness.gateway.writes == []
+    assert (await harness.run_row(run_id)).state is RunState.COMPLETED
+
+
+async def test_failed_selector_session_fails_the_run_without_escalating(harness: Harness) -> None:
+    harness.add_ready_issue(1)
+    harness.backend.script(Role.SELECTOR, failed_outcome("session crashed"))
+
+    run_id = await harness.run()
+
+    assert await harness.tasks(run_id) == []
+    assert harness.gateway.writes == []
+    run = await harness.run_row(run_id)
+    assert (run.state, run.note) == (
+        RunState.FAILED,
+        "selection failed: SessionFailed: selector session failed: session crashed",
+    )
 
 
 async def test_parallel_workers_and_refines_complete(harness: Harness) -> None:

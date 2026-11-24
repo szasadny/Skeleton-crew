@@ -10,6 +10,7 @@ from skeleton_crew.domain.write_policy import (
     check_push,
     check_sha,
     check_title,
+    new_issue_labels,
     short,
 )
 
@@ -45,8 +46,9 @@ def test_non_shas_are_rejected(sha: str) -> None:
 
 
 def test_new_issue_only_ever_gets_the_hitl_label() -> None:
-    labels = LabelNames()
-    assert check_new_issue("Follow-up", labels) == {labels.hitl}
+    labels = LabelNames(hitl="needs a human")
+    assert new_issue_labels(labels) == ["needs a human"]
+    check_new_issue("Follow-up", labels)
     with pytest.raises(PolicyViolation):
         check_new_issue("two\nlines", labels)
 

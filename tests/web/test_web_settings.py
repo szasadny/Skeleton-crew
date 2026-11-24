@@ -8,11 +8,13 @@ from web_helpers import TOKEN_SECRET, Web
 from skeleton_crew.agents.registry import available_backends
 from skeleton_crew.core.audit import AuditKind
 from skeleton_crew.domain.settings import (
+    ISSUE_SIZES,
     AppSettings,
     ClassifierSettings,
     Limits,
     Role,
     Weekday,
+    routed_effort_field,
 )
 from skeleton_crew.web.security import CSRF_FIELD
 
@@ -279,6 +281,25 @@ async def test_agents_rejects_a_routed_effort_the_worker_backend_lacks(web: Web)
     assert status == 422
     assert "not a Claude Code effort" in html
     assert (await web.settings()).classifier == ClassifierSettings()
+
+
+async def test_agents_page_has_one_routed_effort_select_per_issue_size(web: Web) -> None:
+    html = (await web.client.get("/agents")).text
+    for size in ISSUE_SIZES:
+        assert f'<select id="classifier.{routed_effort_field(size)}"' in html
+
+
+@pytest.mark.parametrize("backend", [spec.name for spec in available_backends()])
+async def test_web_tools_can_be_chosen_on_every_backend(web: Web, backend: str) -> None:
+    form = _agents_form(**{"agents.worker.backend": backend})
+    html = (await web.client.get("/agents/draft", params=form)).text
+    assert '<input name="agents.worker.web_tools" type="checkbox">' in html
+
+
+async def test_web_tools_are_disabled_for_an_unknown_backend(web: Web) -> None:
+    form = _agents_form(**{"agents.worker.backend": "evil"})
+    html = (await web.client.get("/agents/draft", params=form)).text
+    assert '<input name="agents.worker.web_tools" type="checkbox" disabled>' in html
 
 
 async def test_agents_page_renders_backend_options_from_the_registry(web: Web) -> None:

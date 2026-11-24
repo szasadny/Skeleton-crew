@@ -2,11 +2,11 @@ import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 
-from skeleton_crew.pipeline.sessions import next_numbered
+from skeleton_crew.domain.job_policy import UNTRUSTED_OUTPUT_CHARS
+from skeleton_crew.domain.task_keys import COMMAND_SUFFIX, RepoCommand
+from skeleton_crew.domain.text_policy import MAX_UTF8_BYTES_PER_CHAR
 from skeleton_crew.pipeline.worker_job import WorkerJob
-from skeleton_crew.runtime.containers import ExecRequest
-
-OUTPUT_TAIL_CHARS = 20_000
+from skeleton_crew.runtime.task_dirs import next_numbered
 
 
 @dataclass(frozen=True)
@@ -26,21 +26,19 @@ class CommandResult:
 
 def _tail(path: Path) -> str:
     with path.open("rb") as file:
-        file.seek(max(path.stat().st_size - OUTPUT_TAIL_CHARS * 4, 0))
-        return file.read().decode(errors="replace")[-OUTPUT_TAIL_CHARS:]
+        file.seek(max(path.stat().st_size - UNTRUSTED_OUTPUT_CHARS * MAX_UTF8_BYTES_PER_CHAR, 0))
+        return file.read().decode(errors="replace")[-UNTRUSTED_OUTPUT_CHARS:]
 
 
-async def run_repo_command(job: WorkerJob, command: str, name: str) -> CommandResult:
-    if job.sandbox is None:
-        raise RuntimeError("worker container is not running")
-    log_path = await asyncio.to_thread(next_numbered, job.sandbox.transcripts, name, ".log")
+async def run_repo_command(job: WorkerJob, command: str, name: RepoCommand) -> CommandResult:
+    transcripts = job.require_sandbox().transcripts
+    log_path = await asyncio.to_thread(next_numbered, transcripts, name, COMMAND_SUFFIX)
     # No env is passed: the repo's own commands never see the model credential.
-    request = ExecRequest.as_agent(
+    result = await job.exec_as_agent(
         ["sh", "-c", f"exec 2>&1\n{command}"],
         timeout_s=job.ctx.settings.limits.command_timeout_s,
         stdout_path=log_path,
     )
-    result = await job.ctx.deps.runtime.exec(job.sandbox.handle, request)
     return CommandResult(
         result.exit_code, result.timed_out, await asyncio.to_thread(_tail, log_path)
     )

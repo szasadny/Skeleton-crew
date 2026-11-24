@@ -2,14 +2,18 @@ from dataclasses import dataclass
 
 from skeleton_crew.domain.ci_policy import CiState
 from skeleton_crew.domain.task_state import TaskEvent
-from skeleton_crew.pipeline.escalation import Escalation
-from skeleton_crew.pipeline.job_engine import Skip, deliver, iterate
-from skeleton_crew.pipeline.texts import COMMIT_AUTHOR, RERUN_CI_MESSAGE, merge_message
+from skeleton_crew.pipeline.outcomes import Escalation, Skip
+from skeleton_crew.pipeline.texts import (
+    CONFLICTS_MESSAGE,
+    RERUN_CI_MESSAGE,
+    merge_breaks_policy,
+    merge_message,
+)
 from skeleton_crew.pipeline.worker_job import WorkerJob
-from skeleton_crew.pipeline.worker_policy import inspect_commit
-from skeleton_crew.runtime.controller_git import CommitSpec, commit_tree, merge_trees, tree_of
+from skeleton_crew.pipeline.worker_policy import PassedCheck, commit_spec, inspect_commit
+from skeleton_crew.runtime.controller_git import commit_tree, merge_trees, tree_of
 
-CONFLICTS_MESSAGE = "Unresolved merge (local only)"
+BRANCH_CHANGED = "the branch changed while the update was prepared"
 
 
 @dataclass(frozen=True)
@@ -25,46 +29,36 @@ async def merge_base(job: WorkerJob) -> BaseMerge:
     base = await ctx.gateway.clone(repo)
     head = await ctx.gateway.fetch_branch(repo, job.branch)
     if head != job.git.remote_sha:
-        raise Skip("the branch changed while the update was prepared")
-    job.git.base_sha = base
+        raise Skip(BRANCH_CHANGED)
     attempt = await merge_trees(repo, head, base)
     return BaseMerge(base, head, attempt.tree, attempt.conflicts)
 
 
-async def resolve_conflicts(job: WorkerJob, merge: BaseMerge) -> None:
-    conflicted = await commit_tree(
-        job.paths.controller_repo,
-        tree=merge.tree,
-        commit=CommitSpec((merge.head,), CONFLICTS_MESSAGE, COMMIT_AUTHOR),
-    )
-    job.git.resolve_merge(conflicted, merge.head, merge.conflicts)
+async def _commit(job: WorkerJob, tree: str, parents: tuple[str, ...], message: str) -> str:
+    spec = commit_spec(parents, message)
+    return await commit_tree(job.paths.controller_repo, tree=tree, commit=spec)
+
+
+async def prepare_conflicts(job: WorkerJob, merge: BaseMerge) -> None:
+    conflicted = await _commit(job, merge.tree, (merge.head,), CONFLICTS_MESSAGE)
+    job.git.resolve_merge(conflicted, merge.head, merge.base, merge.conflicts)
     await job.record.fire(TaskEvent.PREPARED, base_sha=merge.base)
-    await iterate(job, None)
 
 
-async def publish_clean_merge(job: WorkerJob, merge: BaseMerge) -> None:
-    repo = job.paths.controller_repo
-    if merge.tree == await tree_of(repo, merge.head):
+async def prepare_clean_merge(job: WorkerJob, merge: BaseMerge) -> PassedCheck:
+    if merge.tree == await tree_of(job.paths.controller_repo, merge.head):
         merged = await _rerun_failed_ci(job, merge)
     else:
-        merged = await commit_tree(
-            repo,
-            tree=merge.tree,
-            commit=CommitSpec(
-                (merge.head, merge.base),
-                merge_message(job.ctx.settings.repo.base_branch, job.branch),
-                COMMIT_AUTHOR,
-            ),
-        )
-    job.git.continue_from(merged)
+        message = merge_message(job.base_branch, job.branch)
+        merged = await _commit(job, merge.tree, (merge.head, merge.base), message)
+    job.git.merged(merge.base, merged)
     await job.record.fire(TaskEvent.PREPARED, base_sha=merge.base)
     await job.record.fire(TaskEvent.CODE_DONE)
-    check = await inspect_commit(job, merged, b"")
-    if check.violations:
-        raise Escalation(f"merging the base branch breaks policy: {'; '.join(check.violations)}")
-    follow_up = await deliver(job, check, merged, None)
-    if follow_up is not None:
-        await iterate(job, follow_up)
+    inspected = await inspect_commit(job, merged)
+    check = inspected.passed()
+    if check is None:
+        raise Escalation(merge_breaks_policy(inspected.violations))
+    return check
 
 
 async def _rerun_failed_ci(job: WorkerJob, merge: BaseMerge) -> str:
@@ -73,8 +67,4 @@ async def _rerun_failed_ci(job: WorkerJob, merge: BaseMerge) -> str:
     if status.state is not CiState.FAILURE:
         return merge.head
     # An empty commit restarts CI without giving the App write access to Actions.
-    return await commit_tree(
-        job.paths.controller_repo,
-        tree=merge.tree,
-        commit=CommitSpec((merge.head,), RERUN_CI_MESSAGE, COMMIT_AUTHOR),
-    )
+    return await _commit(job, merge.tree, (merge.head,), RERUN_CI_MESSAGE)

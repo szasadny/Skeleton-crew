@@ -4,7 +4,7 @@ from fake_gateway import FakeGitHubGateway
 from pipeline_helpers import FakeClock
 
 from skeleton_crew.domain.ci_policy import CiState
-from skeleton_crew.pipeline.ci_watcher import wait_for_ci
+from skeleton_crew.pipeline.ci_watcher import CiWait, wait_for_ci
 
 SHA = "a" * 40
 
@@ -22,16 +22,8 @@ class Watch:
         self.clock.advance(seconds)
 
     async def wait(self) -> CiState:
-        status = await wait_for_ci(
-            self.gateway,
-            SHA,
-            required=(),
-            poll_s=60,
-            timeout_s=600,
-            grace_s=180,
-            sleep=self.sleep,
-            clock=self.clock,
-        )
+        wait = CiWait(required=(), poll_s=60, timeout_s=600, grace_s=180)
+        status = await wait_for_ci(self.gateway, SHA, wait, self)
         return status.state
 
 

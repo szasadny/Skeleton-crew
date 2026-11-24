@@ -4,7 +4,12 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
-from skeleton_crew.domain.task_keys import is_task_key
+from skeleton_crew.domain.task_keys import (
+    TRANSCRIPTS_DIR,
+    is_task_key,
+    name_number,
+    numbered_name,
+)
 
 log = logging.getLogger(__name__)
 
@@ -27,7 +32,7 @@ def task_paths(tasks_dir: Path, task_key: str) -> TaskPaths:
         controller_repo=root / "controller",
         agent_repo=root / "agent",
         inbox=root / "inbox",
-        transcripts=root / "transcripts",
+        transcripts=root / TRANSCRIPTS_DIR,
     )
 
 
@@ -60,3 +65,10 @@ def remove_task_dirs(tasks_dir: Path, keys: Iterable[str]) -> list[str]:
             continue
         removed.append(key)
     return removed
+
+
+def next_numbered(directory: Path, stem: str, suffix: str) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    numbers = (name_number(path.name, stem, suffix) for path in directory.iterdir())
+    used = max((n for n in numbers if n is not None), default=0)
+    return directory / numbered_name(stem, used + 1, suffix)

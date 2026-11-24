@@ -2,6 +2,8 @@ import re
 import unicodedata
 
 TRUNCATION_SUFFIX = "\n\n… (truncated)"
+MAX_UTF8_BYTES_PER_CHAR = 4
+MIN_TEXT_ROOM = 100
 _ZWSP = "\u200b"
 # Trojan Source: bidi embeddings, overrides and isolates reorder rendered text.
 _BIDI_CONTROLS = frozenset("\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069")
@@ -41,6 +43,15 @@ def truncate_text(text: str, max_chars: int) -> str:
     if len(text) > max_chars:
         return text[: max_chars - len(TRUNCATION_SUFFIX)] + TRUNCATION_SUFFIX
     return text
+
+
+def text_room(max_chars: int, reserved: int) -> int:
+    return max(max_chars - reserved, MIN_TEXT_ROOM)
+
+
+def questions_budget(budget: int) -> int:
+    # The owner acts on the questions, so they keep their room and the spec is cut instead.
+    return budget // 2
 
 
 def sanitize_agent_text(text: str, max_chars: int) -> str:

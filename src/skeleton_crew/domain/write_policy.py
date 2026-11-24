@@ -22,11 +22,13 @@ def check_sha(sha: str) -> None:
         raise PolicyViolation(f"not a full commit sha: {short(sha)!r}")
 
 
-def check_new_issue(title: str, labels: LabelNames) -> frozenset[str]:
+def new_issue_labels(labels: LabelNames) -> list[str]:
+    return [labels.hitl]
+
+
+def check_new_issue(title: str, labels: LabelNames) -> None:
     check_title(title)
-    to_set = frozenset({labels.hitl})
-    check_new_issue_labels(to_set, labels)
-    return to_set
+    check_new_issue_labels(frozenset(new_issue_labels(labels)), labels)
 
 
 def check_open_pr(branch: str, title: str, base_branch: str) -> None:

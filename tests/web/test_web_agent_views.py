@@ -6,6 +6,7 @@ from skeleton_crew.domain.settings import (
     AppSettings,
     ClassifierSettings,
     Role,
+    routed_effort_field,
 )
 from skeleton_crew.web.forms import form_values
 from skeleton_crew.web.views.agents import BACKENDS, BackendView, ClassifierView, agents_context
@@ -15,7 +16,8 @@ _TOKEN = {"claude_oauth_token": SecretStr("oauth-token-value-for-tests")}
 
 
 def test_use_cases_and_issue_sizes_cover_the_classifier_settings() -> None:
-    names = {"provider", "model", *CLASSIFIER_USE_CASES, *(f"effort_{s}" for s in ISSUE_SIZES)}
+    efforts = {routed_effort_field(size) for size in ISSUE_SIZES}
+    names = {"provider", "model", *CLASSIFIER_USE_CASES, *efforts}
     assert names == set(ClassifierSettings.model_fields)
     assert tuple(ClassifierSettings().routed_efforts) == ISSUE_SIZES
 

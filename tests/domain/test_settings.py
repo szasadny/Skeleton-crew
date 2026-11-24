@@ -7,10 +7,12 @@ import pytest
 from pydantic import ValidationError
 
 from skeleton_crew.domain.settings import (
+    CLASSIFIER_USE_CASES,
     COMMON_RULES,
     MAX_RULES_CHARS,
     RULE_KEYS,
     AppSettings,
+    ClassifierSettings,
     InvalidRules,
     LabelNames,
     Limits,
@@ -22,6 +24,7 @@ from skeleton_crew.domain.settings import (
     check_domains,
     check_rule_key,
     check_rules_content,
+    problem_lines,
 )
 
 SNAPSHOTS = Path(__file__).with_name("settings_snapshots.json")
@@ -267,3 +270,22 @@ def test_domain_check_returns_valid_domains_and_rejects_invalid_ones() -> None:
     assert check_domains(("pypi.org", ".example.com")) == ("pypi.org", ".example.com")
     with pytest.raises(ValueError, match="invalid domain: localhost"):
         check_domains(("pypi.org", "localhost"))
+
+
+def test_problem_lines_name_the_field_once_per_message() -> None:
+    problems = {"agents.worker.model": ["a", "b"], "classifier.model": ["c"], "x": []}
+    assert problem_lines(problems) == [
+        "agents.worker.model: a",
+        "agents.worker.model: b",
+        "classifier.model: c",
+    ]
+
+
+@pytest.mark.parametrize("use_case", CLASSIFIER_USE_CASES)
+def test_any_single_use_case_enables_the_classifier(use_case: str) -> None:
+    assert ClassifierSettings.model_validate({use_case: True}).enabled is True
+
+
+def test_routed_efforts_map_each_size_to_its_field() -> None:
+    chosen = ClassifierSettings(effort_small="s", effort_medium="m", effort_large="l")
+    assert chosen.routed_efforts == {"small": "s", "medium": "m", "large": "l"}

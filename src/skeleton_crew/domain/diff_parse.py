@@ -33,7 +33,8 @@ class AddedLine:
 NO_MODE = "000000"
 SYMLINK_MODE = "120000"
 SUBMODULE_MODE = "160000"
-_KNOWN_MODES = frozenset({NO_MODE, "100644", "100755", SYMLINK_MODE, SUBMODULE_MODE})
+REGULAR_FILE_MODES = frozenset({"100644", "100755"})
+_KNOWN_MODES = frozenset({NO_MODE, *REGULAR_FILE_MODES, SYMLINK_MODE, SUBMODULE_MODE})
 _RAW_RE = re.compile(r":([0-7]{6}) ([0-7]{6}) ([0-9a-f]{7,64}) ([0-9a-f]{7,64}) ([AMDT])")
 _COUNT_RE = re.compile(r"0|[1-9][0-9]{0,9}")
 _HUNK_RE = re.compile(r"@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@.*")

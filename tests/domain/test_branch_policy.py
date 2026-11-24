@@ -2,15 +2,19 @@ import pytest
 
 from skeleton_crew.domain.branch_policy import (
     BRANCH_PREFIX,
+    Mergeability,
     branch_name,
     check_issue_number,
     check_push_target,
     continuation_problem,
     is_skeleton_branch,
     issue_number_from_branch,
+    mergeability,
+    needs_finishing,
     pushed_by_controller,
 )
 from skeleton_crew.domain.errors import PolicyViolation
+from skeleton_crew.domain.task_state import TaskState
 
 
 @pytest.mark.parametrize(
@@ -183,3 +187,20 @@ def test_issue_number_maximum_is_optional_and_inclusive() -> None:
     check_issue_number(5, maximum=5)
     with pytest.raises(PolicyViolation, match="invalid issue number: 6"):
         check_issue_number(6, maximum=5)
+
+
+@pytest.mark.parametrize("state", [s for s in TaskState if s is not TaskState.DONE])
+def test_a_pr_whose_last_task_did_not_end_done_needs_finishing(state: TaskState) -> None:
+    assert needs_finishing(state)
+
+
+def test_a_done_pr_needs_no_finishing() -> None:
+    assert not needs_finishing(TaskState.DONE)
+
+
+@pytest.mark.parametrize(
+    ("mergeable", "expected"),
+    [(False, Mergeability.CONFLICTS), (True, Mergeability.CLEAN), (None, Mergeability.UNKNOWN)],
+)
+def test_github_mergeable_flag(mergeable: bool | None, expected: Mergeability) -> None:
+    assert mergeability(mergeable) is expected

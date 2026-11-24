@@ -33,8 +33,7 @@ async def run_now(request: Request) -> Response:
 
 @router.post("/actions/kill")
 async def kill(request: Request, session: SessionDep) -> Response:
-    await settings_service.set_flags(session, kill_switch=True)
-    await get_state(request).controller.kill()
+    await settings_service.engage_kill_switch(session, get_state(request).controller.kill)
     return redirect("/", Message.KILLED)
 
 

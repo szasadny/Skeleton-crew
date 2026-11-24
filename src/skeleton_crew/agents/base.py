@@ -38,7 +38,6 @@ class SessionRequest:
     json_schema: str
     rules_path_in_container: str
     prompt_path_in_container: str
-    schema_path_in_container: str
     cwd: str
     resume_session_id: str | None = None
     max_budget_usd: float | None = None
@@ -92,7 +91,6 @@ class BackendSpec:
     factory: BackendFactory
     options: Mapping[str, OptionSpec] = field(default_factory=dict)
     credentials: tuple[str, ...] = ()
-    web_tools: bool = False
     model_filter: ModelFilter | None = None
 
 

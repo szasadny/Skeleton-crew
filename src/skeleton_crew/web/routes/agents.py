@@ -5,7 +5,13 @@ from fastapi import APIRouter
 
 from skeleton_crew.agents.registry import field_problems
 from skeleton_crew.classifiers import registry as classifiers
-from skeleton_crew.domain.settings import CLASSIFIER_USE_CASES, ISSUE_SIZES, AppSettings, Role
+from skeleton_crew.domain.settings import (
+    CLASSIFIER_USE_CASES,
+    ISSUE_SIZES,
+    AppSettings,
+    Role,
+    routed_effort_field,
+)
 from skeleton_crew.web.forms import Kind
 from skeleton_crew.web.settings_page import PageHooks, SettingsPage
 from skeleton_crew.web.state import WebState
@@ -29,7 +35,7 @@ _FIELDS = {
     "classifier.provider": Kind.TEXT,
     "classifier.model": Kind.TEXT,
     **{f"classifier.{name}": Kind.BOOL for name in CLASSIFIER_USE_CASES},
-    **{f"classifier.effort_{size}": Kind.TEXT for size in ISSUE_SIZES},
+    **{f"classifier.{routed_effort_field(size)}": Kind.TEXT for size in ISSUE_SIZES},
 }
 
 
@@ -47,7 +53,7 @@ SettingsPage(
     context={
         "backend_names": tuple(BACKENDS),
         "classifier_names": tuple(CLASSIFIERS),
-        "issue_sizes": ISSUE_SIZES,
+        "routed_effort_fields": {size: routed_effort_field(size) for size in ISSUE_SIZES},
     },
     hooks=PageHooks(check=_problems, live_context=_live),
 ).include(router, "/agents", draft=True)

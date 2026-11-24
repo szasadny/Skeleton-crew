@@ -5,22 +5,15 @@ from dataclasses import dataclass
 from skeleton_crew.classifiers.base import Answers, ClassifierError
 from skeleton_crew.domain.classifier_policy import (
     INJECTION,
-    READINESS,
-    SIZE,
     Choice,
+    ScreenVerdict,
     injection_problem,
-    readiness_problem,
-    routed_effort,
+    injection_questions,
+    ready_issue_questions,
+    screen_verdict,
 )
-from skeleton_crew.domain.trust_policy import IssueComment
-from skeleton_crew.github.gateway import IssueRef
+from skeleton_crew.pipeline.candidates import Candidate, Candidates
 from skeleton_crew.pipeline.deps import RunContext
-from skeleton_crew.pipeline.run_setup import Candidates
-
-_READINESS_REASONS = {
-    "too_large": "the pre-screen judged the issue too large for one pull request",
-    "unclear": "the pre-screen judged the issue unclear: it needs more detail or an owner decision",
-}
 
 log = logging.getLogger(__name__)
 
@@ -32,11 +25,8 @@ class Screened:
     efforts: dict[int, str]
 
 
-def injection_reason(source: str, problem: str) -> str:
-    return f"the injection screen stopped the {source}: {problem}. Edit the text to go on"
-
-
-def issue_text(issue: IssueRef, comments: Sequence[IssueComment]) -> str:
+def issue_text(candidate: Candidate) -> str:
+    issue, comments = candidate.issue, candidate.comments
     parts = [issue.title, issue.body, *(f"Comment by {c.author}:\n{c.body}" for c in comments)]
     return "\n\n".join(parts)
 
@@ -51,43 +41,30 @@ async def _ask(ctx: RunContext, state: str, questions: Sequence[Choice]) -> Answ
         return {}
 
 
-async def _screen_issue(
-    ctx: RunContext, issue: IssueRef, comments: Sequence[IssueComment], *, ready: bool
-) -> tuple[str | None, str | None]:
-    chosen = ctx.settings.classifier
-    wanted = (
-        (INJECTION, chosen.injection_screen),
-        (READINESS, ready and chosen.prescreen),
-        (SIZE, ready and chosen.effort_routing),
-    )
-    questions = [question for question, on in wanted if on]
-    answers = await _ask(ctx, issue_text(issue, comments), questions)
-    if chosen.injection_screen and (problem := injection_problem(answers.get(INJECTION.name))):
-        return injection_reason("issue text", problem), None
-    if READINESS in questions and (verdict := readiness_problem(answers.get(READINESS.name))):
-        return _READINESS_REASONS[verdict], None
-    if SIZE in questions:
-        return None, routed_effort(answers.get(SIZE.name), chosen.routed_efforts)
-    return None, None
+async def _screen(
+    ctx: RunContext, candidate: Candidate, questions: Sequence[Choice]
+) -> ScreenVerdict:
+    answers = await _ask(ctx, issue_text(candidate), questions)
+    return screen_verdict(questions, answers, ctx.settings.classifier.routed_efforts)
 
 
 async def screen_candidates(ctx: RunContext, candidates: Candidates) -> Screened:
     if ctx.classifier is None:
         return Screened(candidates, {}, {})
+    chosen = ctx.settings.classifier
     escalations: dict[int, str] = {}
     efforts: dict[int, str] = {}
-    for ready, items in (
-        (True, candidates.ready),
-        (False, candidates.refine),
-        (False, candidates.open_prs),
+    for items, questions in (
+        (candidates.ready, ready_issue_questions(chosen)),
+        (candidates.refine, injection_questions(chosen)),
+        ([pr.candidate for pr in candidates.open_prs], injection_questions(chosen)),
     ):
         for item in items:
-            number = item.issue.number
-            reason, effort = await _screen_issue(ctx, item.issue, item.comments, ready=ready)
-            if reason is not None:
-                escalations[number] = reason
-            elif effort is not None:
-                efforts[number] = effort
+            verdict = await _screen(ctx, item, questions)
+            if verdict.escalation is not None:
+                escalations[item.issue.number] = verdict.escalation
+            elif verdict.effort is not None:
+                efforts[item.issue.number] = verdict.effort
     kept = Candidates(
         ready=[c for c in candidates.ready if c.issue.number not in escalations],
         refine=[c for c in candidates.refine if c.issue.number not in escalations],

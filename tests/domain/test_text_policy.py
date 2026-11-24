@@ -2,7 +2,14 @@ import re
 
 import pytest
 
-from skeleton_crew.domain.text_policy import TRUNCATION_SUFFIX, sanitize_agent_text, truncate_text
+from skeleton_crew.domain.text_policy import (
+    MIN_TEXT_ROOM,
+    TRUNCATION_SUFFIX,
+    questions_budget,
+    sanitize_agent_text,
+    text_room,
+    truncate_text,
+)
 
 ZWSP = "\u200b"
 LIMIT = 10_000
@@ -184,3 +191,18 @@ def test_truncate_text_caps_without_sanitising() -> None:
     assert capped.endswith(TRUNCATION_SUFFIX)
     with pytest.raises(ValueError, match="suffix"):
         truncate_text("x", len(TRUNCATION_SUFFIX))
+
+
+def test_text_room_leaves_what_the_reserved_part_does_not_use() -> None:
+    assert text_room(1500, 40) == 1460
+
+
+def test_text_room_never_drops_below_the_minimum() -> None:
+    assert MIN_TEXT_ROOM == 100
+    assert text_room(200, 150) == MIN_TEXT_ROOM
+    assert text_room(50, 500) == MIN_TEXT_ROOM
+
+
+def test_questions_get_half_of_the_refine_budget() -> None:
+    assert questions_budget(1481) == 740
+    assert questions_budget(0) == 0

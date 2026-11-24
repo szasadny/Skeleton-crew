@@ -1,6 +1,8 @@
 import math
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
+
+from skeleton_crew.domain.settings import ClassifierSettings
 
 type Answer = Mapping[str, float]
 
@@ -8,6 +10,10 @@ ESCALATE_PROBABILITY = 0.9
 ROUTE_PROBABILITY = 0.6
 INJECTION_PROBABILITY = 0.5
 _SUM_TOLERANCE = 0.05
+READINESS_REASONS = {
+    "too_large": "the pre-screen judged the issue too large for one pull request",
+    "unclear": "the pre-screen judged the issue unclear: it needs more detail or an owner decision",
+}
 
 
 @dataclass(frozen=True)
@@ -86,3 +92,38 @@ def routed_effort(answer: Answer | None, efforts: Mapping[str, str]) -> str | No
         return None
     size = max(checked, key=lambda option: checked[option])
     return efforts.get(size) if checked[size] >= ROUTE_PROBABILITY else None
+
+
+def injection_reason(source: str, problem: str) -> str:
+    return f"the injection screen stopped the {source}: {problem}. Edit the text to go on"
+
+
+@dataclass(frozen=True)
+class ScreenVerdict:
+    escalation: str | None = None
+    effort: str | None = None
+
+
+def injection_questions(settings: ClassifierSettings) -> list[Choice]:
+    return [INJECTION] if settings.injection_screen else []
+
+
+def ready_issue_questions(settings: ClassifierSettings) -> list[Choice]:
+    wanted = (
+        (INJECTION, settings.injection_screen),
+        (READINESS, settings.prescreen),
+        (SIZE, settings.effort_routing),
+    )
+    return [question for question, on in wanted if on]
+
+
+def screen_verdict(
+    questions: Collection[Choice], answers: Mapping[str, Answer], efforts: Mapping[str, str]
+) -> ScreenVerdict:
+    if INJECTION in questions and (problem := injection_problem(answers.get(INJECTION.name))):
+        return ScreenVerdict(escalation=injection_reason("issue text", problem))
+    if READINESS in questions and (verdict := readiness_problem(answers.get(READINESS.name))):
+        return ScreenVerdict(escalation=READINESS_REASONS[verdict])
+    if SIZE in questions:
+        return ScreenVerdict(effort=routed_effort(answers.get(SIZE.name), efforts))
+    return ScreenVerdict()
