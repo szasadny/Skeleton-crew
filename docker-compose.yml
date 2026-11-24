@@ -66,16 +66,21 @@ services:
       - controller
     restart: unless-stopped
 
+  # Built from images/ so both images can copy images/common.
   agent-image:
     profiles:
       - build
-    build: src/skeleton_crew/runtime/images/agent
+    build:
+      context: src/skeleton_crew/runtime/images
+      dockerfile: agent/Dockerfile
     image: skeleton-crew-agent:latest
 
   runner-image:
     profiles:
       - build
-    build: src/skeleton_crew/runtime/images/runner
+    build:
+      context: src/skeleton_crew/runtime/images
+      dockerfile: runner/Dockerfile
     image: skeleton-crew-runner:latest
 
 networks:

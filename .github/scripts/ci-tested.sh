@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
-# Usage: ci-tested.sh <artifact-prefix> <workflow-path>; writes tested=true|false to $GITHUB_OUTPUT.
+# Usage: ci-tested.sh check <artifact-prefix> <workflow-path> | ci-tested.sh tree; writes to $GITHUB_OUTPUT.
 set -uo pipefail
 
-prefix=$1
-workflow=$2
 repo=repos/$GITHUB_REPOSITORY
 
+tree_sha() {
+	gh api "$repo/git/commits/$GITHUB_SHA" --jq .tree.sha
+}
+
 tested() {
-	local tree heads entry
-	tree=$(gh api "$repo/git/commits/$GITHUB_SHA" --jq .tree.sha) || return 1
+	local prefix=$1 workflow=$2 tree heads entry
+	tree=$(tree_sha) || return 1
 	heads=$(gh api "$repo/commits/$GITHUB_SHA/pulls" --jq '.[] | select(.merged_at) | .head.sha') || return 1
 	[[ -n $heads ]] || return 1
 	for entry in $(gh api "$repo/actions/artifacts?name=$prefix-tested-$tree" \
@@ -21,4 +23,16 @@ tested() {
 	return 1
 }
 
-if tested; then echo tested=true; else echo tested=false; fi >>"$GITHUB_OUTPUT"
+case ${1:-} in
+check)
+	if tested "$2" "$3"; then echo tested=true; else echo tested=false; fi >>"$GITHUB_OUTPUT"
+	;;
+tree)
+	tree=$(tree_sha) || exit 1
+	echo "sha=$tree" >>"$GITHUB_OUTPUT"
+	;;
+*)
+	echo "usage: ci-tested.sh check <artifact-prefix> <workflow-path> | ci-tested.sh tree" >&2
+	exit 2
+	;;
+esac

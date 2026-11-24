@@ -11,22 +11,14 @@ permissions:
 jobs:
   gate:
     if: github.event_name == 'push'
-    runs-on: ubuntu-24.04
     permissions:
       actions: read
       contents: read
       pull-requests: read
-    outputs:
-      tested: ${{ steps.check.outputs.tested }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          sparse-checkout: .github/scripts
-      - id: check
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: .github/scripts/ci-tested.sh ci .github/workflows/ci.yml
+    uses: ./.github/workflows/tested-gate.yml
+    with:
+      prefix: ci
+      workflow: .github/workflows/ci.yml
 
   check:
     needs: gate
@@ -58,17 +50,6 @@ jobs:
   record:
     needs: [check, security]
     if: ${{ github.event_name == 'pull_request' && !cancelled() && needs.check.result == 'success' && needs.security.result == 'success' }}
-    runs-on: ubuntu-24.04
-    steps:
-      - id: tree
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          tree=$(gh api "repos/$GITHUB_REPOSITORY/git/commits/$GITHUB_SHA" --jq .tree.sha)
-          echo "sha=$tree" >>"$GITHUB_OUTPUT"
-          echo "$GITHUB_SHA" >tested
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: ci-tested-${{ steps.tree.outputs.sha }}
-          path: tested
-          retention-days: 30
+    uses: ./.github/workflows/tested-record.yml
+    with:
+      prefix: ci

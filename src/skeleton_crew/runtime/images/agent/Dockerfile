@@ -6,7 +6,6 @@ ARG CODEX_SHA256=3bbf75e83de6b58aed28f2cf6e33ad423ec31fd4700a1457b94be557ea5a7c6
 ARG GEMINI_CLI_VERSION=0.67.0
 ARG OPENCODE_VERSION=1.19.5
 ARG OPENCODE_SHA256=588310a336fa3b9df36b3f0225b26f679d453efaad0cf3d66c3651ef3ec1647a
-ARG DOCKER_GPG_FINGERPRINT=9DC858229FC7DD38854AE2D88D81803C0EBFCD88
 ARG MISE_VERSION=2026.11.1
 ARG MISE_SHA256=7129dbab31d698f9028db9374f7ba7987232b0426f837dcbce437130a61415f9
 
@@ -34,17 +33,8 @@ RUN apt-get update \
         build-essential make python3 python3-pip python3-venv nodejs npm \
     && rm -rf /var/lib/apt/lists/*
 
-RUN install -m 0755 -d /etc/apt/keyrings \
-    && curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc \
-    && gpg --show-keys --with-colons /etc/apt/keyrings/docker.asc \
-        | grep -q "^fpr:::::::::${DOCKER_GPG_FINGERPRINT}:" \
-    && chmod a+r /etc/apt/keyrings/docker.asc \
-    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "${VERSION_CODENAME}") stable" \
-        > /etc/apt/sources.list.d/docker.list \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends \
-        docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin \
-    && rm -rf /var/lib/apt/lists/*
+RUN --mount=type=bind,source=common/install-docker.sh,target=/tmp/install-docker.sh \
+    bash /tmp/install-docker.sh
 
 RUN curl -fsSL -o /tmp/mise \
         "https://github.com/jdx/mise/releases/download/v${MISE_VERSION}/mise-v${MISE_VERSION}-linux-x64" \
@@ -92,7 +82,8 @@ RUN userdel --remove ubuntu \
 RUN install -d -o agent -g agent /home/agent/.config \
     && install -d -m 0555 /home/agent/.config/opencode
 
-COPY --chmod=0755 entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY --chmod=0755 common/dockerd.sh /usr/local/lib/skeleton-crew/dockerd.sh
+COPY --chmod=0755 agent/entrypoint.sh /usr/local/bin/entrypoint.sh
 
 WORKDIR /workspace
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

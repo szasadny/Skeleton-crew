@@ -5,11 +5,15 @@ on:
     branches: [main]
     paths: &paths
       - src/skeleton_crew/runtime/**
-      - src/skeleton_crew/domain/errors.py
+      - src/skeleton_crew/domain/**
       - tests/runtime/**
+      - tests/fakes/fake_runtime.py
       - scripts/install.sh
       - uv.lock
       - .github/workflows/docker.yml
+      - .github/workflows/tested-gate.yml
+      - .github/workflows/tested-record.yml
+      - .github/scripts/ci-tested.sh
   pull_request:
     paths: *paths
 
@@ -19,22 +23,14 @@ permissions:
 jobs:
   gate:
     if: github.event_name == 'push'
-    runs-on: ubuntu-24.04
     permissions:
       actions: read
       contents: read
       pull-requests: read
-    outputs:
-      tested: ${{ steps.check.outputs.tested }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          sparse-checkout: .github/scripts
-      - id: check
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: .github/scripts/ci-tested.sh docker .github/workflows/docker.yml
+    uses: ./.github/workflows/tested-gate.yml
+    with:
+      prefix: docker
+      workflow: .github/workflows/docker.yml
 
   docker:
     needs: gate
@@ -48,32 +44,17 @@ jobs:
       - run: uv sync --locked
       - name: Install Sysbox
         run: |
-          source <(grep -E '^SYSBOX_(VERSION|SHA256)=' scripts/install.sh)
-          deb="$RUNNER_TEMP/sysbox-ce_${SYSBOX_VERSION}.linux_amd64.deb"
-          curl -fsSLo "$deb" \
-            "https://github.com/nestybox/sysbox/releases/download/v${SYSBOX_VERSION}/sysbox-ce_${SYSBOX_VERSION}.linux_amd64.deb"
-          echo "$SYSBOX_SHA256  $deb" | sha256sum -c -
+          deb=$(scripts/install.sh fetch-sysbox "$RUNNER_TEMP")
           sudo apt-get update
           sudo apt-get install -y fuse3 jq "$deb"
           docker info --format '{{json .Runtimes}}' | grep -q '"sysbox-runc"'
-      - run: docker build -t skeleton-crew-agent:latest src/skeleton_crew/runtime/images/agent
-      - run: docker build -t skeleton-crew-runner:latest src/skeleton_crew/runtime/images/runner
+      - run: docker build -t skeleton-crew-agent:latest -f src/skeleton_crew/runtime/images/agent/Dockerfile src/skeleton_crew/runtime/images
+      - run: docker build -t skeleton-crew-runner:latest -f src/skeleton_crew/runtime/images/runner/Dockerfile src/skeleton_crew/runtime/images
       - run: uv run --no-sync pytest -m docker -q
 
   record:
     needs: docker
     if: ${{ github.event_name == 'pull_request' && !cancelled() && needs.docker.result == 'success' }}
-    runs-on: ubuntu-24.04
-    steps:
-      - id: tree
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          tree=$(gh api "repos/$GITHUB_REPOSITORY/git/commits/$GITHUB_SHA" --jq .tree.sha)
-          echo "sha=$tree" >>"$GITHUB_OUTPUT"
-          echo "$GITHUB_SHA" >tested
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: docker-tested-${{ steps.tree.outputs.sha }}
-          path: tested
-          retention-days: 30
+    uses: ./.github/workflows/tested-record.yml
+    with:
+      prefix: docker

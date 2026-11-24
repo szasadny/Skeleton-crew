@@ -4,7 +4,6 @@ ARG RUNNER_VERSION=2.338.2
 ARG RUNNER_SHA256=baebf204307bac6193480852732f0aba2ae97b6c5597c244f4d5558390147c40
 ARG GH_VERSION=2.103.3
 ARG GH_SHA256=e3bafef96328d1a67de3a968bdfe1cc2ffd58cf6aba8b5e201356897ed06bb3d
-ARG DOCKER_GPG_FINGERPRINT=9DC858229FC7DD38854AE2D88D81803C0EBFCD88
 
 ENV DEBIAN_FRONTEND=noninteractive \
     RUNNER_DIR=/home/runner/actions-runner \
@@ -18,17 +17,8 @@ RUN apt-get update \
         build-essential make python3 python3-pip python3-venv \
     && rm -rf /var/lib/apt/lists/*
 
-RUN install -m 0755 -d /etc/apt/keyrings \
-    && curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc \
-    && gpg --show-keys --with-colons /etc/apt/keyrings/docker.asc \
-        | grep -q "^fpr:::::::::${DOCKER_GPG_FINGERPRINT}:" \
-    && chmod a+r /etc/apt/keyrings/docker.asc \
-    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "${VERSION_CODENAME}") stable" \
-        > /etc/apt/sources.list.d/docker.list \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends \
-        docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin \
-    && rm -rf /var/lib/apt/lists/*
+RUN --mount=type=bind,source=common/install-docker.sh,target=/tmp/install-docker.sh \
+    bash /tmp/install-docker.sh
 
 RUN curl -fsSL -o /tmp/gh.deb \
         "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.deb" \
@@ -51,6 +41,7 @@ RUN install -d -o runner -g runner "${RUNNER_DIR}" \
     && "${RUNNER_DIR}/bin/installdependencies.sh" \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --chmod=0755 entrypoint.sh job-started.sh /usr/local/bin/
+COPY --chmod=0755 common/dockerd.sh /usr/local/lib/skeleton-crew/dockerd.sh
+COPY --chmod=0755 runner/entrypoint.sh runner/job-started.sh /usr/local/bin/
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# shellcheck source=/dev/null
+source /usr/local/lib/skeleton-crew/dockerd.sh
+
 CONFIG_DIR=/runner-config
 CONFIG_FILES=(.runner .credentials .credentials_rsaparams)
-DOCKERD_WAIT_S=30
-NOT_REGISTERED_EXIT=3
-
-log() { printf '[entrypoint] %s\n' "$*" >&2; }
 
 register() {
     if [[ ! -d "$CONFIG_DIR" ]]; then
@@ -43,30 +42,18 @@ setup_proxy() {
     chown runner:runner /home/runner/.docker/config.json
 }
 
-start_dockerd() {
-    dockerd >/var/log/dockerd.log 2>&1 &
-    for _ in $(seq 1 "$DOCKERD_WAIT_S"); do
-        if docker info >/dev/null 2>&1; then
-            return 0
-        fi
-        sleep 1
-    done
-    log "dockerd not ready after ${DOCKERD_WAIT_S}s; see /var/log/dockerd.log"
-    exit 1
-}
-
 run_once() {
     for file in "${CONFIG_FILES[@]}"; do
         if [[ ! -f "$CONFIG_DIR/$file" ]]; then
             log "not registered: $CONFIG_DIR/$file is missing"
-            exit "$NOT_REGISTERED_EXIT"
+            exit 2
         fi
         # A copy: the mount is read-only and every job starts from the registered config.
         install -m 0600 -o runner -g runner "$CONFIG_DIR/$file" "$RUNNER_DIR/$file"
     done
     setup_proxy
-    start_dockerd
-    touch /run/skeleton-crew-ready
+    start_dockerd || exit 1
+    mark_ready
     cd "$RUNNER_DIR"
     exec runuser -u runner -- ./run.sh --once
 }

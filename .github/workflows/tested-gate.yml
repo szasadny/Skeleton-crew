@@ -1,0 +1,38 @@
+name: Tested gate
+
+on:
+  workflow_call:
+    inputs:
+      prefix:
+        type: string
+        required: true
+      workflow:
+        type: string
+        required: true
+    outputs:
+      tested:
+        value: ${{ jobs.gate.outputs.tested }}
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    outputs:
+      tested: ${{ steps.check.outputs.tested }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREFIX: ${{ inputs.prefix }}
+          WORKFLOW: ${{ inputs.workflow }}
+        run: .github/scripts/ci-tested.sh check "$PREFIX" "$WORKFLOW"

@@ -19,6 +19,7 @@ updates:
       - /docker
       - /src/skeleton_crew/runtime/images/agent
       - /src/skeleton_crew/runtime/images/egress-proxy
+      - /src/skeleton_crew/runtime/images/runner
     schedule:
       interval: weekly
     groups:

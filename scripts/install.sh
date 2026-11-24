@@ -3,6 +3,7 @@ set -euo pipefail
 
 SYSBOX_VERSION=0.7.1
 SYSBOX_SHA256=9d6d5484f980d0a17f86c492c1262015c2afb66280bdb97215b79fde6a0261c5
+SYSBOX_DEB="sysbox-ce_${SYSBOX_VERSION}.linux_amd64.deb"
 APP_UID=1000
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -64,15 +65,19 @@ install_docker() {
 	systemctl enable --now docker
 }
 
+fetch_sysbox() {
+	curl -fsSLo "$1/$SYSBOX_DEB" \
+		"https://github.com/nestybox/sysbox/releases/download/v${SYSBOX_VERSION}/${SYSBOX_DEB}"
+	echo "$SYSBOX_SHA256  $1/$SYSBOX_DEB" | sha256sum -c -
+}
+
 install_sysbox() {
 	local installed tmp deb
 	installed="$(dpkg-query -W -f='${Version}' sysbox-ce 2>/dev/null || true)"
 	if [[ $installed != "$SYSBOX_VERSION"* ]]; then
 		tmp="$(mktemp -d)"
-		deb="$tmp/sysbox-ce_${SYSBOX_VERSION}.linux_amd64.deb"
-		curl -fsSLo "$deb" \
-			"https://github.com/nestybox/sysbox/releases/download/v${SYSBOX_VERSION}/sysbox-ce_${SYSBOX_VERSION}.linux_amd64.deb"
-		echo "$SYSBOX_SHA256  $deb" | sha256sum -c -
+		deb="$tmp/$SYSBOX_DEB"
+		fetch_sysbox "$tmp"
 		# The Sysbox installer restarts Docker and refuses while containers are running.
 		if [[ -n $(docker ps -q) ]]; then
 			if [[ -f $ENV_FILE ]]; then
@@ -138,4 +143,10 @@ main() {
 	fi
 }
 
-main "$@"
+# CI installs the same pinned package: fetch-sysbox <dir> downloads and verifies it, then prints its path.
+if [[ ${1:-} == fetch-sysbox ]]; then
+	fetch_sysbox "${2:?usage: install.sh fetch-sysbox <dir>}" >&2
+	printf '%s\n' "$2/$SYSBOX_DEB"
+else
+	main "$@"
+fi
