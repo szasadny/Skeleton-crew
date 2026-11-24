@@ -6,6 +6,19 @@ from skeleton_crew.agents.backends import claude_code, codex, gemini, opencode
 from skeleton_crew.agents.base import AgentBackend, BackendSpec
 from skeleton_crew.domain.settings import AppSettings, Role
 
+__all__ = [
+    "BackendSpec",
+    "allowed_models",
+    "available_backends",
+    "backend_for",
+    "credential_problems",
+    "field_problems",
+    "option_problems",
+    "resolved_options",
+    "settings_problems",
+    "spec_for",
+]
+
 _BACKENDS: Mapping[str, BackendSpec] = {
     spec.name: spec for spec in (claude_code.SPEC, codex.SPEC, gemini.SPEC, opencode.SPEC)
 }
@@ -115,3 +128,13 @@ def backend_for(
     # A backend only ever sees the credentials it declares.
     own = {key: credentials[key] for key in spec.credentials if key in credentials}
     return spec.factory(own, resolved)
+
+
+def credential_problems(
+    spec: BackendSpec, options: Mapping[str, str], credentials: Mapping[str, SecretStr]
+) -> tuple[str, ...]:
+    if option_problems(spec, options):
+        return ()
+    return tuple(
+        backend_for(spec.name, credentials=credentials, options=options).credential_problems()
+    )

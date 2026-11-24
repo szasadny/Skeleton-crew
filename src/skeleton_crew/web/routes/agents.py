@@ -6,13 +6,12 @@ from fastapi import APIRouter, Request
 from fastapi.responses import Response
 from pydantic import SecretStr
 
-from skeleton_crew.agents.base import BackendSpec
 from skeleton_crew.agents.registry import (
+    BackendSpec,
     allowed_models,
     available_backends,
-    backend_for,
+    credential_problems,
     field_problems,
-    option_problems,
 )
 from skeleton_crew.classifiers import registry as classifiers
 from skeleton_crew.domain.settings import AppSettings, Role
@@ -84,16 +83,6 @@ def _options(spec: BackendSpec, values: Mapping[str, object]) -> dict[str, str]:
     }
 
 
-def _credential_problems(
-    spec: BackendSpec, options: Mapping[str, str], credentials: Mapping[str, SecretStr]
-) -> tuple[str, ...]:
-    if option_problems(spec, options):
-        return ()
-    return tuple(
-        backend_for(spec.name, credentials=credentials, options=options).credential_problems()
-    )
-
-
 def _roles(values: Mapping[str, object]) -> tuple[RoleView, ...]:
     views = []
     for role in Role:
@@ -109,9 +98,7 @@ def _backends(
     views = []
     for spec in _BACKENDS.values():
         used_by = tuple(view.role for view in roles if view.spec is spec)
-        problems = (
-            _credential_problems(spec, _options(spec, values), credentials) if used_by else ()
-        )
+        problems = credential_problems(spec, _options(spec, values), credentials) if used_by else ()
         views.append(BackendView(spec, used_by, problems))
     return tuple(views)
 

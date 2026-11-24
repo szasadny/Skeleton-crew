@@ -104,7 +104,7 @@ layers = [
     "skeleton_crew.cli",
     "skeleton_crew.web",
     "skeleton_crew.scheduler",
-    "skeleton_crew.pipeline",
+    "skeleton_crew.pipeline | skeleton_crew.services",
     "skeleton_crew.github | skeleton_crew.runtime | skeleton_crew.agents | skeleton_crew.classifiers | skeleton_crew.store",
     "skeleton_crew.models",
     "skeleton_crew.core",
@@ -132,6 +132,7 @@ source_modules = [
     "skeleton_crew.pipeline",
     "skeleton_crew.runtime",
     "skeleton_crew.scheduler",
+    "skeleton_crew.services",
     "skeleton_crew.store",
     "skeleton_crew.web",
 ]
@@ -151,6 +152,7 @@ source_modules = [
     "skeleton_crew.models",
     "skeleton_crew.pipeline",
     "skeleton_crew.scheduler",
+    "skeleton_crew.services",
     "skeleton_crew.store",
     "skeleton_crew.web",
 ]
@@ -170,6 +172,7 @@ source_modules = [
     "skeleton_crew.pipeline",
     "skeleton_crew.runtime",
     "skeleton_crew.scheduler",
+    "skeleton_crew.services",
     "skeleton_crew.store",
     "skeleton_crew.web",
 ]
@@ -189,6 +192,7 @@ source_modules = [
     "skeleton_crew.models",
     "skeleton_crew.pipeline",
     "skeleton_crew.runtime",
+    "skeleton_crew.services",
     "skeleton_crew.store",
     "skeleton_crew.web",
 ]
@@ -209,6 +213,7 @@ source_modules = [
     "skeleton_crew.pipeline",
     "skeleton_crew.runtime",
     "skeleton_crew.scheduler",
+    "skeleton_crew.services",
     "skeleton_crew.store",
 ]
 forbidden_modules = ["fastapi", "starlette"]
@@ -246,5 +251,3 @@ forbidden_modules = [
     "skeleton_crew.classifiers.openai_decisions",
 ]
 allow_indirect_imports = true
-# Baseline, only ever shrinks.
-ignore_imports = ["skeleton_crew.web.routes.agents -> skeleton_crew.agents.base"]
