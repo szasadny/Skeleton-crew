@@ -252,7 +252,6 @@ forbidden_modules = [
     "skeleton_crew.agents.base",
     "skeleton_crew.agents.session",
     "skeleton_crew.agents.prompting",
-    "skeleton_crew.agents.output",
     "skeleton_crew.agents.backends",
     "skeleton_crew.classifiers.base",
     "skeleton_crew.classifiers.jev",
