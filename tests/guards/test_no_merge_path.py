@@ -5,6 +5,8 @@ from pathlib import Path
 import pytest
 
 import skeleton_crew.github
+from skeleton_crew.github import _ci, _git
+from skeleton_crew.github.gateway import Gateway, GitHubGateway
 
 GITHUB_SRC = Path(skeleton_crew.github.__file__).parent
 # Read-only words that contain "merge": the mergeable flag, merged_at and closed-unmerged lookups.
@@ -88,8 +90,6 @@ def test_merge_pattern_allows_read_only_words(line: str) -> None:
 
 
 def test_gateway_exposes_no_merge_like_method() -> None:
-    from skeleton_crew.github.gateway import Gateway, GitHubGateway
-
     allowed = {
         "list_open_issues",
         "trust_data",
@@ -123,8 +123,6 @@ def test_gateway_exposes_no_merge_like_method() -> None:
 
 
 def test_private_gateway_modules_expose_no_merge_like_function() -> None:
-    from skeleton_crew.github import _ci, _git
-
     allowed = {
         _git: {"auth_env", "git_clone", "git_fetch", "git_branch_head", "git_push"},
         _ci: {"evaluate_ci", "required_checks", "format_job_logs"},
