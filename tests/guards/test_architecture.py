@@ -9,6 +9,10 @@ SRC_DIR = Path(skeleton_crew.__file__).parent
 REPO_DIR = SRC_DIR.parents[1]
 TESTS_DIR = REPO_DIR / "tests"
 MAX_COMMENT_BLOCK_LINES = 1
+MAX_SOURCE_LINES = 400
+MAX_TEST_LINES = 600
+# Only ever remove entries: split the file instead of adding it here.
+OVERSIZED_FILES = frozenset({"src/skeleton_crew/github/gateway.py"})
 _NON_CODE_TOKENS = {
     tokenize.COMMENT,
     tokenize.NL,
@@ -73,3 +77,19 @@ def test_no_docstrings() -> None:
         if isinstance(node, _DOCUMENTABLE) and ast.get_docstring(node) is not None
     ]
     assert not offenders, f"docstring found; the name and the tests document the code: {offenders}"
+
+
+def _line_limit(path: Path) -> int:
+    return MAX_SOURCE_LINES if SRC_DIR in path.parents else MAX_TEST_LINES
+
+
+def test_files_stay_small() -> None:
+    oversized = {
+        relative(path)
+        for path in python_sources()
+        if len(path.read_text(encoding="utf-8").splitlines()) > _line_limit(path)
+    }
+    new = sorted(oversized - OVERSIZED_FILES)
+    stale = sorted(OVERSIZED_FILES - oversized)
+    assert not new, f"file too long; split it by responsibility: {new}"
+    assert not stale, f"file is small enough now; remove it from OVERSIZED_FILES: {stale}"

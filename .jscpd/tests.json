@@ -1,0 +1,10 @@
+{
+  "path": ["../tests"],
+  "format": ["python"],
+  "minLines": 10,
+  "minTokens": 50,
+  "threshold": 0,
+  "failOnEmpty": true,
+  "ignore": ["**/__pycache__/**"],
+  "reporters": ["console"]
+}

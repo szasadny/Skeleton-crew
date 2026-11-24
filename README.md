@@ -7,7 +7,7 @@ The workflow is dependent on the attached label:
 - **`skeleton`**: a worker agent in its own container implements the issue and opens a PR, then fixes it until CI and the review are green.
 - **`skeleton refine`**: an agent turns a rough issue into a spec and hands it back with `skeleton HITL` (Human In The Loop).
 
-The user decides what gets picked up and what gets merged: Skeleton Crew never merges and never adds the labels `skeleton` or `skeleton refine`. Label lifecycle: [docs/labels.md](docs/labels.md).
+The user decides what gets picked up and what gets merged: Skeleton Crew never merges and never adds the labels `skeleton` or `skeleton refine`. Label lifecycle: [docs/labels.md](docs/labels.md). What a run does: [docs/run-flow.md](docs/run-flow.md).
 
 ## Security
 
