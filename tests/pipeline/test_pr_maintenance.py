@@ -27,9 +27,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from skeleton_crew.core.audit import AuditKind, AuditOutcome
 from skeleton_crew.core.git import GitCommandError
+from skeleton_crew.domain.ci_policy import CiState, CiStatus, FailedJob, ReviewCheck
 from skeleton_crew.domain.settings import Role
-from skeleton_crew.domain.task_state import TaskKind, TaskState
-from skeleton_crew.github.gateway import CiState, CiStatus, FailedJob, ReviewCheck
+from skeleton_crew.domain.task_state import RunTrigger, TaskKind, TaskState
 from skeleton_crew.pipeline.pr_maintenance import MERGEABLE_POLL_SECONDS, MERGEABLE_POLLS
 from skeleton_crew.pipeline.texts import RERUN_CI_MESSAGE
 from skeleton_crew.store import audit_store, runs_store
@@ -45,7 +45,7 @@ def harness(tmp_path: Path, sessionmaker: async_sessionmaker[AsyncSession]) -> H
 async def _skip_summaries(harness: Harness) -> list[str]:
     async with harness.sessionmaker() as session:
         events = await audit_store.list_events(session, 500, 0)
-    return [e.summary for e in events if e.kind is AuditKind.PR_UPDATE_SKIPPED]
+    return [e.summary for e in events if e.kind is AuditKind.PR_FIX_SKIPPED]
 
 
 async def test_mergeable_pr_gets_no_task_clone_or_quota(harness: Harness) -> None:
@@ -246,14 +246,14 @@ async def test_pr_with_commits_from_someone_else_is_skipped(harness: Harness) ->
 
     assert await harness.tasks(run_id) == []
     assert harness.gateway.writes == []
-    assert (AuditKind.PR_UPDATE_SKIPPED, AuditOutcome.INFO) in await harness.audit_kinds()
+    assert (AuditKind.PR_FIX_SKIPPED, AuditOutcome.INFO) in await harness.audit_kinds()
 
 
 async def test_pr_only_pushed_in_a_dry_run_counts_as_not_ours(harness: Harness) -> None:
     head = await open_pr(harness, {"app.py": HI}, recorded_head="b" * 40)
     advance_main(harness, {"app.py": HELLO})
     async with harness.sessionmaker() as session:
-        run = await runs_store.create_run(session, "manual", True)
+        run = await runs_store.create_run(session, RunTrigger.MANUAL, True)
         task = await runs_store.add_worker_task(session, run.id, 1, "Add greeting")
         await runs_store.update_worker_task(session, task.id, state=TaskState.DONE, head_sha=head)
         await session.commit()
@@ -312,7 +312,7 @@ async def test_fix_quota_counts_only_conflicting_prs(harness: Harness) -> None:
     harness.gateway.pulls.append(FakePull(11, "skeleton/2-add-farewell", "c" * 40))
     harness.gateway.mergeable[11] = [False]
     async with harness.sessionmaker() as session:
-        run = await runs_store.create_run(session, "manual", False)
+        run = await runs_store.create_run(session, RunTrigger.MANUAL, False)
         task = await runs_store.add_worker_task(session, run.id, 2, "Add farewell")
         await runs_store.update_worker_task(
             session, task.id, state=TaskState.DONE, head_sha="c" * 40

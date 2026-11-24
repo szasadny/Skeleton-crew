@@ -10,10 +10,6 @@ ENUM_LENGTH = 32
 _STRING_LIST = TypeAdapter(list[str])
 
 
-def utc_now() -> datetime:
-    return datetime.now(UTC)
-
-
 class UtcDateTime(TypeDecorator[datetime]):
     # SQLite drops tzinfo, so values are stored as naive UTC and re-tagged on load.
     impl = DateTime
@@ -31,11 +27,11 @@ class UtcDateTime(TypeDecorator[datetime]):
 
 
 class StrEnumType[E: StrEnum](TypeDecorator[E]):
-    impl = String(ENUM_LENGTH)
+    impl = String
     cache_ok = True
 
-    def __init__(self, enum_cls: type[E]) -> None:
-        super().__init__()
+    def __init__(self, enum_cls: type[E], length: int = ENUM_LENGTH) -> None:
+        super().__init__(length)
         self._enum_cls = enum_cls
 
     def process_bind_param(self, value: E | str | None, dialect: Dialect) -> str | None:

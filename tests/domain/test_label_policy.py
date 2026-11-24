@@ -6,8 +6,10 @@ from skeleton_crew.domain.label_policy import (
     check_label_change,
     check_new_issue_labels,
     escalation_change,
+    has_label,
     label_key,
     refine_done_change,
+    same_label,
 )
 from skeleton_crew.domain.settings import LabelNames
 
@@ -168,3 +170,11 @@ def test_new_issue_with_other_labels_is_rejected(labels: set[str]) -> None:
 @pytest.mark.parametrize("name", ["ok", "Ünïcode", "with space", "emoji 🐛"])
 def test_label_key_accepts_normal_names(name: str) -> None:
     assert label_key(name) == name.casefold()
+
+
+def test_label_comparison_ignores_case_only() -> None:
+    assert same_label("Skeleton HITL", "skeleton hitl")
+    assert not same_label("skeleton hitl ", "skeleton hitl")
+    assert has_label(["bug", "SKELETON"], "skeleton")
+    assert not has_label(["bug", "skeleton refine"], "skeleton")
+    assert not has_label([], "skeleton")

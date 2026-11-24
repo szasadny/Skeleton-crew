@@ -2,7 +2,13 @@ from collections.abc import Sequence
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from skeleton_crew.domain.task_state import RefineState, TaskEvent, TaskState, transition
+from skeleton_crew.domain.task_state import (
+    RefineState,
+    TaskEvent,
+    TaskState,
+    merge_blockers,
+    transition,
+)
 from skeleton_crew.store import runs_store
 
 MAX_STORED_BLOCKERS = 30
@@ -31,11 +37,10 @@ class WorkerTaskRecord:
         await self.update(cost_usd=self.cost_usd, **fields)
 
     async def add_blockers(self, blockers: Sequence[str]) -> None:
-        new = [b for b in dict.fromkeys(blockers) if b not in self.blockers]
-        room = MAX_STORED_BLOCKERS - len(self.blockers)
-        if not new or room <= 0:
+        merged = merge_blockers(self.blockers, blockers, MAX_STORED_BLOCKERS)
+        if len(merged) == len(self.blockers):
             return
-        self.blockers += new[:room]
+        self.blockers = merged
         await self.update(blockers=list(self.blockers))
 
 

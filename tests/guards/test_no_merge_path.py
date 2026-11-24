@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 import skeleton_crew.github
-from skeleton_crew.github import _ci, _git
+from skeleton_crew.github import _git
 from skeleton_crew.github.gateway import Gateway, GitHubGateway
 
 GITHUB_SRC = Path(skeleton_crew.github.__file__).parent
@@ -42,7 +42,6 @@ def test_github_package_sources_found() -> None:
     assert {
         "gateway.py",
         "_git.py",
-        "_ci.py",
         "trust.py",
         "preflight.py",
         "write_guard.py",
@@ -122,17 +121,12 @@ def test_gateway_exposes_no_merge_like_method() -> None:
         assert public <= allowed
 
 
-def test_private_gateway_modules_expose_no_merge_like_function() -> None:
-    allowed = {
-        _git: {"auth_env", "git_clone", "git_fetch", "git_branch_head", "git_push"},
-        _ci: {"evaluate_ci", "required_checks", "format_job_logs"},
+def test_private_gateway_module_exposes_no_merge_like_function() -> None:
+    functions = {
+        name
+        for name, value in vars(_git).items()
+        if inspect.isfunction(value)
+        and value.__module__ == _git.__name__
+        and not name.startswith("_")
     }
-    for module, names in allowed.items():
-        functions = {
-            name
-            for name, value in vars(module).items()
-            if inspect.isfunction(value)
-            and value.__module__ == module.__name__
-            and not name.startswith("_")
-        }
-        assert functions == names
+    assert functions == {"auth_env", "git_clone", "git_fetch", "git_branch_head", "git_push"}

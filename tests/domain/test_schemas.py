@@ -1,9 +1,11 @@
 import json
+from pathlib import Path
 from typing import Any
 
 import pytest
 from pydantic import BaseModel, ValidationError
 
+from skeleton_crew.domain import schemas
 from skeleton_crew.domain.contest_policy import CheckId
 from skeleton_crew.domain.errors import PolicyViolation
 from skeleton_crew.domain.schemas import (
@@ -22,6 +24,8 @@ from skeleton_crew.domain.schemas import (
     json_schema,
     parse_output,
 )
+
+SCHEMA_SNAPSHOTS = Path(__file__).with_name("agent_output_schemas.json")
 
 
 def worker(**overrides: Any) -> str:
@@ -482,3 +486,19 @@ def test_blockers_parse_stripped_at_the_limit() -> None:
     assert len(result.blockers) == 10
     review_result = parse_output(ReviewResult, review(blockers=["pypi.org is blocked"]))
     assert review_result.blockers == ["pypi.org is blocked"]
+
+
+def test_json_schemas_sent_to_agents_are_pinned() -> None:
+    snapshots: dict[str, Any] = json.loads(SCHEMA_SNAPSHOTS.read_text(encoding="utf-8"))
+    models = {
+        name: value
+        for name, value in vars(schemas).items()
+        if isinstance(value, type)
+        and issubclass(value, BaseModel)
+        and value.__module__ == schemas.__name__
+        and not name.startswith("_")
+    }
+    assert set(models) == set(snapshots)
+    for name, model in models.items():
+        pinned = json.dumps(snapshots[name], separators=(",", ":"), sort_keys=True)
+        assert json_schema(model) == pinned, name

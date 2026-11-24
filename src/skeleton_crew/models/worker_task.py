@@ -3,9 +3,12 @@ from datetime import datetime
 from sqlalchemy import Float, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
+from skeleton_crew.core.clock import utc_now
 from skeleton_crew.core.db import Base
 from skeleton_crew.domain.task_state import TaskKind, TaskState
-from skeleton_crew.models.types import JsonStringList, StrEnumType, UtcDateTime, utc_now
+from skeleton_crew.models.types import JsonStringList, StrEnumType, UtcDateTime
+
+ISSUE_TITLE_LENGTH = 256
 
 
 class WorkerTask(Base):
@@ -14,7 +17,7 @@ class WorkerTask(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     run_id: Mapped[int] = mapped_column(ForeignKey("runs.id"), index=True)
     issue_number: Mapped[int] = mapped_column(index=True)
-    issue_title: Mapped[str] = mapped_column(String(256))
+    issue_title: Mapped[str] = mapped_column(String(ISSUE_TITLE_LENGTH))
     state: Mapped[TaskState] = mapped_column(StrEnumType(TaskState), index=True)
     kind: Mapped[TaskKind] = mapped_column(
         StrEnumType(TaskKind), index=True, default=TaskKind.ISSUE, server_default=TaskKind.ISSUE

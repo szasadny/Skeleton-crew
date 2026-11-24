@@ -1,7 +1,7 @@
 import os
 import shutil
 import subprocess
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 from githubkit import GitHub
 
-from skeleton_crew.core.audit import AuditKind, AuditOutcome
+from skeleton_crew.core.audit import AuditEntry, AuditKind, AuditOutcome
 from skeleton_crew.domain.settings import LabelNames
 from skeleton_crew.github.gateway import GitHubGateway, github_remote_url
 
@@ -32,21 +32,13 @@ _GIT_ENV = {
 
 @dataclass
 class AuditLog:
-    events: list[tuple[AuditKind, AuditOutcome, str, Mapping[str, object] | None]] = field(
-        default_factory=list
-    )
+    events: list[AuditEntry] = field(default_factory=list)
 
-    async def __call__(
-        self,
-        kind: AuditKind,
-        outcome: AuditOutcome,
-        summary: str,
-        payload: Mapping[str, object] | None,
-    ) -> None:
-        self.events.append((kind, outcome, summary, payload))
+    async def __call__(self, entry: AuditEntry) -> None:
+        self.events.append(entry)
 
     def kinds(self) -> list[tuple[AuditKind, AuditOutcome]]:
-        return [(kind, outcome) for kind, outcome, _, _ in self.events]
+        return [(entry.kind, entry.outcome) for entry in self.events]
 
 
 def make_client() -> GitHub[Any]:

@@ -3,35 +3,34 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from skeleton_crew.core.audit import AuditKind, AuditOutcome
-from skeleton_crew.domain.branch_policy import check_push_target, issue_number_from_branch
-from skeleton_crew.domain.label_policy import LabelChange, check_label_change
-from skeleton_crew.domain.settings import LabelNames
-from skeleton_crew.domain.text_policy import truncate_text
-from skeleton_crew.domain.trust_policy import ContentEdit, IssueComment, LabelEvent
-from skeleton_crew.github._git import git_branch_head, git_clone, git_fetch, git_push
-from skeleton_crew.github.gateway import (
+from skeleton_crew.core.audit import AuditEntry, AuditSink
+from skeleton_crew.domain.branch_policy import (
+    check_issue_number,
+    check_push_target,
+    issue_number_from_branch,
+)
+from skeleton_crew.domain.ci_policy import (
     BranchRule,
     CiState,
     CiStatus,
-    IssueRef,
-    PullRef,
     ReviewCheck,
-    TrustData,
     format_job_logs,
 )
-from skeleton_crew.github.preflight import REQUIRED_PERMISSIONS
-from skeleton_crew.github.write_guard import (
-    AuditSink,
-    check_issue_number,
+from skeleton_crew.domain.label_policy import LabelChange, check_label_change, has_label
+from skeleton_crew.domain.repo_policy import REQUIRED_PERMISSIONS
+from skeleton_crew.domain.settings import LabelNames
+from skeleton_crew.domain.text_policy import truncate_text
+from skeleton_crew.domain.trust_policy import ContentEdit, IssueComment, LabelEvent
+from skeleton_crew.domain.write_policy import (
     check_new_issue,
     check_open_pr,
     check_push,
     check_sha,
-    guarded_write,
-    label_payload,
     short,
 )
+from skeleton_crew.github._git import git_branch_head, git_clone, git_fetch, git_push
+from skeleton_crew.github.gateway import IssueRef, PullRef, TrustData
+from skeleton_crew.github.write_guard import guarded_write, label_payload
 
 BOT_LOGIN = "skeleton-crew[bot]"
 LOCAL_PROTOCOL = "file"
@@ -77,14 +76,6 @@ class FakePull:
 
 
 @dataclass(frozen=True)
-class AuditRecord:
-    kind: AuditKind
-    outcome: AuditOutcome
-    summary: str
-    payload: Mapping[str, object] | None
-
-
-@dataclass(frozen=True)
 class WriteRecord:
     action: str
     args: Mapping[str, object]
@@ -125,7 +116,7 @@ class FakeGitHubGateway:
         self.private = True
         self.failures: dict[str, Exception] = {}
         self.writes: list[WriteRecord] = []
-        self.audit_events: list[AuditRecord] = []
+        self.audit_events: list[AuditEntry] = []
         self.review_checks: dict[str, tuple[ReviewCheck, str]] = {}
         self.pushes: list[tuple[str, str]] = []
         self.leases: list[str | None] = []
@@ -162,27 +153,20 @@ class FakeGitHubGateway:
         if name in self.failures:
             raise self.failures[name]
 
-    async def _audit(
-        self,
-        kind: AuditKind,
-        outcome: AuditOutcome,
-        summary: str,
-        payload: Mapping[str, object] | None,
-    ) -> None:
-        self.audit_events.append(AuditRecord(kind, outcome, summary, payload))
+    async def _audit(self, entry: AuditEntry) -> None:
+        self.audit_events.append(entry)
         if self._external_audit is not None:
-            await self._external_audit(kind, outcome, summary, payload)
+            await self._external_audit(entry)
 
     def _record(self, action: str, **args: object) -> None:
         self.writes.append(WriteRecord(action, args))
 
     async def list_open_issues(self, label: str) -> list[IssueRef]:
         self._maybe_fail("list_open_issues")
-        key = label.casefold()
         return [
             issue.ref()
             for issue in sorted(self.issues.values(), key=lambda i: i.number)
-            if any(name.casefold() == key for name in issue.labels)
+            if has_label(issue.labels, label)
         ]
 
     async def trust_data(self, issue_number: int) -> TrustData:

@@ -1,9 +1,11 @@
 import re
 from datetime import time
 from enum import StrEnum
+from functools import partial
+from typing import Annotated
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class Weekday(StrEnum):
@@ -23,7 +25,26 @@ class Role(StrEnum):
     WORKER = "worker"
 
 
-RULE_KEYS: tuple[str, ...] = ("common", *(role.value for role in Role))
+COMMON_RULES = "common"
+RULE_KEYS: tuple[str, ...] = (COMMON_RULES, *(role.value for role in Role))
+MAX_RULES_CHARS = 20_000
+MAX_NEW_ISSUES = 10
+
+
+class InvalidRules(ValueError):
+    pass
+
+
+def check_rule_key(key: str) -> None:
+    if key not in RULE_KEYS:
+        raise ValueError(f"unknown rules key: {key}")
+
+
+def check_rules_content(content: str) -> None:
+    if not content.strip():
+        raise InvalidRules("Rules cannot be empty.")
+    if len(content) > MAX_RULES_CHARS:
+        raise InvalidRules(f"Rules are limited to {MAX_RULES_CHARS} characters.")
 
 
 # Neutral data only: agents/registry.py owns what is valid, and a test keeps these in sync.
@@ -40,13 +61,18 @@ _IDENTIFIER_RE = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
 _EFFORT_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 _OPTION_VALUE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$")
 _MAX_OPTIONS = 20
-_LOGIN_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(\[bot\])?$")
+LOGIN_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(\[bot\])?$")
+_MAX_LABEL_CHARS = 50
 _RUNNER_LABEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 _MAX_RUNNER_LABELS = 10
 _NO_PROXY_RE = re.compile(r"^\.?[A-Za-z0-9:][A-Za-z0-9.:/_-]{0,252}$")
 _MAX_NO_PROXY = 50
+_ACTIONS_RESULTS_ACCOUNTS = 20
 # Exact Actions storage hosts, so the runners get no wildcard into arbitrary Azure storage accounts.
-_ACTIONS_RESULTS_HOSTS = tuple(f"productionresultssa{n}.blob.core.windows.net" for n in range(20))
+_ACTIONS_RESULTS_HOSTS = tuple(
+    f"productionresultssa{n}.blob.core.windows.net" for n in range(_ACTIONS_RESULTS_ACCOUNTS)
+)
+_SECONDS_PER_MINUTE = 60.0
 
 
 class _Frozen(BaseModel):
@@ -82,7 +108,7 @@ class Limits(_Frozen):
     max_policy_rounds: int = Field(default=3, ge=0, le=10)
     max_review_rounds: int = Field(default=3, ge=0, le=10)
     max_continues: int = Field(default=5, ge=0, le=20)
-    max_new_issues_per_worker: int = Field(default=3, ge=0, le=10)
+    max_new_issues_per_worker: int = Field(default=3, ge=0, le=MAX_NEW_ISSUES)
     max_budget_usd_per_session: float | None = Field(default=None, gt=0)
     max_diff_lines: int = Field(default=1500, ge=10, le=50_000)
     max_comment_chars: int = Field(default=1500, ge=200, le=20_000)
@@ -92,6 +118,22 @@ class Limits(_Frozen):
     ci_timeout_minutes: int = Field(default=60, ge=5, le=480)
     ci_grace_minutes: int = Field(default=10, ge=1, le=120)
     task_retention_days: int = Field(default=30, ge=1, le=365)
+
+    @property
+    def session_timeout_s(self) -> float:
+        return self.session_timeout_minutes * _SECONDS_PER_MINUTE
+
+    @property
+    def command_timeout_s(self) -> float:
+        return self.command_timeout_minutes * _SECONDS_PER_MINUTE
+
+    @property
+    def ci_timeout_s(self) -> float:
+        return self.ci_timeout_minutes * _SECONDS_PER_MINUTE
+
+    @property
+    def ci_grace_s(self) -> float:
+        return self.ci_grace_minutes * _SECONDS_PER_MINUTE
 
 
 def _identifier(value: str, what: str) -> str:
@@ -112,26 +154,17 @@ def _effort(value: str) -> str:
     return value
 
 
+_BackendName = Annotated[str, AfterValidator(partial(_identifier, what="backend"))]
+_ProviderName = Annotated[str, AfterValidator(partial(_identifier, what="provider"))]
+_ModelName = Annotated[str, AfterValidator(_model)]
+_EffortName = Annotated[str, AfterValidator(_effort)]
+
+
 class RoleAgent(_Frozen):
-    backend: str = DEFAULT_BACKEND
-    model: str = DEFAULT_MODEL
-    effort: str = DEFAULT_EFFORT
+    backend: _BackendName = DEFAULT_BACKEND
+    model: _ModelName = DEFAULT_MODEL
+    effort: _EffortName = DEFAULT_EFFORT
     web_tools: bool = False
-
-    @field_validator("backend")
-    @classmethod
-    def _valid_backend(cls, value: str) -> str:
-        return _identifier(value, "backend")
-
-    @field_validator("model")
-    @classmethod
-    def _valid_model(cls, value: str) -> str:
-        return _model(value)
-
-    @field_validator("effort")
-    @classmethod
-    def _valid_effort(cls, value: str) -> str:
-        return _effort(value)
 
 
 def _default_agents() -> dict[Role, RoleAgent]:
@@ -151,9 +184,9 @@ class LabelNames(_Frozen):
     @model_validator(mode="after")
     def _distinct_and_non_empty(self) -> LabelNames:
         names = [self.ready, self.refine, self.hitl]
-        if any(not n.strip() or len(n) > 50 for n in names):
-            raise ValueError("label names must be 1-50 non-blank characters")
-        if len({n.casefold() for n in names}) != 3:
+        if any(not n.strip() or len(n) > _MAX_LABEL_CHARS for n in names):
+            raise ValueError(f"label names must be 1-{_MAX_LABEL_CHARS} non-blank characters")
+        if len({n.casefold() for n in names}) != len(names):
             raise ValueError("label names must be distinct")
         return self
 
@@ -171,7 +204,7 @@ class RepoPolicy(_Frozen):
     @classmethod
     def _valid_logins(cls, value: tuple[str, ...]) -> tuple[str, ...]:
         for login in value:
-            if not _LOGIN_RE.fullmatch(login):
+            if not LOGIN_RE.fullmatch(login):
                 raise ValueError(f"invalid GitHub login: {login}")
         return value
 
@@ -184,11 +217,17 @@ class RepoPolicy(_Frozen):
         return value
 
 
-def _domains(value: tuple[str, ...]) -> tuple[str, ...]:
+def check_domains(value: tuple[str, ...]) -> tuple[str, ...]:
     for domain in value:
         if not _DOMAIN_RE.fullmatch(domain):
             raise ValueError(f"invalid domain: {domain}")
     return value
+
+
+_Domains = Annotated[tuple[str, ...], AfterValidator(check_domains)]
+_Cpus = Annotated[float, Field(gt=0, le=64)]
+_MemoryGb = Annotated[float, Field(gt=0, le=256)]
+_Pids = Annotated[int, Field(ge=128, le=65_536)]
 
 
 _PACKAGE_HOSTS = (
@@ -202,22 +241,17 @@ _PACKAGE_HOSTS = (
 
 
 class RuntimeLimits(_Frozen):
-    egress_allowlist: tuple[str, ...] = _PACKAGE_HOSTS
-    cpus: float = Field(default=2.0, gt=0, le=64)
-    memory_gb: float = Field(default=4.0, gt=0, le=256)
-    pids: int = Field(default=2048, ge=128, le=65_536)
-
-    @field_validator("egress_allowlist")
-    @classmethod
-    def _valid_domains(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        return _domains(value)
+    egress_allowlist: _Domains = _PACKAGE_HOSTS
+    cpus: _Cpus = 2.0
+    memory_gb: _MemoryGb = 4.0
+    pids: _Pids = 2048
 
 
 class SelfHostedCi(_Frozen):
     enabled: bool = False
     runners: int = Field(default=2, ge=1, le=10)
     labels: tuple[str, ...] = ("skeleton-crew",)
-    egress_allowlist: tuple[str, ...] = (
+    egress_allowlist: _Domains = (
         "github.com",
         "api.github.com",
         "codeload.github.com",
@@ -231,9 +265,9 @@ class SelfHostedCi(_Frozen):
         *_PACKAGE_HOSTS,
     )
     no_proxy: tuple[str, ...] = ()
-    cpus: float = Field(default=2.0, gt=0, le=64)
-    memory_gb: float = Field(default=4.0, gt=0, le=256)
-    pids: int = Field(default=4096, ge=128, le=65_536)
+    cpus: _Cpus = 2.0
+    memory_gb: _MemoryGb = 4.0
+    pids: _Pids = 4096
 
     @field_validator("no_proxy")
     @classmethod
@@ -255,36 +289,16 @@ class SelfHostedCi(_Frozen):
                 raise ValueError(f"invalid runner label: {runner_label}")
         return value
 
-    @field_validator("egress_allowlist")
-    @classmethod
-    def _valid_domains(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        return _domains(value)
-
 
 class ClassifierSettings(_Frozen):
-    provider: str = DEFAULT_CLASSIFIER
-    model: str = DEFAULT_CLASSIFIER_MODEL
+    provider: _ProviderName = DEFAULT_CLASSIFIER
+    model: _ModelName = DEFAULT_CLASSIFIER_MODEL
     injection_screen: bool = False
     prescreen: bool = False
     effort_routing: bool = False
-    effort_small: str = "low"
-    effort_medium: str = "medium"
-    effort_large: str = "high"
-
-    @field_validator("provider")
-    @classmethod
-    def _valid_provider(cls, value: str) -> str:
-        return _identifier(value, "provider")
-
-    @field_validator("model")
-    @classmethod
-    def _valid_model(cls, value: str) -> str:
-        return _model(value)
-
-    @field_validator("effort_small", "effort_medium", "effort_large")
-    @classmethod
-    def _valid_effort(cls, value: str) -> str:
-        return _effort(value)
+    effort_small: _EffortName = "low"
+    effort_medium: _EffortName = "medium"
+    effort_large: _EffortName = "high"
 
     @property
     def enabled(self) -> bool:

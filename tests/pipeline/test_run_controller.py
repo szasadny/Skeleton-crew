@@ -25,9 +25,17 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from skeleton_crew.agents.base import failed_outcome
 from skeleton_crew.core.audit import AuditKind, AuditOutcome
+from skeleton_crew.domain.ci_policy import BranchRule, CiState, CiStatus
 from skeleton_crew.domain.settings import Role
-from skeleton_crew.domain.task_state import RefineState, RunState, RunStep, TaskKind, TaskState
-from skeleton_crew.github.gateway import BranchRule, CiState, CiStatus, RulesUnavailable
+from skeleton_crew.domain.task_state import (
+    RefineState,
+    RunState,
+    RunStep,
+    RunTrigger,
+    TaskKind,
+    TaskState,
+)
+from skeleton_crew.github.gateway import RulesUnavailable
 from skeleton_crew.pipeline.run_controller import USAGE_LIMIT_NOTE, RunController
 from skeleton_crew.runtime.containers import ContainerHandle
 from skeleton_crew.store import runs_store
@@ -317,7 +325,7 @@ async def test_kill_switch_refuses_to_start(harness: Harness) -> None:
     harness.settings = harness.settings.model_copy(update={"kill_switch": True})
     await harness.save_settings()
 
-    assert await harness.controller.start("manual") is None
+    assert await harness.controller.start(RunTrigger.MANUAL) is None
     assert not harness.controller.is_running
 
 
@@ -325,7 +333,7 @@ async def test_quota_counts_tasks_from_earlier_runs_today(harness: Harness) -> N
     harness.limits(issues_per_day=1)
     harness.add_ready_issue(1)
     async with harness.sessionmaker() as session:
-        run = await runs_store.create_run(session, "manual", dry_run=False)
+        run = await runs_store.create_run(session, RunTrigger.MANUAL, dry_run=False)
         await runs_store.add_worker_task(session, run.id, 7, "Earlier")
         await runs_store.finish_run(session, run.id, RunState.COMPLETED)
         await session.commit()
@@ -385,9 +393,9 @@ async def test_kill_aborts_running_worker_and_removes_containers(harness: Harnes
     harness.backend.script(Role.WORKER, worker_json())
     await harness.save_settings()
 
-    run_id = await harness.controller.start("manual")
+    run_id = await harness.controller.start(RunTrigger.MANUAL)
     assert run_id is not None
-    assert await harness.controller.start("manual") is None
+    assert await harness.controller.start(RunTrigger.MANUAL) is None
     await asyncio.wait_for(harness.sleeping.wait(), 10)
     assert harness.runtime.running
     await harness.controller.kill()
@@ -506,11 +514,11 @@ async def test_reconcile_on_startup_aborts_leftovers_and_comments(harness: Harne
     harness.add_ready_issue(1)
     harness.add_ready_issue(2, "Dry")
     async with harness.sessionmaker() as session:
-        live = await runs_store.create_run(session, "schedule", dry_run=False)
+        live = await runs_store.create_run(session, RunTrigger.SCHEDULE, dry_run=False)
         task = await runs_store.add_worker_task(session, live.id, 1, "Add greeting")
         await runs_store.update_worker_task(session, task.id, state=TaskState.AWAITING_CI)
         refine = await runs_store.add_refine_task(session, live.id, 5)
-        dry = await runs_store.create_run(session, "manual", dry_run=True)
+        dry = await runs_store.create_run(session, RunTrigger.MANUAL, dry_run=True)
         await runs_store.add_worker_task(session, dry.id, 2, "Dry")
         await session.commit()
     harness.runtime.running["leftover"] = ContainerHandle("leftover", "skeleton-crew-x")

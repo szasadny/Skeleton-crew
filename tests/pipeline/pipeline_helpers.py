@@ -16,8 +16,9 @@ from fake_runtime import ExecCall, FakeRuntime, argv_starts_with, ok
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from skeleton_crew.agents.base import AgentBackend, SessionOutcome, SessionRequest, failed_outcome
-from skeleton_crew.core.audit import AuditKind, AuditOutcome
+from skeleton_crew.core.audit import AuditKind, AuditOutcome, AuditSink
 from skeleton_crew.core.config import BootstrapConfig
+from skeleton_crew.domain.ci_policy import CiState, CiStatus
 from skeleton_crew.domain.settings import (
     AppSettings,
     ClassifierSettings,
@@ -25,9 +26,8 @@ from skeleton_crew.domain.settings import (
     RepoPolicy,
     Role,
 )
-from skeleton_crew.domain.task_state import RunState, TaskState
-from skeleton_crew.github.gateway import CiState, CiStatus, Gateway
-from skeleton_crew.github.write_guard import AuditSink
+from skeleton_crew.domain.task_state import RunState, RunTrigger, TaskState
+from skeleton_crew.github.gateway import Gateway
 from skeleton_crew.models.refine_task import RefineTask
 from skeleton_crew.models.run import Run
 from skeleton_crew.models.worker_task import WorkerTask
@@ -369,7 +369,7 @@ class Harness:
 
     async def run(self) -> int:
         await self.save_settings()
-        run_id = await self.controller.start("manual")
+        run_id = await self.controller.start(RunTrigger.MANUAL)
         assert run_id is not None
         await self.controller.wait()
         return run_id
@@ -454,7 +454,7 @@ async def record_push(
     dry_run: bool = False,
 ) -> None:
     async with h.sessionmaker() as session:
-        run = await runs_store.create_run(session, "manual", dry_run)
+        run = await runs_store.create_run(session, RunTrigger.MANUAL, dry_run)
         task = await runs_store.add_worker_task(session, run.id, 1, "Add greeting")
         await runs_store.update_worker_task(
             session, task.id, state=state, head_sha=head, branch=BRANCH

@@ -7,9 +7,12 @@ from skeleton_crew.domain.trust_policy import (
     ContentEdit,
     IssueComment,
     LabelEvent,
+    always_trusted,
     content_untampered,
+    never_trusted,
     trusted_comments,
     trusted_label_time,
+    trusted_role,
 )
 
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
@@ -132,3 +135,30 @@ def test_trusted_comments_keep_order_and_drop_untrusted() -> None:
         IssueComment("Alice", "case variant", at(4)),
     ]
     assert trusted_comments(comments, is_trusted) == [comments[0], comments[2]]
+
+
+def test_extra_trusted_users_and_the_bot_are_always_trusted_case_insensitively() -> None:
+    assert always_trusted(["Alice", "bob"], "Skeleton-Crew[bot]") == {
+        "alice",
+        "bob",
+        "skeleton-crew[bot]",
+    }
+    assert always_trusted([], None) == frozenset()
+    assert always_trusted(["alice"], "") == {"alice"}
+
+
+@pytest.mark.parametrize(
+    ("login", "expected"),
+    [("", True), ("dependabot[bot]", True), ("alice", False), ("bot", False), ("[bot]x", False)],
+)
+def test_bots_and_unknown_actors_are_never_trusted(login: str, expected: bool) -> None:
+    assert never_trusted(login) is expected
+
+
+@pytest.mark.parametrize(
+    ("role", "expected"),
+    [("admin", True), ("maintain", True), ("write", True), ("triage", False), ("", False)],
+)
+def test_only_write_roles_are_trusted(role: str, expected: bool) -> None:
+    assert trusted_role(role) is expected
+    assert (role in TRUSTED_PERMISSIONS) is expected

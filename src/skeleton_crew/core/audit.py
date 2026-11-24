@@ -1,3 +1,5 @@
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from enum import StrEnum
 
 
@@ -11,7 +13,8 @@ class AuditKind(StrEnum):
     RUN_FINISHED = "run_finished"
     PREFLIGHT_FAILED = "preflight_failed"
     TASK_ESCALATED = "task_escalated"
-    PR_UPDATE_SKIPPED = "pr_update_skipped"
+    # The stored value predates the pr_fix rename; existing audit rows keep it.
+    PR_FIX_SKIPPED = "pr_update_skipped"
     ISSUE_SKIPPED = "issue_skipped"
     LOGIN = "login"
 
@@ -21,3 +24,15 @@ class AuditOutcome(StrEnum):
     BLOCKED = "blocked"
     DRY_RUN = "dry_run"
     INFO = "info"
+
+
+@dataclass(frozen=True)
+class AuditEntry:
+    kind: AuditKind
+    outcome: AuditOutcome
+    summary: str
+    payload: Mapping[str, object] | None = None
+    run_id: int | None = None
+
+
+AuditSink = Callable[[AuditEntry], Awaitable[None]]

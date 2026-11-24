@@ -1,6 +1,6 @@
 import logging
 
-from skeleton_crew.core.audit import AuditKind, AuditOutcome
+from skeleton_crew.core.audit import AuditEntry, AuditKind, AuditOutcome
 from skeleton_crew.domain.errors import PolicyViolation
 from skeleton_crew.domain.label_policy import escalation_change
 from skeleton_crew.pipeline.deps import RunContext
@@ -18,10 +18,12 @@ class Escalation(Exception):
 async def escalate_issue(ctx: RunContext, issue_number: int, reason: str) -> str | None:
     gw = ctx.gateway
     await ctx.audit(
-        AuditKind.TASK_ESCALATED,
-        AuditOutcome.INFO,
-        f"escalating #{issue_number}",
-        {"issue": issue_number, "reason": reason[:200]},
+        AuditEntry(
+            AuditKind.TASK_ESCALATED,
+            AuditOutcome.INFO,
+            f"escalating #{issue_number}",
+            {"issue": issue_number, "reason": reason[:200]},
+        )
     )
     try:
         await gw.comment(

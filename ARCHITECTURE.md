@@ -25,23 +25,28 @@ Each row has exactly one correct place. Putting it anywhere else violates the co
 | Which label changes are allowed | `domain/label_policy.py` |
 | Branch naming, the allowed push target, whether an existing branch may be continued | `domain/branch_policy.py` |
 | Protected paths, diff size, file-mode rules | `domain/diff_policy.py` |
-| Parsing the added lines of a diff | `domain/diff_lines.py` |
+| Parsing a diff: added lines, raw and numstat summaries, file modes | `domain/diff_parse.py` |
 | Conflict-resolution rules (only conflicted files, no conflict markers) | `domain/merge_policy.py` |
 | Detecting long code comments in a diff | `domain/comment_policy.py` |
 | Task directory key formats (`worker-<id>`, `refine-<id>`, `run-<id>-selector`) | `domain/task_keys.py` |
 | Findings, objections and contest matching | `domain/contest_policy.py` |
-| A contestable (grey-area) check | A pure function in its policy module, registered in `domain/contestable_checks.py` |
+| A contestable (grey-area) check | A pure function in its policy module, registered in `CHECKS` in `domain/contest_policy.py` |
 | Sanitising agent text before it reaches GitHub (length cap, @mentions, closing keywords) | `domain/text_policy.py` |
 | Deciding whether issue content is trusted (pure rules) | `domain/trust_policy.py` |
+| What a GitHub write may carry (titles, full SHAs, push targets, new-issue labels) | `domain/write_policy.py` |
+| The full commit SHA format | `domain/git_refs.py` |
+| Which env and mounts a container may get (no GitHub credential, no Docker socket) | `domain/container_policy.py`, enforced by `runtime/containers.py` |
+| Ruleset and App-permission rules | `domain/repo_policy.py` |
+| Pure CI evaluation: check states, required checks, job-log formatting | `domain/ci_policy.py` |
+| Daily quota maths (local midnight, what is left) | `domain/quota_policy.py` |
 | A task, refine or run state, or a transition | `domain/task_state.py` |
 | The JSON an agent role must return, and its cross-checks | `domain/schemas.py` (Pydantic, `extra="forbid"`) |
 | Which target-repo docs an agent gets (instruction docs, their links, caps) and how they are rendered | `domain/repo_docs.py` |
 | A UI-editable setting | `domain/settings.py` |
 | Any GitHub API call, clone, fetch or push | `github/gateway.py`: the only GitHub entry point |
 | Git transport to GitHub (clone, fetch, ls-remote, push) and its auth-header env | `github/_git.py`, used only by the gateway |
-| Pure CI evaluation: check states, required checks, job-log formatting | `github/_ci.py`, re-exported by the gateway |
 | Fetching the data the trust rules need | `github/trust.py` |
-| Ruleset and App-permission checks | `github/preflight.py` |
+| Reading the rulesets and App permissions for preflight | `github/preflight.py` |
 | The policy check → audit → dry-run sequence every GitHub write runs | `github/write_guard.py` (shared by the gateway and its test fake) |
 | Starting, exec'ing, stopping containers; runtime health | `runtime/containers.py` |
 | Controller-side git work: worker copies, applying patches, diff summaries, reading the repo docs | `runtime/workspace.py` |
@@ -62,7 +67,7 @@ Each row has exactly one correct place. Putting it anywhere else violates the co
 | A role prompt template | `agents/prompts/<role>.md.j2`, rendered by `agents/prompting.py` |
 | A default work rule | `agents/rules/<role>.md` (seed for the UI-editable copy) |
 | Reading or writing settings, rules, runs, tasks | `store/` |
-| Validating a work-rules revision (known key, non-empty, size cap) | `store/rules_store.py` |
+| Validating a work-rules revision (known key, non-empty, size cap) | `domain/settings.py` (`check_rule_key`, `check_rules_content`), called by `store/rules_store.py` |
 | Run orchestration: preflight order, selection, worker slots | `pipeline/run_controller.py`, setup steps (rules, repo docs) in `pipeline/run_setup.py` |
 | Starting the worker for a new issue (fresh or existing branch) | `pipeline/worker_flow.py` |
 | The worker job loop: coding, repo checks, push, CI wait, review rounds, job outcome | `pipeline/job_engine.py` |
@@ -78,9 +83,10 @@ Each row has exactly one correct place. Putting it anywhere else violates the co
 | Refine flow, selector, CI wait | `pipeline/refine_flow.py`, `pipeline/selector.py`, `pipeline/ci_watcher.py` |
 | A bootstrap setting (secret, path, port, repo) | `core/config.py`, read from `.env` |
 | A table / ORM entity | `models/<entity>.py` + Alembic migration in `migrations/versions/` |
-| Audit kinds and outcomes | `core/audit.py` |
+| Audit kinds and outcomes, the `AuditEntry` record and the `AuditSink` type | `core/audit.py` |
 | Writing or listing audit events | `store/audit_store.py` |
-| Password hashing, session and CSRF helpers | `core/security.py` |
+| Password hashing and length limits, session and CSRF helpers | `core/security.py` |
+| The UTC clock (`utc_now`) | `core/clock.py` |
 | Running git on the controller: hardening flags, isolated env, error redaction | `core/git.py`, the only git runner |
 | A UI page or partial | `web/routes/<page>.py` + `web/templates/` |
 | A scheduled trigger | `scheduler/` |
@@ -129,7 +135,7 @@ All code lives in `src/skeleton_crew/`.
 | `core/` | Config, DB engine/session, logging with redaction, audit enums, security primitives, the hardened git runner | Hold domain rules |
 | `models/` | SQLAlchemy ORM entities | Hold logic |
 | `store/` | Async data access for settings, rules, runs, tasks, audit | Hold business rules |
-| `github/` | Gateway (allow-listed operations only, **no merge**), its private git transport and CI evaluation, write guard, trust data, preflight | Write without the `domain/` policy check and an audit event |
+| `github/` | Gateway (allow-listed operations only, **no merge**), its private git transport, write guard, trust data, preflight | Write without the `domain/` policy check and an audit event |
 | `runtime/` | Containers, controller-side git work, egress, secret scan | Pass any GitHub credential into a container |
 | `agents/` | Backend interface, backend registry, backends, session runner, prompts, default rules | Call GitHub; import `runtime/` (it receives an executor) |
 | `classifiers/` | Optional classifier interface, registry, providers (controller-side HTTP) | Call GitHub; decide anything (`domain/` does) |
@@ -146,7 +152,7 @@ every package → core (core → domain only)
 
 `github/`, `runtime/`, `agents/`, `classifiers/` and `store/` never import each other. `pipeline/` composes them. import-linter enforces this in CI.
 
-`github/_git.py` and `github/_ci.py` are private to the gateway: only `github/gateway.py` imports them, enforced by import-linter. Other packages import the CI names from `github/gateway.py`.
+`github/_git.py` is private to the gateway: only `github/gateway.py` imports it, enforced by import-linter.
 
 `web/` reaches the run controller only through the `web/ports.py` `RunControl` protocol and may import `scheduler/` to re-apply the schedule. Its only `agents/` imports are `agents.rules.default_rules`, for "reset to default" on the rules page, and `agents.registry`, to render and check the agents page; likewise its only `classifiers/` import is `classifiers.registry`.
 
@@ -187,7 +193,7 @@ The controller never runs git inside a directory an agent can write to: a plante
 2. `runtime/workspace` makes a plain local copy at `<data>/tasks/<key>/agent/` and mounts it at `/workspace`. If `setup_command` is set, the controller execs it in the worker container before the first session; failure escalates.
 3. After a session, the controller execs `check_command` in the container if set, except while resolving a merge conflict; a failure goes back to the worker with the output tail. Repo commands run as the agent user with no extra env, so they never see the model credential. Then it execs `git diff --binary <base>` **inside the container** (external diff and textconv disabled) and reads it as plain bytes.
 4. In the controller clone, with hooks and fsmonitor disabled, it applies the patch on `<base>` and creates a commit whose tree is "base + patch" and whose parent is the current branch tip. Commit metadata comes from the controller, not the agent.
-5. `diff_policy`, gitleaks and the checks in `domain/contestable_checks.py` run on that commit versus base. A contestable finding is a violation unless the worker contested it in `objections` with a reason, matched on check, path and line; contested findings go to the reviewer, who decides. Hard checks are never contestable. Only then does the gateway push `skeleton/<n>-<slug>` and open or update the PR.
+5. `diff_policy`, gitleaks and the checks in `domain/contest_policy.py` run on that commit versus base. A contestable finding is a violation unless the worker contested it in `objections` with a reason, matched on check, path and line; contested findings go to the reviewer, who decides. Hard checks are never contestable. Only then does the gateway push `skeleton/<n>-<slug>` and open or update the PR.
 
 Reviewer, refiner and selector sessions get a fresh read-only copy. Within one worker job the reviewer keeps its container and session: a later review round resumes it, with the copy refreshed in place to the new head and the changes since its last review in `/skeleton-in/since-review.diff`. Every review must list in `missing_doc_updates` each doc that should have changed but did not (an empty list means none); `domain/schemas.py` rejects `approve` while that list is non-empty, so a missing doc update always goes back to the worker.
 
@@ -222,7 +228,7 @@ SQLite in the data directory, with Alembic migrations applied at startup.
 | `SettingsRow` | One row holding the UI-editable settings as JSON, validated by `domain/settings.py` |
 | `RuleRevision` | Append-only history of each role's work rules; the newest revision is active |
 | `Run` | One daily or manual run: trigger, `dry_run`, state, timestamps, note |
-| `WorkerTask` | One issue in one run: kind (`issue`, `pr_fix`; `pr_update` only on historical rows), state, branch, PR, base and head SHA, session id, container id, round counters, cost, `note` (why it escalated, aborted or failed), `blockers` (JSON list of role-prefixed blockers from every worker and reviewer session, deduplicated and capped) |
+| `WorkerTask` | One issue in one run: kind (`issue`, `pr_fix`), state, branch, PR, base and head SHA, session id, container id, round counters, cost, `note` (why it escalated, aborted or failed), `blockers` (JSON list of role-prefixed blockers from every worker and reviewer session, deduplicated and capped) |
 | `RefineTask` | One refine in one run: state, session id, cost, error |
 | `AuditEvent` | Append-only: kind and outcome from `core/audit.py`, summary, payload, run |
 

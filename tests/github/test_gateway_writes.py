@@ -7,10 +7,10 @@ from github_helpers import API, SHA, TOKEN, AuditLog, make_gateway
 from githubkit.exception import RequestFailed
 
 from skeleton_crew.core.audit import AuditKind, AuditOutcome
+from skeleton_crew.domain.ci_policy import ReviewCheck
 from skeleton_crew.domain.errors import PolicyViolation
 from skeleton_crew.domain.label_policy import LabelChange
 from skeleton_crew.domain.text_policy import TRUNCATION_SUFFIX
-from skeleton_crew.github.gateway import ReviewCheck
 
 ISSUE = f"{API}/repos/o/r/issues/4"
 ALLOWED = (AuditKind.GITHUB_WRITE, AuditOutcome.ALLOWED)
@@ -99,7 +99,7 @@ async def test_comment_is_truncated_to_max_comment_chars() -> None:
     sent = json.loads(route.calls[0].request.content)["body"]
     assert len(sent) == 300
     assert sent.endswith(TRUNCATION_SUFFIX)
-    payload = audit.events[0][3]
+    payload = audit.events[0].payload
     assert payload is not None
     assert len(str(payload["body"])) == 200
 
@@ -213,7 +213,7 @@ async def test_pending_review_check_is_in_progress_without_conclusion_and_audite
     assert "conclusion" not in sent
     assert sent["output"] == {"title": "Waiting for review", "summary": "w"}
     assert audit.kinds() == [ALLOWED]
-    payload = audit.events[0][3]
+    payload = audit.events[0].payload
     assert payload is not None
     assert payload["state"] == "pending"
 
@@ -238,7 +238,7 @@ async def test_failed_write_is_audited_and_reraised() -> None:
         await make_gateway(audit).comment(4, "hello")
 
     assert audit.kinds() == [ALLOWED]
-    assert audit.events[0][2] == "comment failed"
+    assert audit.events[0].summary == "comment failed"
 
 
 @respx.mock

@@ -4,12 +4,12 @@ from collections.abc import Awaitable, Callable, Sequence
 from datetime import timedelta
 
 from skeleton_crew.agents.prompting import PromptName
-from skeleton_crew.domain.contestable_checks import describe_checks
+from skeleton_crew.domain.ci_policy import CiState, FailedJob, ReviewCheck
+from skeleton_crew.domain.contest_policy import describe_checks, objection_key
 from skeleton_crew.domain.errors import PolicyViolation
 from skeleton_crew.domain.schemas import WorkerResult
 from skeleton_crew.domain.settings import Role
 from skeleton_crew.domain.task_state import TERMINAL_TASK_STATES, TaskEvent, TaskState
-from skeleton_crew.github.gateway import CiState, FailedJob, ReviewCheck
 from skeleton_crew.pipeline.ci_watcher import wait_for_ci
 from skeleton_crew.pipeline.classify import injection_reason, screen_output
 from skeleton_crew.pipeline.deps import RunContext
@@ -236,7 +236,7 @@ async def _code(job: WorkerJob, follow_up: FollowUp | None) -> WorkerResult:
         raise Escalation(f"worker session failed: {reply.error}")
     await job.record.add_blockers(tag_blockers(Role.WORKER, reply.result.blockers))
     await _report_new_issues(job, reply.result)
-    job.objections |= {(o.check, o.path, o.line): o.reason for o in reply.result.objections}
+    job.objections |= {objection_key(o): o.reason for o in reply.result.objections}
     if reply.result.status != "done":
         raise Escalation(f"worker reported {reply.result.status}: {reply.result.note}")
     return reply.result
@@ -306,8 +306,8 @@ async def await_ci(job: WorkerJob, head_sha: str) -> tuple[str, FollowUp | None]
         head_sha,
         required=ctx.required_checks,
         poll_s=limits.ci_poll_seconds,
-        timeout_s=limits.ci_timeout_minutes * 60.0,
-        grace_s=limits.ci_grace_minutes * 60.0,
+        timeout_s=limits.ci_timeout_s,
+        grace_s=limits.ci_grace_s,
         sleep=ctx.deps.sleep,
         clock=ctx.deps.clock,
     )

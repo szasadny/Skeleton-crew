@@ -3,12 +3,12 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from skeleton_crew.domain.container_policy import check_env
 from skeleton_crew.runtime.containers import (
     AgentContainerSpec,
     ContainerHandle,
     ContainerInfo,
     ExecResult,
-    check_env,
     check_spec,
 )
 

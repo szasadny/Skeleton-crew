@@ -3,7 +3,6 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from pydantic import SecretStr
 
 from skeleton_crew.agents.backends._shared import (
     AUTH_FILE_ENV,
@@ -11,7 +10,6 @@ from skeleton_crew.agents.backends._shared import (
     number,
     safe_reason,
     safe_session_id,
-    secret_value,
     stdin_command,
 )
 
@@ -159,10 +157,3 @@ def test_safe_reason(value: object, expected: str | None) -> None:
 @pytest.mark.parametrize(("value", "expected"), [(2, 2.0), (0.5, 0.5), (True, 9.0), ("1", 9.0)])
 def test_number_rejects_non_numbers(value: object, expected: float) -> None:
     assert number(value, 9.0) == expected
-
-
-def test_secret_value_strips_and_treats_blank_as_missing() -> None:
-    credentials = {"a": SecretStr(" key \n"), "b": SecretStr("   ")}
-    assert secret_value(credentials, "a") == "key"
-    assert secret_value(credentials, "b") is None
-    assert secret_value(credentials, "c") is None

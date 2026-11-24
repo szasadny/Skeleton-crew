@@ -11,11 +11,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import IO
 
-from skeleton_crew.core.git import GitCommandError, run_git_sync
+from skeleton_crew.core.git import GitCommandError, GitIo, run_git_sync
 from skeleton_crew.domain.errors import PolicyViolation
+from skeleton_crew.domain.git_refs import is_full_sha
 from skeleton_crew.domain.repo_docs import (
     MAX_CANDIDATES,
-    MAX_DOC_CHARS,
+    MAX_DOC_BYTES,
     instruction_paths,
     linked_paths,
 )
@@ -24,8 +25,6 @@ from skeleton_crew.domain.task_keys import is_task_key
 MAX_PATCH_BYTES = 20_000_000
 GIT_TIMEOUT_S = 300.0
 
-_TASK_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
-_SHA_RE = re.compile(r"^[0-9a-f]{40}([0-9a-f]{24})?$")
 _AUTHOR_RE = re.compile(r"^(?P<name>[^<>\n\0]*[^<>\s\0])\s*<(?P<email>[^<>\s\0]+)>$")
 
 log = logging.getLogger(__name__)
@@ -61,7 +60,7 @@ class TaskPaths:
 
 
 def _check_sha(sha: str) -> str:
-    if not _SHA_RE.fullmatch(sha):
+    if not is_full_sha(sha):
         raise ValueError(f"not a full commit sha: {sha!r}")
     return sha
 
@@ -74,19 +73,12 @@ def _git(
     env: Mapping[str, str] | None = None,
     exit_codes: frozenset[int] = frozenset({0}),
 ) -> bytes:
-    return run_git_sync(
-        args,
-        cwd=repo,
-        timeout_s=GIT_TIMEOUT_S,
-        stdin=stdin,
-        stdout=stdout,
-        env=env,
-        exit_codes=exit_codes,
-    )
+    io = GitIo(stdin=stdin, stdout=stdout, exit_codes=exit_codes)
+    return run_git_sync(args, cwd=repo, timeout_s=GIT_TIMEOUT_S, env=env, io=io)
 
 
 def task_paths(tasks_dir: Path, task_key: str) -> TaskPaths:
-    if not _TASK_KEY_RE.fullmatch(task_key):
+    if not is_task_key(task_key):
         raise ValueError(f"invalid task key: {task_key!r}")
     root = tasks_dir / task_key
     return TaskPaths(
@@ -350,8 +342,7 @@ def _read_doc(root: Path, path: str) -> str | None:
     with os.fdopen(fd, "rb") as handle:
         if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
             return None
-        # Enough bytes to tell that a doc is over the cap, without reading a huge file.
-        data = handle.read(MAX_DOC_CHARS * 4 + 4)
+        data = handle.read(MAX_DOC_BYTES)
     return data.decode("utf-8", errors="replace")
 
 

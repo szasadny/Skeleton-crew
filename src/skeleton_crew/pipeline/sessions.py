@@ -173,7 +173,7 @@ async def run_agent[T: BaseModel](
         prompt=render_prompt(prompt, context, json_schema=schema),
         agent=agent,
         max_turns=limits.max_turns,
-        timeout_s=limits.session_timeout_minutes * 60.0,
+        timeout_s=limits.session_timeout_s,
         json_schema=schema,
         rules_path_in_container=f"{INBOX}/{RULES_FILE}",
         prompt_path_in_container=f"{INBOX}/{PROMPT_FILE}",

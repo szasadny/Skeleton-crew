@@ -5,12 +5,12 @@ from skeleton_crew.domain.contest_policy import (
     Contest,
     Finding,
     contest,
+    finding_violation,
+    run_checks,
     uncontested,
-    violation_text,
 )
-from skeleton_crew.domain.contestable_checks import run_checks
-from skeleton_crew.domain.diff_lines import added_lines
-from skeleton_crew.domain.diff_policy import FileChange, check_diff, parse_diff_summary
+from skeleton_crew.domain.diff_parse import FileChange, added_lines, parse_diff_summary
+from skeleton_crew.domain.diff_policy import check_diff
 from skeleton_crew.domain.errors import PolicyViolation
 from skeleton_crew.domain.merge_policy import check_resolution, conflict_markers
 from skeleton_crew.domain.schemas import WorkerResult
@@ -86,14 +86,14 @@ async def check_change(job: WorkerJob, result: WorkerResult) -> PolicyCheck:
         return PolicyCheck(None, [str(exc)], patch, [], [])
     found = await _inspect(job, head, patch)
     open_findings, contested = contest(found.contestable, job.objections)
-    violations = found.violations + [violation_text(f) for f in open_findings]
+    violations = found.violations + [str(finding_violation(f)) for f in open_findings]
     if resolving:
         raw, numstat, _ = await diff_summary(repo, git.patch_base_sha, head)
         try:
             touched = [c.path for c in parse_diff_summary(raw, numstat)]
         except PolicyViolation as exc:
             return PolicyCheck(head, [str(exc)], found.patch, [], [])
-        violations += check_resolution(touched, git.conflicts)
+        violations += [str(v) for v in check_resolution(touched, git.conflicts)]
     return PolicyCheck(head, violations, found.patch, found.changes, contested)
 
 
@@ -117,7 +117,7 @@ async def _inspect(job: WorkerJob, head: str, agent_patch: bytes) -> _Inspection
         return _Inspection([str(exc)], patch, [], [])
     settings = job.ctx.settings
     violations = [
-        f"{v.path}: {v.reason}"
+        str(v)
         for v in check_diff(changes, settings.repo.protected_paths, settings.limits.max_diff_lines)
     ]
     if agent_patch:
@@ -125,6 +125,6 @@ async def _inspect(job: WorkerJob, head: str, agent_patch: bytes) -> _Inspection
             f"possible secret: {f}" for f in await job.ctx.deps.secret_scanner(agent_patch)
         ]
     if is_update:
-        violations += conflict_markers(lines)
-    contestable = run_checks(CheckInput(changes, lines, settings))
+        violations += [str(v) for v in conflict_markers(lines)]
+    contestable = run_checks(CheckInput(lines, settings))
     return _Inspection(violations, patch, changes, contestable)

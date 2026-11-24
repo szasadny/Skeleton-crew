@@ -4,9 +4,7 @@ import tempfile
 from collections.abc import Iterable
 from pathlib import Path
 
-from pydantic import ValidationError
-
-from skeleton_crew.domain.settings import RuntimeLimits
+from skeleton_crew.domain.settings import check_domains
 from skeleton_crew.runtime.containers import ContainerHandle, ContainerRuntime
 
 PLACEHOLDER_DOMAIN = ".invalid"
@@ -28,9 +26,9 @@ def _covered(entry: str, wildcards: set[str]) -> bool:
 def render_allowlist(domains: Iterable[str]) -> str:
     normalized = {domain.strip().lower() for domain in domains}
     try:
-        RuntimeLimits(egress_allowlist=tuple(sorted(normalized)))
-    except ValidationError as exc:
-        raise ValueError(f"invalid egress domain: {exc.errors()[0]['msg']}") from exc
+        check_domains(tuple(sorted(normalized)))
+    except ValueError as exc:
+        raise ValueError(f"invalid egress domain: {exc}") from exc
     wildcards = {d.removeprefix(".") for d in normalized if d.startswith(".")}
     # Squid rejects entries that a ".domain" wildcard already covers.
     kept = sorted(d for d in normalized if not _covered(d, wildcards))

@@ -1,7 +1,7 @@
-from typing import Literal, Protocol
+from typing import Protocol
 
 from skeleton_crew.domain.runner_policy import RunnerState
-from skeleton_crew.domain.task_state import RunStep
+from skeleton_crew.domain.task_state import RunStep, RunTrigger
 
 
 class RunControl(Protocol):
@@ -11,7 +11,7 @@ class RunControl(Protocol):
     @property
     def step(self) -> RunStep | None: ...
 
-    async def start(self, trigger: Literal["schedule", "manual"]) -> int | None: ...
+    async def start(self, trigger: RunTrigger) -> int | None: ...
 
     async def kill(self) -> None: ...
 

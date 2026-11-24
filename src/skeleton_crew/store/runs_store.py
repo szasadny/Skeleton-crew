@@ -1,26 +1,24 @@
 from collections.abc import Collection
 from datetime import datetime
-from typing import Literal
 
 from sqlalchemy import ColumnElement, and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from skeleton_crew.core.clock import utc_now
 from skeleton_crew.domain.task_state import (
+    QUOTA_FREE_TASK_STATES,
     TERMINAL_REFINE_STATES,
     TERMINAL_TASK_STATES,
     RefineState,
     RunState,
+    RunTrigger,
     TaskKind,
     TaskState,
 )
 from skeleton_crew.models.refine_task import RefineTask
 from skeleton_crew.models.run import Run
-from skeleton_crew.models.types import utc_now
 from skeleton_crew.models.worker_task import WorkerTask
 
-type RunTrigger = Literal["schedule", "manual"]
-
-_TRIGGERS = frozenset({"schedule", "manual"})
 _WORKER_TASK_FIELDS = frozenset(
     {
         "issue_title",
@@ -55,8 +53,6 @@ def _apply(
 
 
 async def create_run(session: AsyncSession, trigger: RunTrigger, dry_run: bool) -> Run:
-    if trigger not in _TRIGGERS:
-        raise ValueError(f"unknown trigger: {trigger}")
     run = Run(trigger=trigger, dry_run=dry_run, state=RunState.RUNNING)
     session.add(run)
     await session.flush()
@@ -201,7 +197,7 @@ async def count_worker_tasks_since(
         .where(
             WorkerTask.created_at >= since,
             WorkerTask.kind == kind,
-            WorkerTask.state != TaskState.ABORTED,
+            WorkerTask.state.not_in(QUOTA_FREE_TASK_STATES),
         )
     )
     return int(await session.scalar(query) or 0)

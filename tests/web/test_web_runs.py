@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from web_helpers import TOKEN_SECRET, Web, open_web
 
-from skeleton_crew.domain.task_state import RefineState, RunState, TaskState
+from skeleton_crew.domain.task_state import RefineState, RunState, RunTrigger, TaskState
 from skeleton_crew.models.run import Run
 from skeleton_crew.models.worker_task import WorkerTask
 from skeleton_crew.store import runs_store
@@ -22,7 +22,7 @@ async def web(tmp_path: Path, sessionmaker: async_sessionmaker[AsyncSession]) ->
 
 async def _run_with_task(web: Web) -> tuple[Run, WorkerTask]:
     async with web.sessionmaker() as session:
-        run = await runs_store.create_run(session, "manual", dry_run=False)
+        run = await runs_store.create_run(session, RunTrigger.MANUAL, dry_run=False)
         task = await runs_store.add_worker_task(session, run.id, 12, "Add retries")
         await runs_store.update_worker_task(
             session,
@@ -49,7 +49,7 @@ def _transcripts_dir(web: Web, key: str) -> Path:
 async def test_runs_list_paginates(web: Web) -> None:
     async with web.sessionmaker() as session:
         for _ in range(30):
-            await runs_store.create_run(session, "schedule", dry_run=True)
+            await runs_store.create_run(session, RunTrigger.SCHEDULE, dry_run=True)
         await session.commit()
     first = (await web.client.get("/runs")).text
     assert 'href="/runs?page=2"' in first
@@ -270,11 +270,11 @@ async def test_run_detail_without_blockers_has_no_blockers_row(web: Web) -> None
 
 async def test_runs_list_counts_tasks_with_blockers(web: Web) -> None:
     async with web.sessionmaker() as session:
-        blocked = await runs_store.create_run(session, "manual", dry_run=False)
+        blocked = await runs_store.create_run(session, RunTrigger.MANUAL, dry_run=False)
         for number, blockers in ((1, ["worker: a"]), (2, None), (3, [])):
             task = await runs_store.add_worker_task(session, blocked.id, number, "T")
             await runs_store.update_worker_task(session, task.id, blockers=blockers)
-        clean = await runs_store.create_run(session, "manual", dry_run=False)
+        clean = await runs_store.create_run(session, RunTrigger.MANUAL, dry_run=False)
         await runs_store.add_worker_task(session, clean.id, 4, "T")
         await session.commit()
     html = (await web.client.get("/runs")).text

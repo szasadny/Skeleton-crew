@@ -25,9 +25,9 @@ from pipeline_helpers import (
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from skeleton_crew.core.audit import AuditKind
+from skeleton_crew.domain.ci_policy import ReviewCheck
 from skeleton_crew.domain.settings import Role
 from skeleton_crew.domain.task_state import TaskKind, TaskState
-from skeleton_crew.github.gateway import ReviewCheck
 from skeleton_crew.store import audit_store
 
 FOREIGN = "the branch has commits Skeleton Crew did not push"

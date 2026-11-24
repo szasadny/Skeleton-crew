@@ -14,7 +14,7 @@ from skeleton_crew.domain.runner_policy import (
     RunnerStatus,
 )
 from skeleton_crew.domain.settings import SelfHostedCi
-from skeleton_crew.domain.task_state import TaskState
+from skeleton_crew.domain.task_state import RunTrigger, TaskState
 from skeleton_crew.pipeline.run_controller import RunController
 from skeleton_crew.pipeline.run_setup import preflight
 from skeleton_crew.pipeline.runner_pool import (
@@ -61,7 +61,7 @@ def clock() -> Clock:
 
 async def wait_for_ci(harness: Harness, *, dry_run: bool = False) -> int:
     async with harness.sessionmaker.begin() as session:
-        run = await runs_store.create_run(session, "manual", dry_run=dry_run)
+        run = await runs_store.create_run(session, RunTrigger.MANUAL, dry_run=dry_run)
         task = await runs_store.add_worker_task(session, run.id, 1, "a")
         await runs_store.update_worker_task(session, task.id, state=TaskState.AWAITING_CI)
         return task.id

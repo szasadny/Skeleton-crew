@@ -5,8 +5,9 @@ from sqlalchemy import JSON, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from skeleton_crew.core.audit import AuditKind, AuditOutcome
+from skeleton_crew.core.clock import utc_now
 from skeleton_crew.core.db import Base
-from skeleton_crew.models.types import StrEnumType, UtcDateTime, utc_now
+from skeleton_crew.models.types import StrEnumType, UtcDateTime
 
 AUDIT_SUMMARY_LENGTH = 500
 

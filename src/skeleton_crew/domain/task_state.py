@@ -1,6 +1,12 @@
+from collections.abc import Iterable, Sequence
 from enum import StrEnum
 
 from skeleton_crew.domain.errors import InvalidTransition
+
+
+class RunTrigger(StrEnum):
+    SCHEDULE = "schedule"
+    MANUAL = "manual"
 
 
 class TaskState(StrEnum):
@@ -18,7 +24,6 @@ class TaskState(StrEnum):
 
 class TaskKind(StrEnum):
     ISSUE = "issue"
-    PR_UPDATE = "pr_update"
     PR_FIX = "pr_fix"
 
 
@@ -66,6 +71,8 @@ TERMINAL_TASK_STATES = frozenset(
 
 TERMINAL_REFINE_STATES = frozenset({RefineState.DONE, RefineState.FAILED, RefineState.ABORTED})
 
+QUOTA_FREE_TASK_STATES = frozenset({TaskState.ABORTED})
+
 _TRANSITIONS: dict[tuple[TaskState, TaskEvent], TaskState] = {
     (TaskState.QUEUED, TaskEvent.STARTED): TaskState.PREPARING,
     (TaskState.PREPARING, TaskEvent.PREPARED): TaskState.CODING,
@@ -95,3 +102,8 @@ def transition(state: TaskState, event: TaskEvent) -> TaskState:
         return _TRANSITIONS[(state, event)]
     except KeyError:
         raise InvalidTransition(f"{event} not allowed in {state}") from None
+
+
+def merge_blockers(existing: Sequence[str], new: Iterable[str], cap: int) -> list[str]:
+    added = [b for b in dict.fromkeys(new) if b not in existing]
+    return [*existing, *added[: max(cap - len(existing), 0)]]

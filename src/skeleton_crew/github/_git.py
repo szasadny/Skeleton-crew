@@ -3,12 +3,13 @@ import shutil
 from collections.abc import Sequence
 from pathlib import Path
 
-from skeleton_crew.core.git import run_git
+from skeleton_crew.core.config import GITHUB_URL
+from skeleton_crew.core.git import RemoteAccess, run_git
 from skeleton_crew.domain.errors import PolicyViolation
 
 GIT_TIMEOUT_S = 900.0
 REMOTE_PROTOCOL = "https"
-_AUTH_HEADER_KEY = "http.https://github.com/.extraheader"
+_AUTH_HEADER_KEY = f"http.{GITHUB_URL}/.extraheader"
 
 
 def auth_env(token: str | None) -> dict[str, str]:
@@ -26,14 +27,10 @@ def auth_env(token: str | None) -> dict[str, str]:
 async def _remote_git(
     args: Sequence[str], *, cwd: Path | None, token: str | None, protocol: str
 ) -> str:
-    return await run_git(
-        args,
-        cwd=cwd,
-        timeout_s=GIT_TIMEOUT_S,
-        env=auth_env(token),
-        protocols=(protocol,),
-        secrets=[token] if token else [],
+    remote = RemoteAccess(
+        env=auth_env(token), protocols=(protocol,), secrets=[token] if token else []
     )
+    return await run_git(args, cwd=cwd, timeout_s=GIT_TIMEOUT_S, remote=remote)
 
 
 async def _local_git(args: Sequence[str], *, cwd: Path) -> str:

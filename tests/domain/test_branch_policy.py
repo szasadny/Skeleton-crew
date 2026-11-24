@@ -3,8 +3,10 @@ import pytest
 from skeleton_crew.domain.branch_policy import (
     BRANCH_PREFIX,
     branch_name,
+    check_issue_number,
     check_push_target,
     continuation_problem,
+    is_skeleton_branch,
     issue_number_from_branch,
     pushed_by_controller,
 )
@@ -149,3 +151,35 @@ def test_ownership_is_checked_before_the_closed_pr() -> None:
 
 def test_closed_pr_is_never_resurrected() -> None:
     assert continuation_problem(OURS, OURS, 7) == "PR #7 was closed without merging"
+
+
+@pytest.mark.parametrize(
+    ("branch", "expected"),
+    [
+        ("skeleton/12-fix-login", True),
+        ("skeleton/9999999999-x", True),
+        ("skeleton/10000000000-x", False),
+        ("skeleton/0-x", False),
+        ("skeleton/12", False),
+        ("Skeleton/12-x", False),
+        ("skeleton/12-x/../main", False),
+        ("main", False),
+        ("", False),
+    ],
+)
+def test_is_skeleton_branch(branch: str, expected: bool) -> None:
+    assert is_skeleton_branch(branch) is expected
+    assert is_skeleton_branch(branch) is (issue_number_from_branch(branch) is not None)
+
+
+@pytest.mark.parametrize("number", [0, -1])
+def test_issue_numbers_below_one_are_invalid(number: int) -> None:
+    with pytest.raises(PolicyViolation, match=f"invalid issue number: {number}"):
+        check_issue_number(number)
+
+
+def test_issue_number_maximum_is_optional_and_inclusive() -> None:
+    check_issue_number(10**12)
+    check_issue_number(5, maximum=5)
+    with pytest.raises(PolicyViolation, match="invalid issue number: 6"):
+        check_issue_number(6, maximum=5)

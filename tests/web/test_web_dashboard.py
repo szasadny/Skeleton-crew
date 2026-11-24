@@ -8,7 +8,7 @@ from web_helpers import Web, open_web
 
 from skeleton_crew.core.audit import AuditKind
 from skeleton_crew.domain.settings import AppSettings, Schedule, Weekday
-from skeleton_crew.domain.task_state import RefineState, RunStep, TaskState
+from skeleton_crew.domain.task_state import RefineState, RunStep, RunTrigger, TaskState
 from skeleton_crew.store import audit_store, runs_store
 from skeleton_crew.store.settings_store import save_settings
 
@@ -57,7 +57,7 @@ async def test_dashboard_shows_running_state_and_next_run(web: Web) -> None:
 
 async def test_status_partial_lists_active_tasks_with_pr_link(web: Web) -> None:
     async with web.sessionmaker() as session:
-        run = await runs_store.create_run(session, "manual", dry_run=False)
+        run = await runs_store.create_run(session, RunTrigger.MANUAL, dry_run=False)
         task = await runs_store.add_worker_task(session, run.id, 7, "Fix <b>parser</b>")
         await runs_store.update_worker_task(session, task.id, state=TaskState.CODING, pr_number=42)
         await session.commit()
@@ -71,7 +71,7 @@ async def test_status_partial_lists_active_tasks_with_pr_link(web: Web) -> None:
 
 async def test_status_partial_shows_the_running_selector(web: Web) -> None:
     async with web.sessionmaker() as session:
-        run = await runs_store.create_run(session, "manual", dry_run=False)
+        run = await runs_store.create_run(session, RunTrigger.MANUAL, dry_run=False)
         await session.commit()
     web.controller.running = True
     web.controller.current_step = RunStep.SELECTOR
@@ -90,7 +90,7 @@ async def test_status_partial_hides_a_step_once_idle(web: Web) -> None:
 
 async def test_status_partial_lists_active_refines_only(web: Web) -> None:
     async with web.sessionmaker() as session:
-        run = await runs_store.create_run(session, "manual", dry_run=False)
+        run = await runs_store.create_run(session, RunTrigger.MANUAL, dry_run=False)
         active = await runs_store.add_refine_task(session, run.id, 5)
         await runs_store.update_refine_task(session, active.id, state=RefineState.REFINING)
         done = await runs_store.add_refine_task(session, run.id, 6)
@@ -158,7 +158,7 @@ async def test_dry_run_toggle(web: Web) -> None:
 async def test_last_run_summary(web: Web) -> None:
     async with web.sessionmaker() as session:
         await save_settings(session, AppSettings())
-        run = await runs_store.create_run(session, "schedule", dry_run=True)
+        run = await runs_store.create_run(session, RunTrigger.SCHEDULE, dry_run=True)
         await runs_store.add_worker_task(session, run.id, 1, "One")
         await session.commit()
     html = (await web.client.get("/")).text
@@ -169,7 +169,7 @@ async def test_last_run_summary(web: Web) -> None:
 async def test_last_run_shows_tasks_with_blockers(web: Web) -> None:
     async with web.sessionmaker() as session:
         await save_settings(session, AppSettings())
-        run = await runs_store.create_run(session, "manual", dry_run=False)
+        run = await runs_store.create_run(session, RunTrigger.MANUAL, dry_run=False)
         for number in (1, 2, 3):
             task = await runs_store.add_worker_task(session, run.id, number, "T")
             if number < 3:
@@ -182,7 +182,7 @@ async def test_last_run_shows_tasks_with_blockers(web: Web) -> None:
 async def test_last_run_without_blockers_shows_no_badge(web: Web) -> None:
     async with web.sessionmaker() as session:
         await save_settings(session, AppSettings())
-        run = await runs_store.create_run(session, "manual", dry_run=False)
+        run = await runs_store.create_run(session, RunTrigger.MANUAL, dry_run=False)
         await runs_store.add_worker_task(session, run.id, 1, "T")
         await session.commit()
     assert "with blockers" not in (await web.client.get("/")).text

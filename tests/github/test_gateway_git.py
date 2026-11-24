@@ -208,7 +208,7 @@ async def test_lease_push_updates_the_branch_it_expects(tmp_path: Path) -> None:
     await gateway.push_branch(clone, "skeleton/4-fix", second, expected_sha=first)
 
     assert git(bare, "rev-parse", "refs/heads/skeleton/4-fix") == second
-    payload = audit.events[-1][3]
+    payload = audit.events[-1].payload
     assert payload is not None
     assert payload["expected"] == first
 

@@ -1,11 +1,17 @@
+import json
 from datetime import time
+from pathlib import Path
 from typing import Any
 
 import pytest
 from pydantic import ValidationError
 
 from skeleton_crew.domain.settings import (
+    COMMON_RULES,
+    MAX_RULES_CHARS,
+    RULE_KEYS,
     AppSettings,
+    InvalidRules,
     LabelNames,
     Limits,
     RepoPolicy,
@@ -13,7 +19,12 @@ from skeleton_crew.domain.settings import (
     RoleAgent,
     RuntimeLimits,
     Schedule,
+    check_domains,
+    check_rule_key,
+    check_rules_content,
 )
+
+SNAPSHOTS = Path(__file__).with_name("settings_snapshots.json")
 
 
 def test_defaults_are_safe() -> None:
@@ -30,6 +41,20 @@ def test_defaults_are_safe() -> None:
 def test_settings_round_trip_through_json() -> None:
     settings = AppSettings(schedule=Schedule(start_time=time(3, 30)), dry_run=False)
     assert AppSettings.model_validate_json(settings.model_dump_json()) == settings
+
+
+def _pinned(name: str) -> str:
+    snapshot = json.loads(SNAPSHOTS.read_text(encoding="utf-8"))[name]
+    return json.dumps(snapshot, separators=(",", ":"))
+
+
+def test_default_settings_dump_is_pinned() -> None:
+    assert AppSettings().model_dump_json() == _pinned("default")
+
+
+def test_stored_settings_load_and_dump_unchanged() -> None:
+    stored = _pinned("stored")
+    assert AppSettings.model_validate_json(stored).model_dump_json() == stored
 
 
 def test_unknown_fields_are_rejected() -> None:
@@ -192,3 +217,53 @@ def test_task_retention_days_out_of_range_is_rejected(days: int) -> None:
 
 def test_task_retention_defaults_to_thirty_days() -> None:
     assert Limits().task_retention_days == 30
+
+
+def test_rule_keys_cover_common_and_every_role() -> None:
+    assert RULE_KEYS == (COMMON_RULES, "selector", "refiner", "reviewer", "worker")
+    for key in RULE_KEYS:
+        check_rule_key(key)
+
+
+@pytest.mark.parametrize("key", ["admin", "Worker", "", "../worker", "common "])
+def test_unknown_rule_keys_are_rejected(key: str) -> None:
+    with pytest.raises(ValueError, match="unknown rules key"):
+        check_rule_key(key)
+
+
+@pytest.mark.parametrize(
+    ("content", "message"),
+    [
+        ("", "Rules cannot be empty."),
+        (" \n\t\n", "Rules cannot be empty."),
+        ("\u3000", "Rules cannot be empty."),
+        ("x" * (MAX_RULES_CHARS + 1), f"Rules are limited to {MAX_RULES_CHARS} characters."),
+    ],
+)
+def test_invalid_rules_content_is_rejected(content: str, message: str) -> None:
+    with pytest.raises(InvalidRules) as raised:
+        check_rules_content(content)
+    assert str(raised.value) == message
+
+
+def test_rules_content_at_the_limit_passes() -> None:
+    check_rules_content("x" * MAX_RULES_CHARS)
+
+
+def test_limits_convert_minutes_to_seconds() -> None:
+    limits = Limits(
+        session_timeout_minutes=7,
+        command_timeout_minutes=2,
+        ci_timeout_minutes=9,
+        ci_grace_minutes=3,
+    )
+    assert limits.session_timeout_s == 420.0
+    assert limits.command_timeout_s == 120.0
+    assert limits.ci_timeout_s == 540.0
+    assert limits.ci_grace_s == 180.0
+
+
+def test_domain_check_returns_valid_domains_and_rejects_invalid_ones() -> None:
+    assert check_domains(("pypi.org", ".example.com")) == ("pypi.org", ".example.com")
+    with pytest.raises(ValueError, match="invalid domain: localhost"):
+        check_domains(("pypi.org", "localhost"))

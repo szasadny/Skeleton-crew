@@ -1,11 +1,14 @@
 from collections.abc import Collection, Iterable
 
+from skeleton_crew.domain.label_policy import same_label
 from skeleton_crew.domain.trust_policy import (
-    TRUSTED_PERMISSIONS,
     IssueComment,
+    always_trusted,
     content_untampered,
+    never_trusted,
     trusted_comments,
     trusted_label_time,
+    trusted_role,
 )
 from skeleton_crew.github.gateway import Gateway, IssueRef
 
@@ -13,23 +16,21 @@ from skeleton_crew.github.gateway import Gateway, IssueRef
 class _TrustResolver:
     def __init__(self, gw: Gateway, extra_trusted: Collection[str], bot_login: str | None) -> None:
         self._gw = gw
-        self._known = {login.casefold(): True for login in extra_trusted}
-        if bot_login:
-            self._known[bot_login.casefold()] = True
+        self._known = dict.fromkeys(always_trusted(extra_trusted, bot_login), True)
 
     async def resolve(self, logins: Iterable[str]) -> None:
         for login in logins:
             key = login.casefold()
             if key in self._known:
                 continue
-            if not login or login.endswith("[bot]"):
+            if never_trusted(login):
                 self._known[key] = False
                 continue
             try:
                 role = await self._gw.permission_of(login)
             except Exception:
                 role = ""
-            self._known[key] = role in TRUSTED_PERMISSIONS
+            self._known[key] = trusted_role(role)
 
     def is_trusted(self, login: str) -> bool:
         return self._known.get(login.casefold(), False)
@@ -42,9 +43,7 @@ async def trusted_issues(
     result: list[tuple[IssueRef, list[IssueComment]]] = []
     for issue in await gw.list_open_issues(label):
         data = await gw.trust_data(issue.number)
-        await resolver.resolve(
-            e.actor for e in data.label_events if e.label.casefold() == label.casefold()
-        )
+        await resolver.resolve(e.actor for e in data.label_events if same_label(e.label, label))
         since = trusted_label_time(data.label_events, label, resolver.is_trusted)
         if since is None:
             continue

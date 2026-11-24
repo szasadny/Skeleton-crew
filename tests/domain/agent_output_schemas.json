@@ -1,0 +1,685 @@
+{
+  "MissingDocUpdate": {
+    "additionalProperties": false,
+    "properties": {
+      "path": {
+        "maxLength": 300,
+        "minLength": 1,
+        "title": "Path",
+        "type": "string"
+      },
+      "reason": {
+        "maxLength": 500,
+        "minLength": 1,
+        "title": "Reason",
+        "type": "string"
+      }
+    },
+    "required": [
+      "path",
+      "reason"
+    ],
+    "title": "MissingDocUpdate",
+    "type": "object"
+  },
+  "NewIssue": {
+    "additionalProperties": false,
+    "properties": {
+      "body": {
+        "maxLength": 4000,
+        "minLength": 1,
+        "title": "Body",
+        "type": "string"
+      },
+      "title": {
+        "maxLength": 120,
+        "minLength": 1,
+        "title": "Title",
+        "type": "string"
+      }
+    },
+    "required": [
+      "title",
+      "body"
+    ],
+    "title": "NewIssue",
+    "type": "object"
+  },
+  "Objection": {
+    "$defs": {
+      "CheckId": {
+        "enum": [
+          "comment_block"
+        ],
+        "title": "CheckId",
+        "type": "string"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "check": {
+        "$ref": "#/$defs/CheckId"
+      },
+      "line": {
+        "minimum": 1,
+        "title": "Line",
+        "type": "integer"
+      },
+      "path": {
+        "maxLength": 300,
+        "minLength": 1,
+        "title": "Path",
+        "type": "string"
+      },
+      "reason": {
+        "maxLength": 300,
+        "minLength": 1,
+        "title": "Reason",
+        "type": "string"
+      }
+    },
+    "required": [
+      "check",
+      "path",
+      "line",
+      "reason"
+    ],
+    "title": "Objection",
+    "type": "object"
+  },
+  "RefineResult": {
+    "additionalProperties": false,
+    "properties": {
+      "open_questions": {
+        "items": {
+          "maxLength": 300,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 10,
+        "title": "Open Questions",
+        "type": "array"
+      },
+      "spec_markdown": {
+        "maxLength": 6000,
+        "minLength": 1,
+        "title": "Spec Markdown",
+        "type": "string"
+      }
+    },
+    "required": [
+      "spec_markdown"
+    ],
+    "title": "RefineResult",
+    "type": "object"
+  },
+  "ReviewFinding": {
+    "additionalProperties": false,
+    "properties": {
+      "line": {
+        "anyOf": [
+          {
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Line"
+      },
+      "message": {
+        "maxLength": 500,
+        "minLength": 1,
+        "title": "Message",
+        "type": "string"
+      },
+      "path": {
+        "anyOf": [
+          {
+            "maxLength": 300,
+            "minLength": 1,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Path"
+      },
+      "severity": {
+        "enum": [
+          "blocker",
+          "major",
+          "minor"
+        ],
+        "title": "Severity",
+        "type": "string"
+      }
+    },
+    "required": [
+      "severity",
+      "message"
+    ],
+    "title": "ReviewFinding",
+    "type": "object"
+  },
+  "ReviewResult": {
+    "$defs": {
+      "MissingDocUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Path",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "reason"
+        ],
+        "title": "MissingDocUpdate",
+        "type": "object"
+      },
+      "ReviewFinding": {
+        "additionalProperties": false,
+        "properties": {
+          "line": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Line"
+          },
+          "message": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Message",
+            "type": "string"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Path"
+          },
+          "severity": {
+            "enum": [
+              "blocker",
+              "major",
+              "minor"
+            ],
+            "title": "Severity",
+            "type": "string"
+          }
+        },
+        "required": [
+          "severity",
+          "message"
+        ],
+        "title": "ReviewFinding",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "blockers": {
+        "items": {
+          "maxLength": 300,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 10,
+        "title": "Blockers",
+        "type": "array"
+      },
+      "findings": {
+        "items": {
+          "$ref": "#/$defs/ReviewFinding"
+        },
+        "maxItems": 30,
+        "title": "Findings",
+        "type": "array"
+      },
+      "missing_doc_updates": {
+        "items": {
+          "$ref": "#/$defs/MissingDocUpdate"
+        },
+        "maxItems": 20,
+        "title": "Missing Doc Updates",
+        "type": "array"
+      },
+      "summary": {
+        "maxLength": 1000,
+        "minLength": 1,
+        "title": "Summary",
+        "type": "string"
+      },
+      "verdict": {
+        "enum": [
+          "approve",
+          "changes_requested",
+          "scope_too_large"
+        ],
+        "title": "Verdict",
+        "type": "string"
+      }
+    },
+    "required": [
+      "verdict",
+      "summary",
+      "missing_doc_updates",
+      "blockers"
+    ],
+    "title": "ReviewResult",
+    "type": "object"
+  },
+  "SelectionDuplicate": {
+    "additionalProperties": false,
+    "properties": {
+      "duplicate_of": {
+        "minimum": 1,
+        "title": "Duplicate Of",
+        "type": "integer"
+      },
+      "issue_number": {
+        "minimum": 1,
+        "title": "Issue Number",
+        "type": "integer"
+      },
+      "reason": {
+        "maxLength": 300,
+        "minLength": 1,
+        "title": "Reason",
+        "type": "string"
+      }
+    },
+    "required": [
+      "issue_number",
+      "duplicate_of",
+      "reason"
+    ],
+    "title": "SelectionDuplicate",
+    "type": "object"
+  },
+  "SelectionPick": {
+    "additionalProperties": false,
+    "properties": {
+      "issue_number": {
+        "minimum": 1,
+        "title": "Issue Number",
+        "type": "integer"
+      },
+      "reason": {
+        "maxLength": 300,
+        "minLength": 1,
+        "title": "Reason",
+        "type": "string"
+      }
+    },
+    "required": [
+      "issue_number",
+      "reason"
+    ],
+    "title": "SelectionPick",
+    "type": "object"
+  },
+  "SelectionQuestion": {
+    "additionalProperties": false,
+    "properties": {
+      "issue_number": {
+        "minimum": 1,
+        "title": "Issue Number",
+        "type": "integer"
+      },
+      "options": {
+        "items": {
+          "maxLength": 300,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 5,
+        "minItems": 1,
+        "title": "Options",
+        "type": "array"
+      },
+      "problem": {
+        "maxLength": 300,
+        "minLength": 1,
+        "title": "Problem",
+        "type": "string"
+      },
+      "question": {
+        "maxLength": 300,
+        "minLength": 1,
+        "title": "Question",
+        "type": "string"
+      }
+    },
+    "required": [
+      "issue_number",
+      "problem",
+      "question",
+      "options"
+    ],
+    "title": "SelectionQuestion",
+    "type": "object"
+  },
+  "SelectionResult": {
+    "$defs": {
+      "SelectionDuplicate": {
+        "additionalProperties": false,
+        "properties": {
+          "duplicate_of": {
+            "minimum": 1,
+            "title": "Duplicate Of",
+            "type": "integer"
+          },
+          "issue_number": {
+            "minimum": 1,
+            "title": "Issue Number",
+            "type": "integer"
+          },
+          "reason": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "issue_number",
+          "duplicate_of",
+          "reason"
+        ],
+        "title": "SelectionDuplicate",
+        "type": "object"
+      },
+      "SelectionPick": {
+        "additionalProperties": false,
+        "properties": {
+          "issue_number": {
+            "minimum": 1,
+            "title": "Issue Number",
+            "type": "integer"
+          },
+          "reason": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "issue_number",
+          "reason"
+        ],
+        "title": "SelectionPick",
+        "type": "object"
+      },
+      "SelectionQuestion": {
+        "additionalProperties": false,
+        "properties": {
+          "issue_number": {
+            "minimum": 1,
+            "title": "Issue Number",
+            "type": "integer"
+          },
+          "options": {
+            "items": {
+              "maxLength": 300,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 5,
+            "minItems": 1,
+            "title": "Options",
+            "type": "array"
+          },
+          "problem": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Problem",
+            "type": "string"
+          },
+          "question": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Question",
+            "type": "string"
+          }
+        },
+        "required": [
+          "issue_number",
+          "problem",
+          "question",
+          "options"
+        ],
+        "title": "SelectionQuestion",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "duplicates": {
+        "items": {
+          "$ref": "#/$defs/SelectionDuplicate"
+        },
+        "maxItems": 50,
+        "title": "Duplicates",
+        "type": "array"
+      },
+      "needs_decision": {
+        "items": {
+          "$ref": "#/$defs/SelectionQuestion"
+        },
+        "maxItems": 50,
+        "title": "Needs Decision",
+        "type": "array"
+      },
+      "picks": {
+        "items": {
+          "$ref": "#/$defs/SelectionPick"
+        },
+        "maxItems": 50,
+        "title": "Picks",
+        "type": "array"
+      },
+      "rejected": {
+        "items": {
+          "$ref": "#/$defs/SelectionPick"
+        },
+        "maxItems": 50,
+        "title": "Rejected",
+        "type": "array"
+      },
+      "too_large": {
+        "items": {
+          "$ref": "#/$defs/SelectionPick"
+        },
+        "maxItems": 50,
+        "title": "Too Large",
+        "type": "array"
+      }
+    },
+    "title": "SelectionResult",
+    "type": "object"
+  },
+  "WorkerResult": {
+    "$defs": {
+      "CheckId": {
+        "enum": [
+          "comment_block"
+        ],
+        "title": "CheckId",
+        "type": "string"
+      },
+      "NewIssue": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Body",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "body"
+        ],
+        "title": "NewIssue",
+        "type": "object"
+      },
+      "Objection": {
+        "additionalProperties": false,
+        "properties": {
+          "check": {
+            "$ref": "#/$defs/CheckId"
+          },
+          "line": {
+            "minimum": 1,
+            "title": "Line",
+            "type": "integer"
+          },
+          "path": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Path",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "check",
+          "path",
+          "line",
+          "reason"
+        ],
+        "title": "Objection",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "blockers": {
+        "description": "Sandbox or access problems that hindered the work: a missing tool or version, a blocked domain, missing access. Never checks you skipped or could not verify.",
+        "items": {
+          "maxLength": 300,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 10,
+        "title": "Blockers",
+        "type": "array"
+      },
+      "new_issues": {
+        "items": {
+          "$ref": "#/$defs/NewIssue"
+        },
+        "maxItems": 10,
+        "title": "New Issues",
+        "type": "array"
+      },
+      "note": {
+        "anyOf": [
+          {
+            "maxLength": 1500,
+            "minLength": 1,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Note"
+      },
+      "objections": {
+        "items": {
+          "$ref": "#/$defs/Objection"
+        },
+        "maxItems": 20,
+        "title": "Objections",
+        "type": "array"
+      },
+      "pr_title": {
+        "maxLength": 72,
+        "minLength": 1,
+        "title": "Pr Title",
+        "type": "string"
+      },
+      "status": {
+        "enum": [
+          "done",
+          "scope_too_large",
+          "blocked",
+          "already_fixed"
+        ],
+        "title": "Status",
+        "type": "string"
+      },
+      "summary": {
+        "maxLength": 1500,
+        "minLength": 1,
+        "title": "Summary",
+        "type": "string"
+      },
+      "unverified": {
+        "description": "Checks you did not run or could not verify yourself, e.g. the full test suite, e2e or a browser check. CI runs the checks; these are not blockers.",
+        "items": {
+          "maxLength": 300,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 10,
+        "title": "Unverified",
+        "type": "array"
+      }
+    },
+    "required": [
+      "status",
+      "summary",
+      "pr_title",
+      "blockers",
+      "unverified"
+    ],
+    "title": "WorkerResult",
+    "type": "object"
+  }
+}

@@ -3,6 +3,7 @@ import os
 import re
 import subprocess
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import IO
 
@@ -22,6 +23,24 @@ _ERROR_CHARS = 500
 
 class GitCommandError(Exception):
     pass
+
+
+@dataclass(frozen=True)
+class GitIo:
+    stdin: bytes | None = None
+    stdout: IO[bytes] | None = None
+    exit_codes: frozenset[int] = frozenset({0})
+
+
+@dataclass(frozen=True)
+class RemoteAccess:
+    env: Mapping[str, str] | None = None
+    protocols: Sequence[str] = ()
+    secrets: Sequence[str] = ()
+
+
+_PIPED = GitIo()
+_LOCAL_ONLY = RemoteAccess()
 
 
 def git_env(extra: Mapping[str, str] | None = None) -> dict[str, str]:
@@ -56,25 +75,23 @@ def run_git_sync(
     *,
     cwd: Path,
     timeout_s: float,
-    stdin: bytes | None = None,
-    stdout: IO[bytes] | None = None,
     env: Mapping[str, str] | None = None,
-    exit_codes: frozenset[int] = frozenset({0}),
+    io: GitIo = _PIPED,
 ) -> bytes:
     completed = subprocess.run(  # noqa: S603 -- fixed argv, no shell
         git_argv(args),
         cwd=cwd,
-        input=stdin,
-        stdin=None if stdin is not None else subprocess.DEVNULL,
-        stdout=stdout if stdout is not None else subprocess.PIPE,
+        input=io.stdin,
+        stdin=None if io.stdin is not None else subprocess.DEVNULL,
+        stdout=io.stdout if io.stdout is not None else subprocess.PIPE,
         stderr=subprocess.PIPE,
         env=git_env(env),
         timeout=timeout_s,
         check=False,
     )
-    if completed.returncode not in exit_codes:
+    if completed.returncode not in io.exit_codes:
         raise _failure(args, completed.stderr, ())
-    return completed.stdout if stdout is None else b""
+    return completed.stdout if io.stdout is None else b""
 
 
 async def run_git(
@@ -82,14 +99,12 @@ async def run_git(
     *,
     cwd: Path | None,
     timeout_s: float,
-    env: Mapping[str, str] | None = None,
-    protocols: Sequence[str] = (),
-    secrets: Sequence[str] = (),
+    remote: RemoteAccess = _LOCAL_ONLY,
 ) -> str:
     proc = await asyncio.create_subprocess_exec(
-        *git_argv(args, protocols=protocols),
+        *git_argv(args, protocols=remote.protocols),
         cwd=cwd,
-        env=git_env(env),
+        env=git_env(remote.env),
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
@@ -101,5 +116,5 @@ async def run_git(
         await proc.wait()
         raise GitCommandError(f"git {args[0]} timed out") from None
     if proc.returncode != 0:
-        raise _failure(args, stderr, secrets)
+        raise _failure(args, stderr, remote.secrets)
     return stdout.decode(errors="replace")

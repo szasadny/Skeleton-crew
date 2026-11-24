@@ -5,10 +5,11 @@ from fake_gateway import BOT_LOGIN, FakeGitHubGateway, FakePull
 from github_helpers import SHA, commit_on_top, git, make_bare_remote
 
 from skeleton_crew.core.audit import AuditKind, AuditOutcome
+from skeleton_crew.domain.ci_policy import CiState
 from skeleton_crew.domain.errors import PolicyViolation
 from skeleton_crew.domain.label_policy import LabelChange, escalation_change
 from skeleton_crew.domain.settings import LabelNames
-from skeleton_crew.github.gateway import CiState, Gateway
+from skeleton_crew.github.gateway import Gateway
 
 
 def test_fake_satisfies_gateway_protocol() -> None:

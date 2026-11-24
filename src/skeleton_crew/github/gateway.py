@@ -4,27 +4,42 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, cast
 from urllib.parse import quote
 
 from githubkit import AppAuthStrategy, AppInstallationAuthStrategy, GitHub, Response
 from githubkit.exception import RequestFailed
 from githubkit_schemas.latest.types import AppPermissionsType
 
-from skeleton_crew.domain.branch_policy import check_push_target, issue_number_from_branch
+from skeleton_crew.core.audit import AuditSink
+from skeleton_crew.core.clock import utc_now
+from skeleton_crew.core.config import GITHUB_URL
+from skeleton_crew.domain.branch_policy import (
+    check_issue_number,
+    check_push_target,
+    is_skeleton_branch,
+    issue_number_from_branch,
+)
+from skeleton_crew.domain.ci_policy import (
+    REVIEW_CHECK_NAME,
+    BranchRule,
+    CiStatus,
+    ReviewCheck,
+    evaluate_ci,
+    format_job_logs,
+)
 from skeleton_crew.domain.label_policy import LabelChange, check_label_change
+from skeleton_crew.domain.repo_policy import REQUIRED_PERMISSIONS
 from skeleton_crew.domain.settings import LabelNames
 from skeleton_crew.domain.text_policy import truncate_text
 from skeleton_crew.domain.trust_policy import ContentEdit, IssueComment, LabelEvent
-from skeleton_crew.github._ci import REVIEW_CHECK_NAME as REVIEW_CHECK_NAME
-from skeleton_crew.github._ci import BranchRule as BranchRule
-from skeleton_crew.github._ci import CiState as CiState
-from skeleton_crew.github._ci import CiStatus as CiStatus
-from skeleton_crew.github._ci import FailedJob as FailedJob
-from skeleton_crew.github._ci import ReviewCheck as ReviewCheck
-from skeleton_crew.github._ci import evaluate_ci as evaluate_ci
-from skeleton_crew.github._ci import format_job_logs as format_job_logs
-from skeleton_crew.github._ci import required_checks as required_checks
+from skeleton_crew.domain.write_policy import (
+    check_new_issue,
+    check_open_pr,
+    check_push,
+    check_sha,
+    short,
+)
 from skeleton_crew.github._git import (
     REMOTE_PROTOCOL,
     git_branch_head,
@@ -32,17 +47,7 @@ from skeleton_crew.github._git import (
     git_fetch,
     git_push,
 )
-from skeleton_crew.github.write_guard import (
-    AuditSink,
-    check_issue_number,
-    check_new_issue,
-    check_open_pr,
-    check_push,
-    check_sha,
-    guarded_write,
-    label_payload,
-    short,
-)
+from skeleton_crew.github.write_guard import guarded_write, label_payload
 
 TOKEN_REFRESH_MARGIN = timedelta(minutes=5)
 _PER_PAGE = 100
@@ -92,19 +97,11 @@ class RulesUnavailable(Exception):
 
 
 # Read-only contents: GitHub then rejects any attempt to land a PR with the API token.
-API_TOKEN_PERMISSIONS: AppPermissionsType = {
-    "contents": "read",
-    "issues": "write",
-    "pull_requests": "write",
-    "checks": "write",
-    "actions": "read",
-    "statuses": "read",
-    "metadata": "read",
-}
+API_TOKEN_PERMISSIONS = cast(AppPermissionsType, {**REQUIRED_PERMISSIONS, "contents": "read"})
 
 
 def github_remote_url(repo: str) -> str:
-    return f"https://github.com/{repo}.git"
+    return f"{GITHUB_URL}/{repo}.git"
 
 
 class Gateway(Protocol):
@@ -422,7 +419,7 @@ class GitHubGateway:
                 per_page=_PER_PAGE,
             )
             async for run in runs:
-                if issue_number_from_branch(str(run.get("head_branch") or "")) is not None:
+                if is_skeleton_branch(str(run.get("head_branch") or "")):
                     return True
         return False
 
@@ -652,7 +649,7 @@ class RepoTokenProvider:
         app_client: GitHub[Any],
         installation_id: int,
         repo_name: str,
-        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        clock: Callable[[], datetime] = utc_now,
     ) -> None:
         self._app_client = app_client
         self._installation_id = installation_id

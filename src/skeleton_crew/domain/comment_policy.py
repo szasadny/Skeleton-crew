@@ -1,9 +1,7 @@
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from skeleton_crew.domain.contest_policy import CheckId, CheckInput, Finding
-from skeleton_crew.domain.diff_lines import AddedLine
-from skeleton_crew.domain.settings import AppSettings
+from skeleton_crew.domain.diff_parse import AddedLine
 
 
 @dataclass(frozen=True)
@@ -110,20 +108,3 @@ def flag_long_comment_blocks(lines: Sequence[AddedLine], max_lines: int) -> list
             flags.append(CommentFlag(lines[start].path, lines[start].line, end - start + 1))
         start = end + 1
     return flags
-
-
-def comment_block_findings(diff: CheckInput) -> list[Finding]:
-    limit = diff.settings.limits.max_code_comment_lines
-    return [
-        Finding(
-            CheckId.COMMENT_BLOCK,
-            flag.path,
-            flag.start_line,
-            f"comment block of {flag.length} lines, limit is {limit}",
-        )
-        for flag in flag_long_comment_blocks(diff.lines, limit)
-    ]
-
-
-def describe_comment_blocks(settings: AppSettings) -> str:
-    return f"comment blocks longer than {settings.limits.max_code_comment_lines} lines"

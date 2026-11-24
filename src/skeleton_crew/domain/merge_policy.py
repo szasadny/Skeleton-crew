@@ -1,22 +1,23 @@
 import re
 from collections.abc import Collection, Iterable
 
-from skeleton_crew.domain.diff_lines import AddedLine
+from skeleton_crew.domain.diff_parse import AddedLine
+from skeleton_crew.domain.errors import Violation
 
 _MARKER_RE = re.compile(r"(<{7}|>{7})(?: |$)")
 
 
-def conflict_markers(lines: Iterable[AddedLine]) -> list[str]:
+def conflict_markers(lines: Iterable[AddedLine]) -> list[Violation]:
     return [
-        f"{line.path}:{line.line}: unresolved conflict marker"
+        Violation(line.path, line.line, "unresolved conflict marker")
         for line in lines
         if _MARKER_RE.match(line.text)
     ]
 
 
-def check_resolution(changed_paths: Iterable[str], conflicted: Collection[str]) -> list[str]:
+def check_resolution(changed_paths: Iterable[str], conflicted: Collection[str]) -> list[Violation]:
     return [
-        f"{path}: changed outside the merge conflict"
+        Violation(path, None, "changed outside the merge conflict")
         for path in sorted(set(changed_paths))
         if path not in conflicted
     ]

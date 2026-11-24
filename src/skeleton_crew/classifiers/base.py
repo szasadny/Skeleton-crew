@@ -5,6 +5,7 @@ from typing import Protocol
 import httpx
 from pydantic import BaseModel, SecretStr, ValidationError
 
+from skeleton_crew.core.config import secret_value
 from skeleton_crew.domain.classifier_policy import Choice
 
 TIMEOUT_S = 20.0
@@ -35,8 +36,8 @@ class ClassifierSpec:
 async def post_json[T: BaseModel](
     url: str, api_key: SecretStr | None, body: object, response: type[T]
 ) -> T:
-    key = api_key.get_secret_value().strip() if api_key is not None else ""
-    if not key:
+    key = secret_value(api_key)
+    if key is None:
         raise ClassifierError("no API key")
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT_S) as client:

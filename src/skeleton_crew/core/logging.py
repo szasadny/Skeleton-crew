@@ -2,12 +2,12 @@ import logging
 from collections.abc import Sequence
 
 REDACTED = "***"
-_MIN_SECRET_CHARS = 8
+MIN_SECRET_CHARS = 8
 
 
 def _effective_secrets(secrets: Sequence[str]) -> list[str]:
     # Longest first so a secret that contains another is fully masked.
-    return sorted({s for s in secrets if len(s) >= _MIN_SECRET_CHARS}, key=len, reverse=True)
+    return sorted({s for s in secrets if len(s) >= MIN_SECRET_CHARS}, key=len, reverse=True)
 
 
 def _replace_all(text: str, ordered_secrets: Sequence[str]) -> str:

@@ -13,9 +13,9 @@ from pipeline_helpers import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from skeleton_crew.domain.ci_policy import CiState, CiStatus, FailedJob
 from skeleton_crew.domain.settings import Role
 from skeleton_crew.domain.task_state import RunState, TaskState
-from skeleton_crew.github.gateway import CiState, CiStatus, FailedJob
 from skeleton_crew.runtime.containers import ExecResult
 
 GREETING = {"app.py": "print('hi')\n"}

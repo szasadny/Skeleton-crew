@@ -3,8 +3,9 @@ from datetime import datetime
 from sqlalchemy import CheckConstraint, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
+from skeleton_crew.core.clock import utc_now
 from skeleton_crew.core.db import Base
-from skeleton_crew.models.types import UtcDateTime, utc_now
+from skeleton_crew.models.types import UtcDateTime
 
 SETTINGS_ROW_ID = 1
 

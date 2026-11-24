@@ -11,7 +11,6 @@ from skeleton_crew.agents.backends._shared import (
     AUTH_FILE_ENV,
     jsonl_events,
     safe_session_id,
-    secret_value,
     stdin_command,
 )
 from skeleton_crew.agents.base import (
@@ -22,6 +21,7 @@ from skeleton_crew.agents.base import (
     failed_outcome,
 )
 from skeleton_crew.agents.output import extract_json_text
+from skeleton_crew.core.config import credential_setting, secret_value
 
 NAME = "gemini"
 
@@ -149,12 +149,12 @@ class GeminiBackend:
 
     def _credential(self) -> tuple[str, str | None]:
         name, var = _CREDENTIALS[self._auth_mode]
-        return var, secret_value(self._credentials, name)
+        return var, secret_value(self._credentials.get(name))
 
     def credential_problems(self) -> list[str]:
         _, value = self._credential()
         if value is None:
-            setting = f"SC_AGENT_CREDENTIALS__{_CREDENTIALS[self._auth_mode][0].upper()}"
+            setting = credential_setting(_CREDENTIALS[self._auth_mode][0])
             return [f"Gemini CLI ({self._auth_mode.value} mode): {setting} is not set"]
         return []
 

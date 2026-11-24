@@ -5,6 +5,8 @@ from dataclasses import dataclass
 
 INSTRUCTION_NAMES = frozenset({"CLAUDE.md", "AGENTS.md"})
 MAX_DOC_CHARS = 80_000
+# Enough UTF-8 bytes to tell that a doc is over the cap, without reading a huge file.
+MAX_DOC_BYTES = MAX_DOC_CHARS * 4 + 4
 MAX_TOTAL_CHARS = 250_000
 MAX_DOCS = 40
 MAX_CANDIDATES = 64

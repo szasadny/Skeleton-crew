@@ -40,7 +40,7 @@ async def run_repo_command(job: WorkerJob, command: str, name: str) -> CommandRe
         env={},
         cwd=WORKSPACE,
         user=AGENT_USER,
-        timeout_s=job.ctx.settings.limits.command_timeout_minutes * 60.0,
+        timeout_s=job.ctx.settings.limits.command_timeout_s,
         stdout_path=log_path,
     )
     return CommandResult(

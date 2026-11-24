@@ -13,7 +13,6 @@ from skeleton_crew.agents.backends._shared import (
     number,
     safe_reason,
     safe_session_id,
-    secret_value,
     stdin_command,
 )
 from skeleton_crew.agents.base import (
@@ -24,6 +23,7 @@ from skeleton_crew.agents.base import (
     failed_outcome,
 )
 from skeleton_crew.agents.output import extract_json_text
+from skeleton_crew.core.config import credential_setting, secret_value
 
 NAME = "opencode"
 CONFIG_ENV = "OPENCODE_CONFIG_CONTENT"
@@ -198,7 +198,7 @@ class OpenCodeBackend:
             var = AUTH_FILE_ENV
         else:
             var = _PROVIDERS[self._provider].env_var
-        return var, secret_value(self._credentials, self._credential_name())
+        return var, secret_value(self._credentials.get(self._credential_name()))
 
     def credential_problems(self) -> list[str]:
         mode = f"{self._provider.value} provider, {self._auth_mode.value} mode"
@@ -206,7 +206,7 @@ class OpenCodeBackend:
             return [f"OpenCode ({mode}): subscription mode needs the openai provider"]
         _, value = self._credential()
         if value is None:
-            setting = f"SC_AGENT_CREDENTIALS__{self._credential_name().upper()}"
+            setting = credential_setting(self._credential_name())
             return [f"OpenCode ({mode}): {setting} is not set"]
         return []
 

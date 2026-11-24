@@ -1,8 +1,11 @@
 from datetime import UTC, datetime, timedelta, timezone
+from importlib.resources import files
 
 import pytest
 from alembic.autogenerate import compare_metadata
+from alembic.config import Config
 from alembic.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from sqlalchemy import Connection, text
 from sqlalchemy.exc import IntegrityError, StatementError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
@@ -29,11 +32,17 @@ async def test_migrations_match_models(engine: AsyncEngine) -> None:
     }
 
 
+def _head_revision() -> str | None:
+    config = Config()
+    config.set_main_option("script_location", str(files("skeleton_crew") / "migrations"))
+    return ScriptDirectory.from_config(config).get_current_head()
+
+
 async def test_migrations_are_idempotent(engine: AsyncEngine) -> None:
     await run_migrations(engine)
     async with engine.connect() as connection:
         version = await connection.scalar(text("SELECT version_num FROM alembic_version"))
-    assert version == "0006"
+    assert version == _head_revision()
 
 
 async def test_pragmas_are_applied(engine: AsyncEngine) -> None:

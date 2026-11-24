@@ -1,6 +1,6 @@
 from collections.abc import Sequence
 
-from skeleton_crew.domain.diff_policy import FileChange
+from skeleton_crew.domain.diff_parse import FileChange
 from skeleton_crew.domain.schemas import NewIssue, RefineResult, ReviewResult, SelectionQuestion
 from skeleton_crew.domain.settings import Role
 from skeleton_crew.domain.text_policy import sanitize_agent_text

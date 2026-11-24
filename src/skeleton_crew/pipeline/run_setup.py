@@ -3,8 +3,7 @@ import logging
 import shutil
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
-from zoneinfo import ZoneInfo
+from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,29 +12,23 @@ from skeleton_crew.agents.registry import settings_problems
 from skeleton_crew.agents.rules import compose_rules, default_rules
 from skeleton_crew.classifiers import registry as classifiers
 from skeleton_crew.classifiers.base import Classifier
-from skeleton_crew.core.audit import AuditKind, AuditOutcome
+from skeleton_crew.core.audit import AuditEntry, AuditKind, AuditOutcome, AuditSink
+from skeleton_crew.domain.ci_policy import required_checks
+from skeleton_crew.domain.label_policy import has_label
+from skeleton_crew.domain.quota_policy import local_midnight, remaining
 from skeleton_crew.domain.repo_docs import render_repo_docs, select_docs
-from skeleton_crew.domain.settings import AppSettings, Role
+from skeleton_crew.domain.settings import COMMON_RULES, AppSettings, Role
 from skeleton_crew.domain.task_keys import selector_key
 from skeleton_crew.domain.task_state import TaskKind
 from skeleton_crew.domain.trust_policy import IssueComment
-from skeleton_crew.github.gateway import (
-    Gateway,
-    IssueRef,
-    PullRef,
-    RulesUnavailable,
-    required_checks,
-)
+from skeleton_crew.github.gateway import Gateway, IssueRef, PullRef, RulesUnavailable
 from skeleton_crew.github.preflight import check_repository
 from skeleton_crew.github.trust import trusted_issues
-from skeleton_crew.github.write_guard import AuditSink
 from skeleton_crew.pipeline.deps import PipelineDeps
 from skeleton_crew.pipeline.runner_pool import runner_problems
 from skeleton_crew.runtime.egress import apply_allowlist
 from skeleton_crew.runtime.workspace import read_repo_docs, task_paths
 from skeleton_crew.store import rules_store, runs_store
-
-COMMON_RULES = "common"
 
 log = logging.getLogger(__name__)
 
@@ -140,10 +133,6 @@ async def apply_egress(
     )
 
 
-def _has_label(issue: IssueRef, label: str) -> bool:
-    return any(name.casefold() == label.casefold() for name in issue.labels)
-
-
 async def find_candidates(
     deps: PipelineDeps, settings: AppSettings, gw: Gateway, audit: AuditSink
 ) -> Candidates:
@@ -153,7 +142,7 @@ async def find_candidates(
     open_prs: list[OpenPr] = []
     pulls_by_issue = await gw.open_skeleton_prs()
     for issue, comments in await trusted_issues(gw, labels.ready, trusted, bot):
-        if _has_label(issue, labels.hitl) or _has_label(issue, labels.refine):
+        if has_label(issue.labels, labels.hitl) or has_label(issue.labels, labels.refine):
             continue
         match pulls_by_issue.get(issue.number, ()):
             case ():
@@ -165,7 +154,7 @@ async def find_candidates(
     refine = [
         Candidate(issue, comments)
         for issue, comments in await trusted_issues(gw, labels.refine, trusted, bot)
-        if not _has_label(issue, labels.hitl)
+        if not has_label(issue.labels, labels.hitl)
     ]
     return Candidates(ready, refine, open_prs)
 
@@ -173,16 +162,13 @@ async def find_candidates(
 async def _skip_ambiguous(audit: AuditSink, issue_number: int, pulls: Sequence[PullRef]) -> None:
     numbers = sorted(pull.number for pull in pulls)
     await audit(
-        AuditKind.ISSUE_SKIPPED,
-        AuditOutcome.INFO,
-        f"#{issue_number} has {len(numbers)} open skeleton PRs",
-        {"issue": issue_number, "prs": numbers},
+        AuditEntry(
+            AuditKind.ISSUE_SKIPPED,
+            AuditOutcome.INFO,
+            f"#{issue_number} has {len(numbers)} open skeleton PRs",
+            {"issue": issue_number, "prs": numbers},
+        )
     )
-
-
-def local_midnight(now: datetime, timezone: str) -> datetime:
-    local = now.astimezone(ZoneInfo(timezone))
-    return local.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(UTC)
 
 
 async def remaining_quotas(session: AsyncSession, settings: AppSettings, now: datetime) -> Quotas:
@@ -192,9 +178,9 @@ async def remaining_quotas(session: AsyncSession, settings: AppSettings, now: da
     fixes = await runs_store.count_worker_tasks_since(session, since, TaskKind.PR_FIX)
     limits = settings.limits
     return Quotas(
-        max(limits.issues_per_day - workers, 0),
-        max(limits.refines_per_day - refines, 0),
-        max(limits.conflict_fixes_per_day - fixes, 0),
+        remaining(limits.issues_per_day, workers),
+        remaining(limits.refines_per_day, refines),
+        remaining(limits.conflict_fixes_per_day, fixes),
     )
 
 

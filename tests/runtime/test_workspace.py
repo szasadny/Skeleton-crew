@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from runtime_helpers import Repo, run
 
-from skeleton_crew.domain.diff_policy import parse_diff_summary
+from skeleton_crew.domain.diff_parse import parse_diff_summary
 from skeleton_crew.domain.errors import PolicyViolation
 from skeleton_crew.domain.repo_docs import MAX_DOC_CHARS
 from skeleton_crew.runtime.workspace import (
@@ -31,7 +31,7 @@ AUTHOR = "Skeleton Crew <crew@example.invalid>"
 
 @pytest.fixture
 def paths(tmp_path: Path) -> TaskPaths:
-    return task_paths(tmp_path / "tasks", "w-1")
+    return task_paths(tmp_path / "tasks", "worker-1")
 
 
 @pytest.fixture
@@ -53,15 +53,15 @@ def agent_repo(paths: TaskPaths) -> Repo:
     return Repo(paths.agent_repo, init=False)
 
 
-@pytest.mark.parametrize("key", ["../x", "a/b", "", ".hidden", "x" * 65])
+@pytest.mark.parametrize("key", ["../x", "a/b", "", ".hidden", "x" * 65, "w-1", "worker-1/.."])
 def test_task_paths_rejects_unsafe_keys(tmp_path: Path, key: str) -> None:
     with pytest.raises(ValueError, match="task key"):
         task_paths(tmp_path, key)
 
 
 def test_task_paths_layout(tmp_path: Path) -> None:
-    paths = task_paths(tmp_path, "w-7")
-    assert paths.root == tmp_path / "w-7"
+    paths = task_paths(tmp_path, "worker-7")
+    assert paths.root == tmp_path / "worker-7"
     assert paths.controller_repo.parent == paths.agent_repo.parent == paths.root
 
 

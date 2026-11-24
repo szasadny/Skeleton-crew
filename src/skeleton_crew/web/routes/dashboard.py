@@ -4,7 +4,8 @@ from typing import Any
 from fastapi import APIRouter, Request
 from fastapi.responses import Response
 
-from skeleton_crew.core.audit import AuditKind, AuditOutcome
+from skeleton_crew.core.audit import AuditEntry, AuditKind, AuditOutcome
+from skeleton_crew.domain.task_state import RunTrigger
 from skeleton_crew.store import audit_store, runs_store
 from skeleton_crew.store.settings_store import load_settings, save_settings
 from skeleton_crew.web.rendering import redirect, render
@@ -49,7 +50,7 @@ async def status_partial(request: Request) -> Response:
 
 @router.post("/actions/run-now")
 async def run_now(request: Request) -> Response:
-    run_id = await get_state(request).controller.start("manual")
+    run_id = await get_state(request).controller.start(RunTrigger.MANUAL)
     return redirect("/", "run_refused" if run_id is None else "run_started")
 
 
@@ -58,7 +59,8 @@ async def _set_kill_switch(request: Request, engaged: bool) -> None:
         settings = await load_settings(session)
         await save_settings(session, settings.model_copy(update={"kill_switch": engaged}))
         summary = "kill switch engaged from the UI" if engaged else "kill switch released"
-        await audit_store.record(session, AuditKind.KILL_SWITCH, AuditOutcome.INFO, summary)
+        entry = AuditEntry(AuditKind.KILL_SWITCH, AuditOutcome.INFO, summary)
+        await audit_store.record(session, entry)
         await session.commit()
 
 

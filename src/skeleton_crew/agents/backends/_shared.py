@@ -1,10 +1,8 @@
 import json
 import re
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any
-
-from pydantic import SecretStr
 
 AUTH_FILE_ENV = "SC_AUTH_FILE"
 _BINARY_RE = re.compile(r"^[a-z][a-z0-9_-]{0,39}$")
@@ -39,12 +37,6 @@ def jsonl_events(stdout_path: Path) -> Iterator[dict[str, Any]]:
                     yield event
     except FileNotFoundError:
         return
-
-
-def secret_value(credentials: Mapping[str, SecretStr], name: str) -> str | None:
-    secret = credentials.get(name)
-    value = secret.get_secret_value().strip() if secret is not None else ""
-    return value or None
 
 
 def stdin_command(

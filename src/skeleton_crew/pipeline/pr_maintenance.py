@@ -2,7 +2,7 @@ import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from skeleton_crew.core.audit import AuditKind, AuditOutcome
+from skeleton_crew.core.audit import AuditEntry, AuditKind, AuditOutcome
 from skeleton_crew.domain.branch_policy import pushed_by_controller
 from skeleton_crew.domain.task_keys import worker_key
 from skeleton_crew.domain.task_state import TaskEvent, TaskKind, TaskState
@@ -67,10 +67,12 @@ async def _poll_mergeable(ctx: RunContext, number: int) -> bool | None:
 
 async def _skipped(ctx: RunContext, pr: OpenPr, reason: str) -> None:
     await ctx.audit(
-        AuditKind.PR_UPDATE_SKIPPED,
-        AuditOutcome.INFO,
-        reason,
-        {"pr": pr.pull.number, "issue": pr.issue.number},
+        AuditEntry(
+            AuditKind.PR_FIX_SKIPPED,
+            AuditOutcome.INFO,
+            reason,
+            {"pr": pr.pull.number, "issue": pr.issue.number},
+        )
     )
 
 

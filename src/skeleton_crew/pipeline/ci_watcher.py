@@ -1,7 +1,8 @@
 from collections.abc import Awaitable, Callable, Collection
 from datetime import datetime, timedelta
 
-from skeleton_crew.github.gateway import CiState, CiStatus, Gateway
+from skeleton_crew.domain.ci_policy import CiState, CiStatus
+from skeleton_crew.github.gateway import Gateway
 
 
 async def wait_for_ci(

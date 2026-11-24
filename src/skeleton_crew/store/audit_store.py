@@ -1,9 +1,7 @@
-from collections.abc import Mapping
-
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from skeleton_crew.core.audit import AuditKind, AuditOutcome
+from skeleton_crew.core.audit import AuditEntry, AuditKind
 from skeleton_crew.models.audit_event import AUDIT_SUMMARY_LENGTH, AuditEvent
 
 _ELLIPSIS = "…"
@@ -15,21 +13,14 @@ def _cap(summary: str) -> str:
     return summary[: AUDIT_SUMMARY_LENGTH - len(_ELLIPSIS)] + _ELLIPSIS
 
 
-async def record(
-    session: AsyncSession,
-    kind: AuditKind,
-    outcome: AuditOutcome,
-    summary: str,
-    payload: Mapping[str, object] | None = None,
-    run_id: int | None = None,
-) -> None:
+async def record(session: AsyncSession, entry: AuditEntry) -> None:
     session.add(
         AuditEvent(
-            kind=kind,
-            outcome=outcome,
-            summary=_cap(summary),
-            payload=None if payload is None else dict(payload),
-            run_id=run_id,
+            kind=entry.kind,
+            outcome=entry.outcome,
+            summary=_cap(entry.summary),
+            payload=None if entry.payload is None else dict(entry.payload),
+            run_id=entry.run_id,
         )
     )
     await session.flush()

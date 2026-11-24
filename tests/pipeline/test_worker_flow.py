@@ -21,9 +21,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from skeleton_crew.agents.base import SessionOutcome, failed_outcome
 from skeleton_crew.core.audit import AuditKind, AuditOutcome
+from skeleton_crew.domain.ci_policy import CiState, CiStatus, FailedJob, ReviewCheck
 from skeleton_crew.domain.settings import Role
-from skeleton_crew.domain.task_state import TaskState
-from skeleton_crew.github.gateway import CiState, CiStatus, FailedJob, ReviewCheck
+from skeleton_crew.domain.task_state import RunTrigger, TaskState
 from skeleton_crew.pipeline.job_engine import USAGE_LIMIT_REASON
 from skeleton_crew.pipeline.sessions import AGENT_USER, INBOX, ROLE_LABEL, WORKSPACE
 from skeleton_crew.pipeline.task_record import MAX_STORED_BLOCKERS, WorkerTaskRecord
@@ -279,7 +279,7 @@ async def test_blockers_of_a_worker_that_gives_up_are_recorded(harness: Harness)
 
 async def test_task_record_dedupes_and_caps_blockers(harness: Harness) -> None:
     async with harness.sessionmaker() as session:
-        run = await runs_store.create_run(session, "manual", dry_run=True)
+        run = await runs_store.create_run(session, RunTrigger.MANUAL, dry_run=True)
         task = await runs_store.add_worker_task(session, run.id, 1, "Add greeting")
         await session.commit()
     record = WorkerTaskRecord(harness.sessionmaker, task.id)

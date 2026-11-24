@@ -1,6 +1,8 @@
 import unicodedata
+from collections.abc import Iterable
 from dataclasses import dataclass
 
+from skeleton_crew.domain.branch_policy import check_issue_number
 from skeleton_crew.domain.errors import PolicyViolation
 from skeleton_crew.domain.settings import LabelNames
 
@@ -24,13 +26,20 @@ def label_key(name: str) -> str:
     return name.casefold()
 
 
+def same_label(name: str, label: str) -> bool:
+    return name.casefold() == label.casefold()
+
+
+def has_label(names: Iterable[str], label: str) -> bool:
+    return any(same_label(name, label) for name in names)
+
+
 def _keys(names: frozenset[str]) -> set[str]:
     return {label_key(n) for n in names}
 
 
 def check_label_change(change: LabelChange, labels: LabelNames) -> None:
-    if change.issue_number < 1:
-        raise PolicyViolation(f"invalid issue number: {change.issue_number}")
+    check_issue_number(change.issue_number)
     if not change.add and not change.remove:
         raise PolicyViolation("empty label change")
     add, remove = _keys(change.add), _keys(change.remove)

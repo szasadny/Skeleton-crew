@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
+from skeleton_crew.domain.ci_policy import CiState
 from skeleton_crew.domain.task_state import TaskEvent
-from skeleton_crew.github.gateway import CiState
 from skeleton_crew.pipeline.escalation import Escalation
 from skeleton_crew.pipeline.job_engine import Skip, deliver, iterate
 from skeleton_crew.pipeline.texts import COMMIT_AUTHOR, RERUN_CI_MESSAGE, merge_message

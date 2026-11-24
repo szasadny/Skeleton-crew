@@ -5,7 +5,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from web_helpers import Web, open_web
 
-from skeleton_crew.core.audit import AuditKind, AuditOutcome
+from skeleton_crew.core.audit import AuditEntry, AuditKind, AuditOutcome
 from skeleton_crew.store import audit_store
 
 
@@ -15,10 +15,10 @@ async def web(tmp_path: Path, sessionmaker: async_sessionmaker[AsyncSession]) ->
         await harness.login()
         async with sessionmaker() as session:
             for i in range(60):
-                await audit_store.record(
-                    session, AuditKind.GITHUB_WRITE, AuditOutcome.DRY_RUN, f"write {i}"
-                )
-            await audit_store.record(session, AuditKind.POLICY_VIOLATION, AuditOutcome.BLOCKED, "x")
+                entry = AuditEntry(AuditKind.GITHUB_WRITE, AuditOutcome.DRY_RUN, f"write {i}")
+                await audit_store.record(session, entry)
+            blocked = AuditEntry(AuditKind.POLICY_VIOLATION, AuditOutcome.BLOCKED, "x")
+            await audit_store.record(session, blocked)
             await session.commit()
         yield harness
 

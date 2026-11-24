@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from web_helpers import Web, open_web
 
+from skeleton_crew.domain.task_state import RunTrigger
 from skeleton_crew.models.run import Run
 from skeleton_crew.models.worker_task import WorkerTask
 from skeleton_crew.store import runs_store
@@ -21,7 +22,7 @@ async def web(tmp_path: Path, sessionmaker: async_sessionmaker[AsyncSession]) ->
 
 async def _seed(web: Web, blockers: list[str]) -> tuple[Run, WorkerTask]:
     async with web.sessionmaker() as session:
-        run = await runs_store.create_run(session, "manual", dry_run=False)
+        run = await runs_store.create_run(session, RunTrigger.MANUAL, dry_run=False)
         task = await runs_store.add_worker_task(session, run.id, 12, "Add retries")
         await runs_store.update_worker_task(session, task.id, blockers=blockers, pr_number=42)
         await runs_store.add_worker_task(session, run.id, 13, "Clean task")
@@ -42,7 +43,7 @@ async def test_blockers_page_lists_only_tasks_with_blockers(web: Web) -> None:
 
 async def test_blockers_page_paginates(web: Web) -> None:
     async with web.sessionmaker() as session:
-        run = await runs_store.create_run(session, "schedule", dry_run=True)
+        run = await runs_store.create_run(session, RunTrigger.SCHEDULE, dry_run=True)
         for n in range(26):
             task = await runs_store.add_worker_task(session, run.id, n, f"Issue {n}")
             await runs_store.update_worker_task(session, task.id, blockers=["stuck"])

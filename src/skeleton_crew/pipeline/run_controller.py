@@ -4,20 +4,20 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import suppress
 from datetime import timedelta
 from functools import partial
-from typing import Literal
 
-from skeleton_crew.core.audit import AuditKind, AuditOutcome
+from skeleton_crew.core.audit import AuditEntry, AuditKind, AuditOutcome, AuditSink
 from skeleton_crew.domain.settings import AppSettings
 from skeleton_crew.domain.task_state import (
     RefineState,
     RunState,
     RunStep,
+    RunTrigger,
     TaskEvent,
     TaskKind,
     transition,
 )
 from skeleton_crew.github.gateway import IssueRef
-from skeleton_crew.github.write_guard import AuditSink
+from skeleton_crew.models.worker_task import ISSUE_TITLE_LENGTH
 from skeleton_crew.pipeline.classify import screen_candidates
 from skeleton_crew.pipeline.deps import PipelineDeps, RunContext, audit_sink
 from skeleton_crew.pipeline.escalation import escalate_issue
@@ -69,7 +69,7 @@ class RunController:
     def step(self) -> RunStep | None:
         return self._step if self.is_running else None
 
-    async def start(self, trigger: Literal["schedule", "manual"]) -> int | None:
+    async def start(self, trigger: RunTrigger) -> int | None:
         async with self._lock:
             if self.is_running:
                 return None
@@ -80,7 +80,9 @@ class RunController:
                 run = await runs_store.create_run(session, trigger, settings.dry_run)
                 await session.commit()
             sink = audit_sink(self._deps.sessionmaker, run.id)
-            await sink(AuditKind.RUN_STARTED, AuditOutcome.INFO, f"run {run.id} started", None)
+            await sink(
+                AuditEntry(AuditKind.RUN_STARTED, AuditOutcome.INFO, f"run {run.id} started")
+            )
             self._task = asyncio.create_task(self._execute(run.id, settings, sink))
             return run.id
 
@@ -153,7 +155,8 @@ class RunController:
         async with self._deps.sessionmaker() as session:
             await runs_store.finish_run(session, run_id, state, note and note[:NOTE_CHARS])
             await session.commit()
-        await sink(AuditKind.RUN_FINISHED, AuditOutcome.INFO, f"run {run_id} {state.value}", None)
+        finished = f"run {run_id} {state.value}"
+        await sink(AuditEntry(AuditKind.RUN_FINISHED, AuditOutcome.INFO, finished))
 
     async def _run(self, run_id: int, settings: AppSettings, sink: AuditSink) -> Outcome:
         deps = self._deps
@@ -184,10 +187,12 @@ class RunController:
                 problems = [f"repository docs could not be read: {type(exc).__name__}"]
         if problems:
             await sink(
-                AuditKind.PREFLIGHT_FAILED,
-                AuditOutcome.BLOCKED,
-                "preflight failed",
-                {"problems": problems},
+                AuditEntry(
+                    AuditKind.PREFLIGHT_FAILED,
+                    AuditOutcome.BLOCKED,
+                    "preflight failed",
+                    {"problems": problems},
+                )
             )
             return RunState.PREFLIGHT_FAILED, "; ".join(problems)
         await prune_task_dirs(deps, started, settings.limits.task_retention_days)
@@ -327,7 +332,7 @@ class RunController:
     async def _add_task(self, ctx: RunContext, issue: IssueRef, kind: TaskKind) -> int:
         async with self._deps.sessionmaker() as session:
             task = await runs_store.add_worker_task(
-                session, ctx.run_id, issue.number, issue.title[:256], kind
+                session, ctx.run_id, issue.number, issue.title[:ISSUE_TITLE_LENGTH], kind
             )
             await session.commit()
         return task.id

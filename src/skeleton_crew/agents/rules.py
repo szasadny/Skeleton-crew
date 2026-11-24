@@ -1,11 +1,10 @@
 from importlib.resources import files
 
-from skeleton_crew.domain.settings import RULE_KEYS
+from skeleton_crew.domain.settings import check_rule_key
 
 
 def default_rules(key: str) -> str:
-    if key not in RULE_KEYS:
-        raise ValueError(f"unknown rules key: {key}")
+    check_rule_key(key)
     return files("skeleton_crew.agents").joinpath("rules", f"{key}.md").read_text(encoding="utf-8")
 
 

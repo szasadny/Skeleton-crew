@@ -2,20 +2,9 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from skeleton_crew.core.audit import AuditKind
-from skeleton_crew.domain.settings import RULE_KEYS
+from skeleton_crew.domain.settings import MAX_RULES_CHARS, InvalidRules
 from skeleton_crew.store import audit_store
-from skeleton_crew.store.rules_store import (
-    MAX_RULES_CHARS,
-    InvalidRules,
-    active_rules,
-    get_revision,
-    rule_history,
-    save_rules,
-)
-
-
-def test_rule_keys_cover_common_and_every_role() -> None:
-    assert RULE_KEYS == ("common", "selector", "refiner", "reviewer", "worker")
+from skeleton_crew.store.rules_store import active_rules, get_revision, rule_history, save_rules
 
 
 async def test_newest_revision_is_active(session: AsyncSession) -> None:

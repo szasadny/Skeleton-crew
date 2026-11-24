@@ -3,7 +3,6 @@ import asyncio
 import getpass
 import sys
 from contextlib import AsyncExitStack
-from datetime import UTC, datetime
 
 import uvicorn
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
@@ -12,13 +11,15 @@ from skeleton_crew.agents.base import AgentBackend
 from skeleton_crew.agents.registry import backend_for
 from skeleton_crew.classifiers.base import Classifier
 from skeleton_crew.classifiers.registry import classifier_for
+from skeleton_crew.core.audit import AuditSink
+from skeleton_crew.core.clock import utc_now
 from skeleton_crew.core.config import BootstrapConfig, get_config
 from skeleton_crew.core.db import make_engine, make_sessionmaker, run_migrations
 from skeleton_crew.core.logging import configure_logging
-from skeleton_crew.core.security import hash_password
+from skeleton_crew.core.security import MIN_PASSWORD_CHARS, hash_password
 from skeleton_crew.domain.settings import AppSettings
+from skeleton_crew.domain.task_state import RunTrigger
 from skeleton_crew.github.gateway import Gateway, GitHubGateway, make_github_client
-from skeleton_crew.github.write_guard import AuditSink
 from skeleton_crew.pipeline.deps import PipelineDeps, audit_sink
 from skeleton_crew.pipeline.run_controller import RunController
 from skeleton_crew.pipeline.run_setup import preflight
@@ -30,19 +31,8 @@ from skeleton_crew.store import settings_store
 from skeleton_crew.web.app import create_app
 
 
-def _now() -> datetime:
-    return datetime.now(UTC)
-
-
 async def _open_database(config: BootstrapConfig) -> AsyncEngine:
-    directories = (
-        config.data_dir,
-        config.tasks_dir,
-        config.egress_allowlist_path.parent,
-        config.runners_dir,
-        config.runner_allowlist_path.parent,
-    )
-    for directory in directories:
+    for directory in config.required_dirs:
         directory.mkdir(parents=True, exist_ok=True)
     engine = make_engine(config.db_path)
     await run_migrations(engine)
@@ -84,7 +74,7 @@ async def _build_deps(
         backend_factory=backend_factory,
         classifier_factory=classifier_factory,
         secret_scanner=scan_patch,
-        clock=_now,
+        clock=utc_now,
         sleep=asyncio.sleep,
     )
 
@@ -102,7 +92,7 @@ async def _serve(config: BootstrapConfig) -> None:
         stack.push_async_callback(runners.close)
 
         async def scheduled_run() -> int | None:
-            return await controller.start("schedule")
+            return await controller.start(RunTrigger.SCHEDULE)
 
         scheduler = RunScheduler(scheduled_run)
         app = create_app(
@@ -143,8 +133,8 @@ async def _preflight(config: BootstrapConfig) -> list[str]:
 
 def _hash_password() -> int:
     password = getpass.getpass("UI password: ")
-    if len(password) < 12:
-        print("Use at least 12 characters.", file=sys.stderr)
+    if len(password) < MIN_PASSWORD_CHARS:
+        print(f"Use at least {MIN_PASSWORD_CHARS} characters.", file=sys.stderr)
         return 1
     if getpass.getpass("Repeat: ") != password:
         print("Passwords do not match.", file=sys.stderr)

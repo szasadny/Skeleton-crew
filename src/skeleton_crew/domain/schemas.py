@@ -15,6 +15,7 @@ from pydantic import (
 
 from skeleton_crew.domain.contest_policy import CheckId
 from skeleton_crew.domain.errors import PolicyViolation
+from skeleton_crew.domain.settings import MAX_NEW_ISSUES
 
 MAX_OUTPUT_CHARS = 200_000
 
@@ -25,28 +26,21 @@ def _single_line(value: str) -> str:
     return value
 
 
-Title = Annotated[
-    str,
-    StringConstraints(strip_whitespace=True, min_length=1, max_length=120),
-    AfterValidator(_single_line),
-]
-PrTitle = Annotated[
-    str,
-    StringConstraints(strip_whitespace=True, min_length=1, max_length=72),
-    AfterValidator(_single_line),
-]
-Text300 = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=300)]
-Text500 = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
-Text1000 = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1000)]
-Text1500 = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1500)]
-Text4000 = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4000)]
-Text6000 = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=6000)]
-Line300 = Annotated[
-    str,
-    StringConstraints(strip_whitespace=True, min_length=1, max_length=300),
-    AfterValidator(_single_line),
-]
-FindingPath = Line300
+def _text(max_chars: int) -> StringConstraints:
+    return StringConstraints(strip_whitespace=True, min_length=1, max_length=max_chars)
+
+
+_SINGLE_LINE = AfterValidator(_single_line)
+
+Title = Annotated[str, _text(120), _SINGLE_LINE]
+PrTitle = Annotated[str, _text(72), _SINGLE_LINE]
+Text300 = Annotated[str, _text(300)]
+Text500 = Annotated[str, _text(500)]
+Text1000 = Annotated[str, _text(1000)]
+Text1500 = Annotated[str, _text(1500)]
+Text4000 = Annotated[str, _text(4000)]
+Text6000 = Annotated[str, _text(6000)]
+Line300 = Annotated[str, _text(300), _SINGLE_LINE]
 
 
 class _AgentOutput(BaseModel):
@@ -60,7 +54,7 @@ class NewIssue(_AgentOutput):
 
 class Objection(_AgentOutput):
     check: CheckId
-    path: FindingPath
+    path: Line300
     line: int = Field(ge=1)
     reason: Text300
 
@@ -70,7 +64,7 @@ class WorkerResult(_AgentOutput):
     summary: Text1500
     pr_title: PrTitle
     note: Text1500 | None = None
-    new_issues: list[NewIssue] = Field(default_factory=list, max_length=10)
+    new_issues: list[NewIssue] = Field(default_factory=list, max_length=MAX_NEW_ISSUES)
     objections: list[Objection] = Field(default_factory=list, max_length=20)
     blockers: list[Line300] = Field(
         max_length=10,
@@ -97,7 +91,7 @@ class WorkerResult(_AgentOutput):
 
 class ReviewFinding(_AgentOutput):
     severity: Literal["blocker", "major", "minor"]
-    path: FindingPath | None = None
+    path: Line300 | None = None
     line: int | None = Field(default=None, ge=1)
     message: Text500
 
@@ -109,7 +103,7 @@ class ReviewFinding(_AgentOutput):
 
 
 class MissingDocUpdate(_AgentOutput):
-    path: FindingPath
+    path: Line300
     reason: Text500
 
 

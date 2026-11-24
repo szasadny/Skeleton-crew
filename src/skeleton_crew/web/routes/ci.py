@@ -18,7 +18,7 @@ def _live(request: Request, _values: Mapping[str, object]) -> Mapping[str, Any]:
     state = get_state(request)
     return {
         "runners": state.runners.statuses(),
-        "repo_url": f"https://github.com/{state.config.repo}",
+        "repo_url": state.config.repo_url,
         "runners_dir": state.config.runners_dir,
         "runner_image": state.config.runner_image,
         "branch_prefix": BRANCH_PREFIX,

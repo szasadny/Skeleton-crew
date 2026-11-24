@@ -4,8 +4,8 @@ import math
 from fastapi import APIRouter, Request
 from fastapi.responses import Response
 
-from skeleton_crew.core.audit import AuditKind, AuditOutcome
-from skeleton_crew.core.security import verify_password
+from skeleton_crew.core.audit import AuditEntry, AuditKind, AuditOutcome
+from skeleton_crew.core.security import MAX_PASSWORD_CHARS, verify_password
 from skeleton_crew.store import audit_store
 from skeleton_crew.web.rendering import redirect, render
 from skeleton_crew.web.security import LOGIN_PATH, client_ip, is_authenticated, log_in, log_out
@@ -13,12 +13,11 @@ from skeleton_crew.web.state import get_state
 
 router = APIRouter()
 
-_MAX_PASSWORD_CHARS = 1024
-
 
 async def _audit(request: Request, outcome: AuditOutcome, summary: str, client: str) -> None:
     async with get_state(request).sessionmaker() as session:
-        await audit_store.record(session, AuditKind.LOGIN, outcome, summary, {"client": client})
+        entry = AuditEntry(AuditKind.LOGIN, outcome, summary, {"client": client})
+        await audit_store.record(session, entry)
         await session.commit()
 
 
@@ -41,7 +40,7 @@ async def login(request: Request) -> Response:
     password = (await request.form()).get("password")
     valid = (
         isinstance(password, str)
-        and len(password) <= _MAX_PASSWORD_CHARS
+        and len(password) <= MAX_PASSWORD_CHARS
         and await asyncio.to_thread(
             verify_password, state.config.ui_password_hash.get_secret_value(), password
         )

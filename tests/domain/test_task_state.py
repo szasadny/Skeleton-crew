@@ -4,9 +4,12 @@ import pytest
 
 from skeleton_crew.domain.errors import InvalidTransition
 from skeleton_crew.domain.task_state import (
+    QUOTA_FREE_TASK_STATES,
     TERMINAL_TASK_STATES,
+    RunTrigger,
     TaskEvent,
     TaskState,
+    merge_blockers,
     transition,
 )
 
@@ -91,3 +94,23 @@ def test_terminal_set() -> None:
         frozenset({TaskState.DONE, TaskState.ESCALATED, TaskState.FAILED, TaskState.ABORTED})
         == TERMINAL_TASK_STATES
     )
+
+
+def test_run_triggers_keep_their_stored_values() -> None:
+    assert [trigger.value for trigger in RunTrigger] == ["schedule", "manual"]
+
+
+def test_only_aborted_tasks_are_free_of_quota() -> None:
+    assert {TaskState.ABORTED} == QUOTA_FREE_TASK_STATES
+    assert QUOTA_FREE_TASK_STATES <= TERMINAL_TASK_STATES
+
+
+def test_merge_blockers_dedupes_and_keeps_existing_order() -> None:
+    assert merge_blockers(["a"], ["b", "a", "b", "c"], 10) == ["a", "b", "c"]
+
+
+def test_merge_blockers_caps_new_entries() -> None:
+    assert merge_blockers(["a", "b"], ["c", "d", "e"], 3) == ["a", "b", "c"]
+    assert merge_blockers(["a", "b", "c"], ["d"], 3) == ["a", "b", "c"]
+    assert merge_blockers(["a", "b", "c", "d"], ["e"], 3) == ["a", "b", "c", "d"]
+    assert merge_blockers([], [], 3) == []

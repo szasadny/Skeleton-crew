@@ -1,6 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from skeleton_crew.core.audit import AuditKind, AuditOutcome
+from skeleton_crew.core.audit import AuditEntry, AuditKind, AuditOutcome
 from skeleton_crew.domain.settings import AppSettings
 from skeleton_crew.models.settings_row import SETTINGS_ROW_ID, SettingsRow
 from skeleton_crew.store import audit_store
@@ -29,9 +29,11 @@ async def save_settings(session: AsyncSession, settings: AppSettings) -> None:
         # Key names only: values may be sensitive and the audit log is shown in the UI.
         await audit_store.record(
             session,
-            AuditKind.SETTINGS_CHANGED,
-            AuditOutcome.INFO,
-            f"settings changed: {', '.join(changed)}",
-            {"keys": changed},
+            AuditEntry(
+                AuditKind.SETTINGS_CHANGED,
+                AuditOutcome.INFO,
+                f"settings changed: {', '.join(changed)}",
+                {"keys": changed},
+            ),
         )
     await session.flush()

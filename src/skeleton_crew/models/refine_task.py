@@ -3,9 +3,10 @@ from datetime import datetime
 from sqlalchemy import Float, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
+from skeleton_crew.core.clock import utc_now
 from skeleton_crew.core.db import Base
 from skeleton_crew.domain.task_state import RefineState
-from skeleton_crew.models.types import StrEnumType, UtcDateTime, utc_now
+from skeleton_crew.models.types import StrEnumType, UtcDateTime
 
 
 class RefineTask(Base):

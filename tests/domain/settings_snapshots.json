@@ -1,0 +1,280 @@
+{
+  "default": {
+    "schedule": {
+      "weekdays": [],
+      "start_time": "01:00:00",
+      "window_hours": 6.0,
+      "timezone": "Europe/Amsterdam"
+    },
+    "limits": {
+      "issues_per_day": 10,
+      "refines_per_day": 10,
+      "conflict_fixes_per_day": 30,
+      "max_parallel_workers": 2,
+      "session_timeout_minutes": 60,
+      "worker_timeout_hours": 5.0,
+      "max_turns": 200,
+      "max_check_rounds": 3,
+      "max_ci_rounds": 3,
+      "max_policy_rounds": 3,
+      "max_review_rounds": 3,
+      "max_continues": 5,
+      "max_new_issues_per_worker": 3,
+      "max_budget_usd_per_session": null,
+      "max_diff_lines": 1500,
+      "max_comment_chars": 1500,
+      "max_code_comment_lines": 2,
+      "command_timeout_minutes": 30,
+      "ci_poll_seconds": 60,
+      "ci_timeout_minutes": 60,
+      "ci_grace_minutes": 10,
+      "task_retention_days": 30
+    },
+    "agents": {
+      "selector": {
+        "backend": "claude_code",
+        "model": "opus",
+        "effort": "medium",
+        "web_tools": false
+      },
+      "refiner": {
+        "backend": "claude_code",
+        "model": "opus",
+        "effort": "medium",
+        "web_tools": false
+      },
+      "reviewer": {
+        "backend": "claude_code",
+        "model": "opus",
+        "effort": "high",
+        "web_tools": false
+      },
+      "worker": {
+        "backend": "claude_code",
+        "model": "opus",
+        "effort": "medium",
+        "web_tools": false
+      }
+    },
+    "backend_options": {},
+    "labels": {
+      "ready": "skeleton",
+      "refine": "skeleton refine",
+      "hitl": "skeleton HITL"
+    },
+    "repo": {
+      "base_branch": "main",
+      "protected_paths": [
+        ".github/**",
+        ".gitmodules"
+      ],
+      "setup_command": null,
+      "check_command": null,
+      "require_ci": true,
+      "allow_unprotected_base_branch": false,
+      "trusted_users": []
+    },
+    "runtime": {
+      "egress_allowlist": [
+        "pypi.org",
+        "files.pythonhosted.org",
+        "registry.npmjs.org",
+        "registry-1.docker.io",
+        "auth.docker.io",
+        "production.cloudfront.docker.com"
+      ],
+      "cpus": 2.0,
+      "memory_gb": 4.0,
+      "pids": 2048
+    },
+    "ci": {
+      "enabled": false,
+      "runners": 2,
+      "labels": [
+        "skeleton-crew"
+      ],
+      "egress_allowlist": [
+        "github.com",
+        "api.github.com",
+        "codeload.github.com",
+        ".actions.githubusercontent.com",
+        "objects.githubusercontent.com",
+        "raw.githubusercontent.com",
+        "release-assets.githubusercontent.com",
+        "ghcr.io",
+        "pkg-containers.githubusercontent.com",
+        "productionresultssa0.blob.core.windows.net",
+        "productionresultssa1.blob.core.windows.net",
+        "productionresultssa2.blob.core.windows.net",
+        "productionresultssa3.blob.core.windows.net",
+        "productionresultssa4.blob.core.windows.net",
+        "productionresultssa5.blob.core.windows.net",
+        "productionresultssa6.blob.core.windows.net",
+        "productionresultssa7.blob.core.windows.net",
+        "productionresultssa8.blob.core.windows.net",
+        "productionresultssa9.blob.core.windows.net",
+        "productionresultssa10.blob.core.windows.net",
+        "productionresultssa11.blob.core.windows.net",
+        "productionresultssa12.blob.core.windows.net",
+        "productionresultssa13.blob.core.windows.net",
+        "productionresultssa14.blob.core.windows.net",
+        "productionresultssa15.blob.core.windows.net",
+        "productionresultssa16.blob.core.windows.net",
+        "productionresultssa17.blob.core.windows.net",
+        "productionresultssa18.blob.core.windows.net",
+        "productionresultssa19.blob.core.windows.net",
+        "pypi.org",
+        "files.pythonhosted.org",
+        "registry.npmjs.org",
+        "registry-1.docker.io",
+        "auth.docker.io",
+        "production.cloudfront.docker.com"
+      ],
+      "no_proxy": [],
+      "cpus": 2.0,
+      "memory_gb": 4.0,
+      "pids": 4096
+    },
+    "classifier": {
+      "provider": "jev",
+      "model": "jev-latest",
+      "injection_screen": false,
+      "prescreen": false,
+      "effort_routing": false,
+      "effort_small": "low",
+      "effort_medium": "medium",
+      "effort_large": "high"
+    },
+    "dry_run": true,
+    "kill_switch": false
+  },
+  "stored": {
+    "schedule": {
+      "weekdays": [
+        "wed"
+      ],
+      "start_time": "02:30:00",
+      "window_hours": 4.5,
+      "timezone": "UTC"
+    },
+    "limits": {
+      "issues_per_day": 5,
+      "refines_per_day": 10,
+      "conflict_fixes_per_day": 30,
+      "max_parallel_workers": 2,
+      "session_timeout_minutes": 90,
+      "worker_timeout_hours": 5.0,
+      "max_turns": 200,
+      "max_check_rounds": 3,
+      "max_ci_rounds": 3,
+      "max_policy_rounds": 3,
+      "max_review_rounds": 3,
+      "max_continues": 5,
+      "max_new_issues_per_worker": 10,
+      "max_budget_usd_per_session": 2.5,
+      "max_diff_lines": 1500,
+      "max_comment_chars": 1500,
+      "max_code_comment_lines": 2,
+      "command_timeout_minutes": 30,
+      "ci_poll_seconds": 60,
+      "ci_timeout_minutes": 60,
+      "ci_grace_minutes": 10,
+      "task_retention_days": 30
+    },
+    "agents": {
+      "selector": {
+        "backend": "codex",
+        "model": "gpt-5.1-codex",
+        "effort": "high",
+        "web_tools": true
+      },
+      "refiner": {
+        "backend": "gemini",
+        "model": "gemini-3-pro",
+        "effort": "default",
+        "web_tools": false
+      },
+      "reviewer": {
+        "backend": "claude_code",
+        "model": "opus",
+        "effort": "xhigh",
+        "web_tools": false
+      },
+      "worker": {
+        "backend": "opencode",
+        "model": "openai/gpt-5.1",
+        "effort": "low",
+        "web_tools": true
+      }
+    },
+    "backend_options": {
+      "claude_code": {
+        "auth_mode": "api_key"
+      },
+      "opencode": {
+        "provider": "openai",
+        "auth_mode": "subscription"
+      }
+    },
+    "labels": {
+      "ready": "ready",
+      "refine": "refine me",
+      "hitl": "needs human"
+    },
+    "repo": {
+      "base_branch": "develop",
+      "protected_paths": [
+        ".github/**",
+        "infra/**"
+      ],
+      "setup_command": "make setup",
+      "check_command": "make check",
+      "require_ci": false,
+      "allow_unprotected_base_branch": true,
+      "trusted_users": [
+        "alice",
+        "helper[bot]"
+      ]
+    },
+    "runtime": {
+      "egress_allowlist": [
+        "pypi.org",
+        ".example.com"
+      ],
+      "cpus": 1.5,
+      "memory_gb": 3.0,
+      "pids": 1024
+    },
+    "ci": {
+      "enabled": true,
+      "runners": 3,
+      "labels": [
+        "self-hosted",
+        "linux"
+      ],
+      "egress_allowlist": [
+        "github.com",
+        ".actions.githubusercontent.com"
+      ],
+      "no_proxy": [
+        "10.0.0.1",
+        ".internal"
+      ],
+      "cpus": 4.0,
+      "memory_gb": 8.0,
+      "pids": 8192
+    },
+    "classifier": {
+      "provider": "openai_decisions",
+      "model": "gpt-6-luna",
+      "injection_screen": true,
+      "prescreen": true,
+      "effort_routing": true,
+      "effort_small": "minimal",
+      "effort_medium": "low",
+      "effort_large": "xhigh"
+    },
+    "dry_run": false,
+    "kill_switch": true
+  }
+}

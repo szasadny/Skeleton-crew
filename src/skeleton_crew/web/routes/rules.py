@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 
 from skeleton_crew.agents.rules import default_rules
-from skeleton_crew.domain.settings import RULE_KEYS
+from skeleton_crew.domain.settings import MAX_RULES_CHARS, RULE_KEYS, InvalidRules, check_rule_key
 from skeleton_crew.store import rules_store
 from skeleton_crew.web.rendering import redirect, render
 from skeleton_crew.web.state import get_state
@@ -13,8 +13,10 @@ HISTORY_LIMIT = 20
 
 
 def _check_key(key: str) -> None:
-    if key not in RULE_KEYS:
-        raise HTTPException(status_code=404)
+    try:
+        check_rule_key(key)
+    except ValueError:
+        raise HTTPException(status_code=404) from None
 
 
 async def _render_editor(
@@ -30,7 +32,7 @@ async def _render_editor(
         "is_default": active is None,
         "history": history,
         "error": error,
-        "max_chars": rules_store.MAX_RULES_CHARS,
+        "max_chars": MAX_RULES_CHARS,
     }
     return render(request, "rules.html", context, 422 if error else 200)
 
@@ -54,7 +56,7 @@ async def save(request: Request, key: str) -> Response:
     content = raw.replace("\r\n", "\n") if isinstance(raw, str) else ""
     try:
         await _save(request, key, content)
-    except rules_store.InvalidRules as error:
+    except InvalidRules as error:
         return await _render_editor(request, key, content, str(error))
     return redirect(f"/rules/{key}", "saved")
 

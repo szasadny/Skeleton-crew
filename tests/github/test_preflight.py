@@ -4,7 +4,8 @@ import respx
 from fake_gateway import FakeGitHubGateway
 from github_helpers import API, AuditLog, make_gateway
 
-from skeleton_crew.github.gateway import BranchRule, RulesUnavailable
+from skeleton_crew.domain.ci_policy import BranchRule
+from skeleton_crew.github.gateway import RulesUnavailable
 from skeleton_crew.github.preflight import check_repository
 
 

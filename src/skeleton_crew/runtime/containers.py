@@ -14,7 +14,7 @@ import docker.types
 from docker.client import DockerClient, from_env
 from docker.models.containers import Container
 
-from skeleton_crew.domain.errors import PolicyViolation
+from skeleton_crew.domain.container_policy import check_env, check_mount
 
 MANAGED_LABEL = "skeleton-crew.managed"
 SANDBOX_RUNTIME = "sysbox-runc"
@@ -26,8 +26,6 @@ _TIMEOUT_EXIT_CODE = 124
 _KILLED_EXIT_CODE = 137
 _READY_TIMEOUT_S = 60.0
 _READY_POLL_S = 0.2
-_DOCKER_SOCKET_PATHS = frozenset({"/var/run/docker.sock", "/run/docker.sock"})
-_GITHUB_TOKEN_PREFIXES = ("ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_")
 
 log = logging.getLogger(__name__)
 
@@ -104,33 +102,9 @@ class ContainerRuntime(Protocol):
     async def health(self, *, image: str, network: str, proxy_container: str) -> list[str]: ...
 
 
-def _is_github_credential(key: str, value: str) -> bool:
-    upper = key.upper()
-    if "TOKEN" in upper and ("GITHUB" in upper or upper.startswith("GH_")):
-        return True
-    if upper.startswith("GIT_CONFIG_"):
-        return True
-    lowered = value.lower()
-    return value.startswith(_GITHUB_TOKEN_PREFIXES) or "x-access-token" in lowered
-
-
-def check_env(env: Mapping[str, str]) -> None:
-    for key, value in env.items():
-        if _is_github_credential(key, value):
-            raise PolicyViolation(f"GitHub credential in container env: {key}")
-
-
-def _is_docker_socket(path: str) -> bool:
-    return Path(path).name == "docker.sock" or path in _DOCKER_SOCKET_PATHS
-
-
 def check_spec(spec: AgentContainerSpec) -> None:
     for mount in spec.mounts:
-        resolved = str(mount.host_path.resolve())
-        if _is_docker_socket(str(mount.host_path)) or _is_docker_socket(resolved):
-            raise PolicyViolation("docker socket must never be mounted into a container")
-        if _is_docker_socket(mount.container_path):
-            raise PolicyViolation("docker socket path must never be a mount target")
+        check_mount(str(mount.host_path), str(mount.host_path.resolve()), mount.container_path)
     check_env(spec.env)
 
 

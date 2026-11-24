@@ -5,11 +5,13 @@ from pathlib import Path
 from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from skeleton_crew.core.logging import MIN_SECRET_CHARS
+from skeleton_crew.domain.settings import LOGIN_RE
+
+GITHUB_URL = "https://github.com"
 _REPO_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,100}$")
-_LOGIN_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(\[bot\])?$")
 _CREDENTIAL_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 _MIN_SESSION_SECRET_CHARS = 32
-_MIN_REDACT_CHARS = 8
 
 
 class BootstrapConfig(BaseSettings):
@@ -51,7 +53,7 @@ class BootstrapConfig(BaseSettings):
     @field_validator("github_bot_login")
     @classmethod
     def _valid_login(cls, value: str | None) -> str | None:
-        if value is not None and not _LOGIN_RE.fullmatch(value):
+        if value is not None and not LOGIN_RE.fullmatch(value):
             raise ValueError("invalid GitHub login")
         return value
 
@@ -78,12 +80,8 @@ class BootstrapConfig(BaseSettings):
         return value
 
     @property
-    def owner(self) -> str:
-        return self.repo.partition("/")[0]
-
-    @property
-    def name(self) -> str:
-        return self.repo.partition("/")[2]
+    def repo_url(self) -> str:
+        return f"{GITHUB_URL}/{self.repo}"
 
     @property
     def tasks_dir(self) -> Path:
@@ -105,9 +103,29 @@ class BootstrapConfig(BaseSettings):
     def runner_allowlist_path(self) -> Path:
         return self.runner_allowlist_file or self.data_dir / "runner-egress" / "allowlist.txt"
 
+    @property
+    def required_dirs(self) -> tuple[Path, ...]:
+        return (
+            self.data_dir,
+            self.tasks_dir,
+            self.egress_allowlist_path.parent,
+            self.runners_dir,
+            self.runner_allowlist_path.parent,
+        )
+
     def secret_values(self) -> list[str]:
         secrets = [*self.agent_credentials.values(), self.ui_password_hash, self.session_secret]
-        return [value for s in secrets if len(value := s.get_secret_value()) >= _MIN_REDACT_CHARS]
+        return [value for s in secrets if len(value := s.get_secret_value()) >= MIN_SECRET_CHARS]
+
+
+def credential_setting(name: str) -> str:
+    config = BootstrapConfig.model_config
+    return f"{config['env_prefix']}agent_credentials{config['env_nested_delimiter']}{name}".upper()
+
+
+def secret_value(secret: SecretStr | None) -> str | None:
+    value = secret.get_secret_value().strip() if secret is not None else ""
+    return value or None
 
 
 @cache

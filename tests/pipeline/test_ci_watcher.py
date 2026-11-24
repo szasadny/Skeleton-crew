@@ -3,7 +3,7 @@ from datetime import timedelta
 from fake_gateway import FakeGitHubGateway
 from pipeline_helpers import FakeClock
 
-from skeleton_crew.github.gateway import CiState
+from skeleton_crew.domain.ci_policy import CiState
 from skeleton_crew.pipeline.ci_watcher import wait_for_ci
 
 SHA = "a" * 40

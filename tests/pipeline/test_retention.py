@@ -5,7 +5,7 @@ import pytest
 from pipeline_helpers import START, Harness
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from skeleton_crew.domain.task_state import RefineState, RunState, TaskState
+from skeleton_crew.domain.task_state import RefineState, RunState, RunTrigger, TaskState
 from skeleton_crew.models.refine_task import RefineTask
 from skeleton_crew.models.run import Run
 from skeleton_crew.models.worker_task import WorkerTask
@@ -22,7 +22,7 @@ def harness(tmp_path: Path, sessionmaker: async_sessionmaker[AsyncSession]) -> H
 
 async def _past_run(h: Harness, at: datetime, state: RunState = RunState.COMPLETED) -> int:
     async with h.sessionmaker() as session:
-        run = await runs_store.create_run(session, "manual", dry_run=False)
+        run = await runs_store.create_run(session, RunTrigger.MANUAL, dry_run=False)
         if state is not RunState.RUNNING:
             await runs_store.finish_run(session, run.id, state)
             row = await session.get(Run, run.id)

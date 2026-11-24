@@ -1,8 +1,11 @@
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
+from skeleton_crew.domain.label_policy import same_label
+
 TRUSTED_PERMISSIONS = frozenset({"admin", "maintain", "write"})
+_BOT_SUFFIX = "[bot]"
 
 
 @dataclass(frozen=True)
@@ -26,10 +29,23 @@ class IssueComment:
     at: datetime
 
 
+def always_trusted(extra_trusted: Iterable[str], bot_login: str | None) -> frozenset[str]:
+    logins = [*extra_trusted, *([bot_login] if bot_login else [])]
+    return frozenset(login.casefold() for login in logins)
+
+
+def never_trusted(login: str) -> bool:
+    return not login or login.endswith(_BOT_SUFFIX)
+
+
+def trusted_role(role: str) -> bool:
+    return role in TRUSTED_PERMISSIONS
+
+
 def trusted_label_time(
     events: Sequence[LabelEvent], label: str, is_trusted: Callable[[str], bool]
 ) -> datetime | None:
-    relevant = [e for e in events if e.label.casefold() == label.casefold()]
+    relevant = [e for e in events if same_label(e.label, label)]
     if not relevant:
         return None
     latest_at = max(e.at for e in relevant)

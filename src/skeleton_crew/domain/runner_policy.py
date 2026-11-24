@@ -5,6 +5,7 @@ RUNNER_PREFIX = "runner-"
 CRASH_WINDOW_S = 60.0
 _BASE_DELAY_S = 10.0
 MAX_RESTART_DELAY_S = 900.0
+_MAX_BACKOFF_EXPONENT = 16
 PUBLIC_REPO_PROBLEM = (
     "self-hosted CI is only available for private repositories: "
     "jobs from fork pull requests would run on this host"
@@ -44,4 +45,6 @@ def is_crash(ran_s: float) -> bool:
 def restart_delay(failures: int) -> float:
     if failures <= 0:
         return 0.0
-    return min(MAX_RESTART_DELAY_S, _BASE_DELAY_S * float(2 ** min(failures - 1, 16)))
+    return min(
+        MAX_RESTART_DELAY_S, _BASE_DELAY_S * float(2 ** min(failures - 1, _MAX_BACKOFF_EXPONENT))
+    )

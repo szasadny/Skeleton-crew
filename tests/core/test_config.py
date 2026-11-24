@@ -2,9 +2,14 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 
-from skeleton_crew.core.config import BootstrapConfig, get_config
+from skeleton_crew.core.config import (
+    BootstrapConfig,
+    credential_setting,
+    get_config,
+    secret_value,
+)
 
 _HASH = "$argon2id$v=19$m=65536,t=3,p=4$c2FsdHNhbHQ$aGFzaGhhc2g"
 _SESSION_SECRET = "s" * 32
@@ -22,9 +27,9 @@ def _config(**overrides: Any) -> BootstrapConfig:
     return BootstrapConfig.model_validate(values)
 
 
-def test_valid_config_derives_paths_and_repo_parts() -> None:
+def test_valid_config_derives_paths_and_repo_url() -> None:
     config = _config(data_dir="/data")
-    assert (config.owner, config.name) == ("acme", "widgets")
+    assert config.repo_url == "https://github.com/acme/widgets"
     assert config.tasks_dir == Path("/data/tasks")
     assert config.db_path.parent == Path("/data")
     assert config.egress_allowlist_path == Path("/data/egress/allowlist.txt")
@@ -111,3 +116,32 @@ def test_get_config_reads_prefixed_env_and_is_cached(
         assert get_config() is get_config()
     finally:
         get_config.cache_clear()
+
+
+def test_required_dirs_hold_every_data_directory() -> None:
+    config = _config(data_dir="/data", runner_allowlist_file="/etc/runners/allowlist.txt")
+    assert config.required_dirs == (
+        Path("/data"),
+        Path("/data/tasks"),
+        Path("/data/egress"),
+        Path("/data/runners"),
+        Path("/etc/runners"),
+    )
+
+
+def test_credential_setting_names_the_env_variable_that_is_read(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    assert credential_setting("claude_oauth_token") == "SC_AGENT_CREDENTIALS__CLAUDE_OAUTH_TOKEN"
+    monkeypatch.chdir(tmp_path)
+    _set_required_env(monkeypatch)
+    monkeypatch.setenv(credential_setting("some_key"), "fake-credential-value")
+    config = BootstrapConfig()  # type: ignore[call-arg]
+    assert config.agent_credentials["some_key"].get_secret_value() == "fake-credential-value"
+
+
+def test_secret_value_strips_and_treats_blank_as_missing() -> None:
+    credentials = {"a": SecretStr(" key \n"), "b": SecretStr("   ")}
+    assert secret_value(credentials.get("a")) == "key"
+    assert secret_value(credentials.get("b")) is None
+    assert secret_value(credentials.get("c")) is None
