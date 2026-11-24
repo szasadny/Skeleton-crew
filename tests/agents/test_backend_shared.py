@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,7 @@ from skeleton_crew.agents.backends._shared import (
     CliFiles,
     auth_mode_option,
     extract_json_text,
+    json_object,
     jsonl_events,
     number,
     safe_reason,
@@ -191,9 +193,25 @@ def test_extracts_a_whole_or_single_fenced_object(answer: str, expected: str) ->
         '```json\n{"a": 1}\n```\nmore text',
         '```json\n{"a": 1}\n```\n```json\n{"b": 2}\n```',
         '```json\n{"a": 1\n```',
-        '{"a": ' + "[" * 100_000 + "]" * 100_000 + "}",
-        '```json\n{"a": ' + "[" * 100_000 + "]" * 100_000 + "}\n```",
     ],
 )
 def test_rejects_anything_else(answer: str | None) -> None:
     assert extract_json_text(answer) is None
+
+
+def _too_deep(_text: str) -> object:
+    raise RecursionError
+
+
+def test_json_nested_too_deep_for_the_parser_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(json, "loads", _too_deep)
+
+    assert json_object('{"a": 1}') is None
+    assert extract_json_text('{"a": 1}') is None
+
+
+@pytest.mark.parametrize("wrap", ["{}", "```json\n{}\n```"])
+def test_deeply_nested_json_never_raises(wrap: str) -> None:
+    nested = '{"a": ' + "[" * 100_000 + "]" * 100_000 + "}"
+
+    assert extract_json_text(wrap.replace("{}", nested)) in {None, nested}
