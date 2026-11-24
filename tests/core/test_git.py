@@ -1,27 +1,17 @@
 import os
-import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
+from git_helpers import git
 
 from skeleton_crew.core.git import HARDENING, GitCommandError, git_argv, git_env, run_git_sync
 
 
 def _seed(root: Path) -> Path:
-    if shutil.which("git") is None:
-        pytest.skip("git not installed")
-    env = {
-        **git_env(),
-        "GIT_AUTHOR_NAME": "t",
-        "GIT_AUTHOR_EMAIL": "t@example.invalid",
-        "GIT_COMMITTER_NAME": "t",
-        "GIT_COMMITTER_EMAIL": "t@example.invalid",
-    }
     work = root / "seed"
     work.mkdir()
-    for args in (["init", "-q", "-b", "main"], ["commit", "-q", "--allow-empty", "-m", "init"]):
-        subprocess.run(["git", *args], cwd=work, env=env, check=True)  # noqa: S603, S607
+    git(work, "init", "-q", "-b", "main")
+    git(work, "commit", "-q", "--allow-empty", "-m", "init")
     return work
 
 

@@ -1,8 +1,9 @@
 import asyncio
 from pathlib import Path
 
+from configs import make_config
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from web_helpers import make_app, make_config
+from web_helpers import make_app
 
 from skeleton_crew.domain.settings import AppSettings, Schedule, Weekday
 from skeleton_crew.scheduler.scheduler import RunScheduler

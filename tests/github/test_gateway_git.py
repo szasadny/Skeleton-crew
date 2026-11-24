@@ -5,7 +5,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from github_helpers import TOKEN, AuditLog, commit_on_top, git, make_bare_remote, make_gateway
+from git_helpers import git_text
+from github_helpers import TOKEN, AuditLog, commit_on_top, make_bare_remote, make_gateway
 
 from skeleton_crew.core import git as core_git
 from skeleton_crew.core.audit import AuditKind, AuditOutcome
@@ -119,7 +120,7 @@ async def test_clone_checks_out_base_and_stores_no_credentials(tmp_path: Path) -
     config = (dest / ".git" / "config").read_text()
     assert "extraheader" not in config.lower()
     assert TOKEN not in config
-    assert git(dest, "tag") == ""
+    assert git_text(dest, "tag") == ""
 
 
 async def test_clone_with_planted_credential_is_rejected(
@@ -132,7 +133,7 @@ async def test_clone_with_planted_credential_is_rejected(
         out = await real_run_git(args, **kwargs)
         if args[0] == "clone":
             dest = Path(args[-1])
-            git(dest, "config", "http.https://github.com/.extraheader", "AUTHORIZATION: x")
+            git_text(dest, "config", "http.https://github.com/.extraheader", "AUTHORIZATION: x")
         return out
 
     monkeypatch.setattr(git_module, "run_git", run_and_plant)
@@ -151,12 +152,12 @@ async def test_push_branch_rewrites_the_branch_it_leased(tmp_path: Path) -> None
     await gateway.clone(clone)
     first = commit_on_top(clone, "a.txt")
     await gateway.push_branch(clone, "skeleton/4-fix", first)
-    git(clone, "reset", "-q", "--hard", "HEAD~1")
+    git_text(clone, "reset", "-q", "--hard", "HEAD~1")
     rewritten = commit_on_top(clone, "b.txt")
 
     await gateway.push_branch(clone, "skeleton/4-fix", rewritten, expected_sha=first)
 
-    assert git(bare, "rev-parse", "refs/heads/skeleton/4-fix") == rewritten
+    assert git_text(bare, "rev-parse", "refs/heads/skeleton/4-fix") == rewritten
     assert audit.kinds() == [(AuditKind.GITHUB_WRITE, AuditOutcome.ALLOWED)] * 2
 
 
@@ -166,14 +167,14 @@ async def test_push_without_lease_never_overwrites_an_existing_branch(tmp_path: 
     clone = tmp_path / "clone"
     await gateway.clone(clone)
     human = commit_on_top(clone, "human.txt")
-    git(clone, "push", "-q", str(bare), f"{human}:refs/heads/skeleton/4-fix")
-    git(clone, "reset", "-q", "--hard", "HEAD~1")
+    git_text(clone, "push", "-q", str(bare), f"{human}:refs/heads/skeleton/4-fix")
+    git_text(clone, "reset", "-q", "--hard", "HEAD~1")
     ours = commit_on_top(clone, "a.txt")
 
     with pytest.raises(GitCommandError):
         await gateway.push_branch(clone, "skeleton/4-fix", ours)
 
-    assert git(bare, "rev-parse", "refs/heads/skeleton/4-fix") == human
+    assert git_text(bare, "rev-parse", "refs/heads/skeleton/4-fix") == human
 
 
 async def test_branch_head_reads_only_the_exact_branch(tmp_path: Path) -> None:
@@ -208,7 +209,7 @@ async def test_push_to_base_or_non_skeleton_branch_is_blocked(tmp_path: Path, br
     with pytest.raises(PolicyViolation):
         await gateway.push_branch(clone, branch, new)
 
-    assert git(bare, "rev-parse", "refs/heads/main") == sha
+    assert git_text(bare, "rev-parse", "refs/heads/main") == sha
     assert audit.kinds() == [(AuditKind.POLICY_VIOLATION, AuditOutcome.BLOCKED)]
 
 
@@ -229,7 +230,7 @@ async def test_dry_run_push_does_not_push(tmp_path: Path) -> None:
 
     await gateway.push_branch(clone, "skeleton/4-fix", new)
 
-    assert "skeleton/4-fix" not in git(bare, "branch", "--list")
+    assert "skeleton/4-fix" not in git_text(bare, "branch", "--list")
     assert audit.kinds() == [(AuditKind.GITHUB_WRITE, AuditOutcome.DRY_RUN)]
 
 
@@ -245,7 +246,7 @@ async def test_lease_push_updates_the_branch_it_expects(tmp_path: Path) -> None:
 
     await gateway.push_branch(clone, "skeleton/4-fix", second, expected_sha=first)
 
-    assert git(bare, "rev-parse", "refs/heads/skeleton/4-fix") == second
+    assert git_text(bare, "rev-parse", "refs/heads/skeleton/4-fix") == second
     payload = audit.events[-1].payload
     assert payload is not None
     assert payload["expected"] == first
@@ -260,13 +261,13 @@ async def test_lease_push_refuses_to_overwrite_someone_elses_commit(tmp_path: Pa
     await gateway.push_branch(clone, "skeleton/4-fix", ours)
     human = commit_on_top(clone, "human.txt")
     await gateway.push_branch(clone, "skeleton/4-fix", human, expected_sha=ours)
-    git(clone, "reset", "-q", "--hard", ours)
+    git_text(clone, "reset", "-q", "--hard", ours)
     update = commit_on_top(clone, "b.txt")
 
     with pytest.raises(GitCommandError):
         await gateway.push_branch(clone, "skeleton/4-fix", update, expected_sha=ours)
 
-    assert git(bare, "rev-parse", "refs/heads/skeleton/4-fix") == human
+    assert git_text(bare, "rev-parse", "refs/heads/skeleton/4-fix") == human
 
 
 async def test_lease_push_rejects_a_non_sha_lease(tmp_path: Path) -> None:

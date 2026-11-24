@@ -64,7 +64,7 @@ class RunController:
                 with suppress(asyncio.CancelledError):
                     await task
             if self._runners is not None:
-                await self._runners.stop()
+                await self._runners.reset()
             await remove_managed_containers(self._deps)
             await abort_leftovers(self._deps, KILLED_NOTE)
 

@@ -1,11 +1,8 @@
-import os
-import shutil
-import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import pytest
+from git_helpers import commit_files, git
 from githubkit import GitHub
 
 from skeleton_crew.core.audit import AuditEntry, AuditKind, AuditOutcome
@@ -17,17 +14,6 @@ API = "https://api.github.com"
 REPO = "o/r"
 TOKEN = "ghs_test-installation-token-0123456789"  # noqa: S105
 SHA = "a" * 40
-
-_GIT_ENV = {
-    "GIT_CONFIG_GLOBAL": os.devnull,
-    "GIT_CONFIG_NOSYSTEM": "1",
-    "GIT_AUTHOR_NAME": "t",
-    "GIT_AUTHOR_EMAIL": "t@example.invalid",
-    "GIT_COMMITTER_NAME": "t",
-    "GIT_COMMITTER_EMAIL": "t@example.invalid",
-    "HOME": os.devnull,
-    "PATH": os.environ.get("PATH", ""),
-}
 
 
 @dataclass
@@ -61,34 +47,15 @@ def make_gateway(
     return GitHubGateway(make_client(), config, audit, remote)
 
 
-def git(cwd: Path, *args: str) -> str:
-    if shutil.which("git") is None:
-        pytest.skip("git not installed")
-    completed = subprocess.run(  # noqa: S603
-        ["git", *args],  # noqa: S607
-        cwd=cwd,
-        env=_GIT_ENV,
-        check=True,
-        capture_output=True,
-    )
-    return completed.stdout.decode().strip()
-
-
 def make_bare_remote(root: Path) -> tuple[Path, str]:
     work = root / "seed"
     work.mkdir()
     git(work, "init", "-q", "-b", "main")
-    (work / "README.md").write_text("hello\n")
-    git(work, "add", "-A")
-    git(work, "commit", "-q", "-m", "init")
-    sha = git(work, "rev-parse", "HEAD")
+    sha = commit_files(work, {"README.md": "hello\n"}, "init")
     bare = root / "remote.git"
     git(root, "clone", "-q", "--bare", str(work), str(bare))
     return bare, sha
 
 
 def commit_on_top(repo: Path, name: str) -> str:
-    (repo / name).write_text("change\n")
-    git(repo, "add", "-A")
-    git(repo, "commit", "-q", "-m", "change")
-    return git(repo, "rev-parse", "HEAD")
+    return commit_files(repo, {name: "change\n"}, "change")

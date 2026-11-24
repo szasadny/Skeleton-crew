@@ -1,7 +1,6 @@
-from pathlib import Path
-
 import pytest
 from fake_gateway import FakePull
+from git_helpers import commit_files, git
 from pipeline_helpers import (
     BLOCKER,
     BOTH,
@@ -10,8 +9,6 @@ from pipeline_helpers import (
     Harness,
     advance_main,
     assert_no_forbidden_writes,
-    commit_files,
-    git,
     only_task,
     parents_of,
     push_branch_without_pr,
@@ -22,22 +19,17 @@ from pipeline_helpers import (
     worker_json,
     workspace_editor,
 )
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from skeleton_crew.core.audit import AuditKind
+from skeleton_crew.domain.branch_policy import continuation_problem
 from skeleton_crew.domain.ci_policy import ReviewCheck
 from skeleton_crew.domain.settings import Role
 from skeleton_crew.domain.task_state import TaskKind, TaskState
-from skeleton_crew.store import audit_store
+from skeleton_crew.runtime.containers import ROLE_LABEL
 
-FOREIGN = "the branch has commits Skeleton Crew did not push"
+pytestmark = pytest.mark.usefixtures("ready_issue")
 
-
-@pytest.fixture
-def harness(tmp_path: Path, sessionmaker: async_sessionmaker[AsyncSession]) -> Harness:
-    h = Harness(tmp_path, sessionmaker)
-    h.add_ready_issue()
-    return h
+FOREIGN = str(continuation_problem("a" * 40, last_pushed=None, closed_pr=None))
 
 
 async def test_existing_branch_is_continued_with_a_comment_and_a_new_pr(harness: Harness) -> None:
@@ -147,7 +139,7 @@ async def _assert_escalated_untouched(harness: Harness, run_id: int, reason: str
     assert harness.gateway.pushes == []
     assert harness.gateway.review_checks == {}
     assert harness.writes("open_pr") == []
-    assert [spec.labels["skeleton-crew.role"] for spec in harness.runtime.started] == ["selector"]
+    assert [spec.labels[ROLE_LABEL] for spec in harness.runtime.started] == ["selector"]
     assert [r.role for r in harness.backend.requests] == [Role.SELECTOR]
     assert harness.gateway.issues[1].labels == {"skeleton HITL"}
     assert_no_forbidden_writes(harness)
@@ -230,8 +222,6 @@ async def test_two_open_skeleton_prs_exclude_the_issue(harness: Harness) -> None
     assert harness.backend.requests == []
     assert harness.gateway.writes == []
     assert harness.gateway.mergeable_reads == []
-    async with harness.sessionmaker() as session:
-        events = await audit_store.list_events(session, 500, 0)
-    [skipped] = [e for e in events if e.kind is AuditKind.ISSUE_SKIPPED]
+    [skipped] = await harness.audit_events(AuditKind.ISSUE_SKIPPED)
     assert skipped.summary == "#1 has 2 open skeleton PRs"
     assert skipped.payload == {"issue": 1, "prs": [10, 11]}

@@ -10,11 +10,11 @@ from skeleton_crew.domain.schemas import WorkerResult
 from skeleton_crew.domain.task_keys import worker_key
 from skeleton_crew.domain.task_state import (
     ROUND_RULES,
+    FollowUpKind,
     JobMode,
     rounds_exhausted,
     works_on_existing_branch,
 )
-from skeleton_crew.domain.task_state import FollowUpKind as FollowUpKind
 from skeleton_crew.domain.trust_policy import IssueComment
 from skeleton_crew.github.gateway import IssueRef
 from skeleton_crew.pipeline.candidates import Candidate, OpenPr

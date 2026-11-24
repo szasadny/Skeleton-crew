@@ -1,8 +1,8 @@
 from pathlib import Path
 
 import pytest
+from configs import make_config
 from pydantic import SecretStr, ValidationError
-from web_helpers import make_config
 
 from skeleton_crew.core.config import (
     BootstrapConfig,

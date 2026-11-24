@@ -14,6 +14,7 @@ from skeleton_crew.runtime.containers import (
     MANAGED_VALUE,
     READY_FILE,
     SANDBOX_RUNTIME,
+    WORKSPACE,
     ContainerHandle,
     ContainerSpec,
     ContainerStartError,
@@ -61,7 +62,7 @@ async def started(
     handle = await runtime.start(
         ContainerSpec(
             name=f"sc-test-{uuid.uuid4().hex[:8]}", image=IMAGE, network=network,
-            mounts=[Mount(workspace, "/workspace", read_only=True)], env={"SC_TEST": "1"},
+            mounts=[Mount(workspace, WORKSPACE, read_only=True)], env={"SC_TEST": "1"},
             cpus=1, memory_gb=1, pids=256, labels={"skeleton-crew.test": "true"},
         )
     )  # fmt: skip
@@ -73,7 +74,7 @@ async def test_exec_runs_as_agent_in_sysbox(
     started: tuple[DockerRuntime, ContainerHandle], client: DockerClient
 ) -> None:
     runtime, handle = started
-    argv = ["sh", "-c", 'id -un; cat /workspace/hello.txt; echo "$SC_TEST"']
+    argv = ["sh", "-c", f'id -un; cat {WORKSPACE}/hello.txt; echo "$SC_TEST"']
     result = await runtime.exec(handle, ExecRequest.as_agent(argv, timeout_s=30))
     assert result.exit_code == 0
     assert result.stdout.decode().split() == ["agent", "hi", "1"]
@@ -101,7 +102,7 @@ async def test_every_agent_cli_is_installed(
 
 async def test_workspace_mount_is_read_only(started: tuple[DockerRuntime, ContainerHandle]) -> None:
     runtime, handle = started
-    result = await runtime.exec(handle, ExecRequest(["touch", "/workspace/x"], "agent", "/", 30))
+    result = await runtime.exec(handle, ExecRequest(["touch", f"{WORKSPACE}/x"], "agent", "/", 30))
     assert result.exit_code != 0
 
 

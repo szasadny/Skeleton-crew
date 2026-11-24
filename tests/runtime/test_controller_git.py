@@ -5,11 +5,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from runtime_helpers import Repo, run
+from git_helpers import GitRepo, run_command
 
 from skeleton_crew.core.git import HARDENING, git_env
 from skeleton_crew.domain.diff_parse import parse_diff_summary
 from skeleton_crew.domain.errors import PolicyViolation
+from skeleton_crew.domain.task_keys import worker_key
+from skeleton_crew.runtime.containers import WORKSPACE
 from skeleton_crew.runtime.controller_git import (
     MAX_PATCH_BYTES,
     CommitSpec,
@@ -32,12 +34,12 @@ AUTHOR = "Skeleton Crew <crew@example.invalid>"
 
 @pytest.fixture
 def paths(tmp_path: Path) -> TaskPaths:
-    return task_paths(tmp_path / "tasks", "worker-1")
+    return task_paths(tmp_path / "tasks", worker_key(1))
 
 
 @pytest.fixture
-def controller(paths: TaskPaths) -> Repo:
-    repo = Repo(paths.controller_repo)
+def controller(paths: TaskPaths) -> GitRepo:
+    repo = GitRepo(paths.controller_repo)
     repo.write("README.md", "hello\n")
     repo.write("src/app.py", "print('a')\n")
     repo.commit()
@@ -45,16 +47,18 @@ def controller(paths: TaskPaths) -> Repo:
 
 
 def agent_patch(paths: TaskPaths, base: str) -> bytes:
-    argv = [arg.replace("/workspace", str(paths.agent_repo)) for arg in agent_patch_argv(base)]
-    return run(argv, paths.agent_repo)
+    argv = [arg.replace(WORKSPACE, str(paths.agent_repo)) for arg in agent_patch_argv(base)]
+    return run_command(argv, paths.agent_repo)
 
 
-def agent_repo(paths: TaskPaths) -> Repo:
+def agent_repo(paths: TaskPaths) -> GitRepo:
     make_agent_copy(paths)
-    return Repo(paths.agent_repo, init=False)
+    return GitRepo(paths.agent_repo, init=False)
 
 
-def test_agent_copy_is_independent_and_keeps_symlinks(paths: TaskPaths, controller: Repo) -> None:
+def test_agent_copy_is_independent_and_keeps_symlinks(
+    paths: TaskPaths, controller: GitRepo
+) -> None:
     (paths.controller_repo / "link").symlink_to("README.md")
     make_agent_copy(paths)
     assert (paths.agent_repo / ".git").is_dir()
@@ -63,7 +67,7 @@ def test_agent_copy_is_independent_and_keeps_symlinks(paths: TaskPaths, controll
     assert (paths.controller_repo / "README.md").read_text() == "hello\n"
 
 
-def test_agent_copy_replaces_an_existing_copy(paths: TaskPaths, controller: Repo) -> None:
+def test_agent_copy_replaces_an_existing_copy(paths: TaskPaths, controller: GitRepo) -> None:
     make_agent_copy(paths)
     (paths.agent_repo / "work.txt").write_text("in progress\n")
     make_agent_copy(paths)
@@ -71,7 +75,7 @@ def test_agent_copy_replaces_an_existing_copy(paths: TaskPaths, controller: Repo
 
 
 def test_readonly_copy_has_tree_at_sha_without_git(
-    tmp_path: Path, paths: TaskPaths, controller: Repo
+    tmp_path: Path, paths: TaskPaths, controller: GitRepo
 ) -> None:
     base = controller.head()
     controller.write("README.md", "later\n")
@@ -84,7 +88,7 @@ def test_readonly_copy_has_tree_at_sha_without_git(
 
 
 def test_readonly_copy_drops_links_escaping_dest(
-    tmp_path: Path, paths: TaskPaths, controller: Repo
+    tmp_path: Path, paths: TaskPaths, controller: GitRepo
 ) -> None:
     root = paths.controller_repo
     (root / "inside").symlink_to("README.md")
@@ -99,13 +103,13 @@ def test_readonly_copy_drops_links_escaping_dest(
     assert not (tmp_path / "outside").exists()
 
 
-def test_readonly_copy_rejects_option_like_sha(tmp_path: Path, controller: Repo) -> None:
+def test_readonly_copy_rejects_option_like_sha(tmp_path: Path, controller: GitRepo) -> None:
     with pytest.raises(ValueError, match="sha"):
         make_readonly_copy(controller.root, tmp_path / "ro", "--output=/tmp/x")
 
 
 def test_readonly_copy_refuses_existing_dest(
-    tmp_path: Path, paths: TaskPaths, controller: Repo
+    tmp_path: Path, paths: TaskPaths, controller: GitRepo
 ) -> None:
     (tmp_path / "ro").mkdir()
     with pytest.raises(FileExistsError):
@@ -113,7 +117,7 @@ def test_readonly_copy_refuses_existing_dest(
 
 
 def test_refresh_replaces_contents_in_place(
-    tmp_path: Path, paths: TaskPaths, controller: Repo
+    tmp_path: Path, paths: TaskPaths, controller: GitRepo
 ) -> None:
     first = controller.head()
     (paths.controller_repo / "src" / "app.py").unlink()
@@ -133,7 +137,7 @@ def test_refresh_replaces_contents_in_place(
 
 
 def test_refresh_drops_links_escaping_dest(
-    tmp_path: Path, paths: TaskPaths, controller: Repo
+    tmp_path: Path, paths: TaskPaths, controller: GitRepo
 ) -> None:
     dest = tmp_path / "ro"
     make_readonly_copy(paths.controller_repo, dest, controller.head())
@@ -143,7 +147,7 @@ def test_refresh_drops_links_escaping_dest(
 
 
 def test_refresh_rejects_option_like_sha_and_keeps_contents(
-    tmp_path: Path, paths: TaskPaths, controller: Repo
+    tmp_path: Path, paths: TaskPaths, controller: GitRepo
 ) -> None:
     dest = tmp_path / "ro"
     make_readonly_copy(paths.controller_repo, dest, controller.head())
@@ -153,7 +157,7 @@ def test_refresh_rejects_option_like_sha_and_keeps_contents(
 
 
 async def test_apply_patch_commits_on_parent_with_controller_identity(
-    paths: TaskPaths, controller: Repo
+    paths: TaskPaths, controller: GitRepo
 ) -> None:
     base = controller.head()
     agent = agent_repo(paths)
@@ -177,7 +181,7 @@ async def test_apply_patch_commits_on_parent_with_controller_identity(
 
 
 async def test_apply_patch_ignores_identity_in_patch_headers(
-    paths: TaskPaths, controller: Repo
+    paths: TaskPaths, controller: GitRepo
 ) -> None:
     base = controller.head()
     agent = agent_repo(paths)
@@ -193,7 +197,7 @@ async def test_apply_patch_ignores_identity_in_patch_headers(
 
 
 async def test_follow_up_patch_is_full_diff_from_base_on_previous_tip(
-    paths: TaskPaths, controller: Repo
+    paths: TaskPaths, controller: GitRepo
 ) -> None:
     base = controller.head()
     agent = agent_repo(paths)
@@ -216,7 +220,7 @@ async def test_follow_up_patch_is_full_diff_from_base_on_previous_tip(
     assert controller.show(second, "b.txt") == b"two\n"
 
 
-async def test_apply_patch_with_binary_file(paths: TaskPaths, controller: Repo) -> None:
+async def test_apply_patch_with_binary_file(paths: TaskPaths, controller: GitRepo) -> None:
     base = controller.head()
     blob = bytes(range(256)) * 8
     agent = agent_repo(paths)
@@ -232,7 +236,7 @@ async def test_apply_patch_with_binary_file(paths: TaskPaths, controller: Repo) 
     assert controller.show(sha, "img.bin") == blob
 
 
-async def test_patch_touching_git_dir_is_rejected(paths: TaskPaths, controller: Repo) -> None:
+async def test_patch_touching_git_dir_is_rejected(paths: TaskPaths, controller: GitRepo) -> None:
     base = controller.head()
     patch = (
         b"diff --git a/.git/config b/.git/config\n"
@@ -254,7 +258,7 @@ async def test_patch_touching_git_dir_is_rejected(paths: TaskPaths, controller: 
 
 
 async def test_patch_escaping_repo_is_rejected(
-    tmp_path: Path, paths: TaskPaths, controller: Repo
+    tmp_path: Path, paths: TaskPaths, controller: GitRepo
 ) -> None:
     base = controller.head()
     patch = (
@@ -274,7 +278,7 @@ async def test_patch_escaping_repo_is_rejected(
         )
 
 
-async def test_patch_that_does_not_apply_is_rejected(paths: TaskPaths, controller: Repo) -> None:
+async def test_patch_that_does_not_apply_is_rejected(paths: TaskPaths, controller: GitRepo) -> None:
     base = controller.head()
     patch = (
         b"diff --git a/README.md b/README.md\n"
@@ -294,7 +298,9 @@ async def test_patch_that_does_not_apply_is_rejected(paths: TaskPaths, controlle
 
 
 @pytest.mark.parametrize("patch", [b"", b"\n  \n"])
-async def test_empty_patch_is_no_changes(paths: TaskPaths, controller: Repo, patch: bytes) -> None:
+async def test_empty_patch_is_no_changes(
+    paths: TaskPaths, controller: GitRepo, patch: bytes
+) -> None:
     base = controller.head()
     with pytest.raises(PolicyViolation, match="no changes"):
         await apply_agent_patch(
@@ -305,7 +311,9 @@ async def test_empty_patch_is_no_changes(paths: TaskPaths, controller: Repo, pat
         )
 
 
-async def test_patch_equal_to_parent_tree_is_no_changes(paths: TaskPaths, controller: Repo) -> None:
+async def test_patch_equal_to_parent_tree_is_no_changes(
+    paths: TaskPaths, controller: GitRepo
+) -> None:
     base = controller.head()
     agent = agent_repo(paths)
     agent.write("a.txt", "one\n")
@@ -325,7 +333,7 @@ async def test_patch_equal_to_parent_tree_is_no_changes(paths: TaskPaths, contro
         )
 
 
-async def test_oversized_patch_is_rejected(paths: TaskPaths, controller: Repo) -> None:
+async def test_oversized_patch_is_rejected(paths: TaskPaths, controller: GitRepo) -> None:
     base = controller.head()
     with pytest.raises(PolicyViolation, match="larger"):
         await apply_agent_patch(
@@ -338,7 +346,7 @@ async def test_oversized_patch_is_rejected(paths: TaskPaths, controller: Repo) -
 
 @pytest.mark.parametrize("author", ["no email", "<x@y>", "A <a@b>\nB <c@d>", "A <a b@c>"])
 async def test_malformed_author_is_rejected(
-    paths: TaskPaths, controller: Repo, author: str
+    paths: TaskPaths, controller: GitRepo, author: str
 ) -> None:
     base = controller.head()
     agent = agent_repo(paths)
@@ -353,7 +361,7 @@ async def test_malformed_author_is_rejected(
 
 
 async def test_controller_hooks_never_run(
-    tmp_path: Path, paths: TaskPaths, controller: Repo
+    tmp_path: Path, paths: TaskPaths, controller: GitRepo
 ) -> None:
     base = controller.head()
     marker = tmp_path / "hook-ran"
@@ -375,7 +383,7 @@ async def test_controller_hooks_never_run(
 
 
 async def test_agent_repo_config_cannot_change_patch_prefixes(
-    paths: TaskPaths, controller: Repo
+    paths: TaskPaths, controller: GitRepo
 ) -> None:
     base = controller.head()
     agent = agent_repo(paths)
@@ -391,7 +399,7 @@ async def test_agent_repo_config_cannot_change_patch_prefixes(
     assert controller.show(sha, "README.md") == b"agent\n"
 
 
-async def test_diff_summary_feeds_domain_parser(paths: TaskPaths, controller: Repo) -> None:
+async def test_diff_summary_feeds_domain_parser(paths: TaskPaths, controller: GitRepo) -> None:
     base = controller.head()
     agent = agent_repo(paths)
     agent.write("src/app.py", "print('b')\n")
@@ -417,7 +425,7 @@ def test_git_available() -> None:
     assert shutil.which("git") is not None
 
 
-def _branch_and_main(controller: Repo, branch_file: str, main_file: str) -> tuple[str, str]:
+def _branch_and_main(controller: GitRepo, branch_file: str, main_file: str) -> tuple[str, str]:
     base = controller.head()
     controller.write(*branch_file.split("=", 1))
     branch = controller.commit("branch")
@@ -427,7 +435,7 @@ def _branch_and_main(controller: Repo, branch_file: str, main_file: str) -> tupl
     return branch, main
 
 
-async def test_clean_merge_tree_and_two_parent_commit(controller: Repo) -> None:
+async def test_clean_merge_tree_and_two_parent_commit(controller: GitRepo) -> None:
     branch, main = _branch_and_main(controller, "src/app.py=print('b')\n", "README.md=main\n")
 
     attempt = await merge_trees(controller.root, branch, main)
@@ -442,7 +450,7 @@ async def test_clean_merge_tree_and_two_parent_commit(controller: Repo) -> None:
     assert controller.show(merged, "README.md") == b"main\n"
 
 
-async def test_conflicting_merge_tree_lists_files_and_keeps_markers(controller: Repo) -> None:
+async def test_conflicting_merge_tree_lists_files_and_keeps_markers(controller: GitRepo) -> None:
     branch, main = _branch_and_main(
         controller, "src/app.py=print('b')\n", "src/app.py=print('m')\n"
     )
@@ -456,7 +464,7 @@ async def test_conflicting_merge_tree_lists_files_and_keeps_markers(controller: 
     assert b"<<<<<<<" in controller.show(wip, "src/app.py")
 
 
-async def test_merge_parents_reach_the_agent_commit(paths: TaskPaths, controller: Repo) -> None:
+async def test_merge_parents_reach_the_agent_commit(paths: TaskPaths, controller: GitRepo) -> None:
     branch, main = _branch_and_main(
         controller, "src/app.py=print('b')\n", "src/app.py=print('m')\n"
     )
@@ -480,7 +488,7 @@ async def test_merge_parents_reach_the_agent_commit(paths: TaskPaths, controller
     assert controller.show(merged, "src/app.py") == b"print('b')\nprint('m')\n"
 
 
-async def test_binary_diff_holds_the_whole_change(controller: Repo) -> None:
+async def test_binary_diff_holds_the_whole_change(controller: GitRepo) -> None:
     base = controller.head()
     controller.write("bin.dat", b"\x00\x01")
     head = controller.commit()
@@ -492,7 +500,7 @@ async def test_binary_diff_holds_the_whole_change(controller: Repo) -> None:
 
 
 @pytest.mark.parametrize("sha", ["main", "HEAD", "--upload-pack=x"])
-async def test_new_git_helpers_require_full_shas(controller: Repo, sha: str) -> None:
+async def test_new_git_helpers_require_full_shas(controller: GitRepo, sha: str) -> None:
     head = controller.head()
     with pytest.raises(ValueError, match="sha"):
         await merge_trees(controller.root, head, sha)
@@ -521,7 +529,7 @@ def test_commit_spec_rejects_bad_metadata(
 
 
 async def test_controller_git_runs_with_the_core_hardening_and_env(
-    controller: Repo, monkeypatch: pytest.MonkeyPatch
+    controller: GitRepo, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     head = controller.head()
     calls: list[tuple[list[str], Mapping[str, str]]] = []

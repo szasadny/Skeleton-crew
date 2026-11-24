@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 import httpx
 import pytest
 import respx
+from ci_payloads import check_run, workflow_run
 from github_helpers import API, SHA, AuditLog, make_gateway
 
 from skeleton_crew.domain.ci_policy import CiState
@@ -11,7 +12,6 @@ from skeleton_crew.domain.errors import PolicyViolation
 from skeleton_crew.github.gateway import LOGS_UNAVAILABLE
 
 ISSUES = f"{API}/repos/o/r/issues"
-GREEN, RED = CiState.SUCCESS, CiState.FAILURE
 Raw = dict[str, object]
 
 
@@ -243,27 +243,12 @@ async def test_pr_mergeable_missing_field_is_unknown() -> None:
     assert await make_gateway(AuditLog()).pr_mergeable(7) is None
 
 
-def _run(name: str, status: str, conclusion: str | None, slug: str = "github-actions") -> Raw:
-    return {
-        "id": 42,
-        "name": name,
-        "status": status,
-        "conclusion": conclusion,
-        "app": {"slug": slug},
-        "details_url": "https://ci/42",
-    }
-
-
-def _workflow(name: str, status: str, conclusion: str | None) -> Raw:
-    return {"name": name, "status": status, "conclusion": conclusion, "html_url": "https://wf"}
-
-
 @respx.mock
 async def test_ci_status_paginates_check_runs_and_statuses() -> None:
     runs_url = f"{API}/repos/o/r/commits/{SHA}/check-runs"
     pages = [
-        {"total_count": 2, "check_runs": [_run("a", "completed", "success")]},
-        {"total_count": 2, "check_runs": [_run("b", "completed", "failure")]},
+        {"total_count": 2, "check_runs": [check_run("a", "completed", "success")]},
+        {"total_count": 2, "check_runs": [check_run("b", "completed", "failure")]},
     ]
 
     def runs(request: httpx.Request) -> httpx.Response:
@@ -290,7 +275,7 @@ async def test_ci_status_paginates_check_runs_and_statuses() -> None:
 async def test_ci_status_waits_for_workflow_runs_and_required_checks() -> None:
     respx.get(f"{API}/repos/o/r/commits/{SHA}/check-runs").mock(
         return_value=httpx.Response(
-            200, json={"total_count": 1, "check_runs": [_run("lint", "completed", "success")]}
+            200, json={"total_count": 1, "check_runs": [check_run("lint", "completed", "success")]}
         )
     )
     respx.get(f"{API}/repos/o/r/commits/{SHA}/status").mock(
@@ -298,7 +283,8 @@ async def test_ci_status_waits_for_workflow_runs_and_required_checks() -> None:
     )
     respx.get(f"{API}/repos/o/r/actions/runs", params={"head_sha": SHA}).mock(
         return_value=httpx.Response(
-            200, json={"total_count": 1, "workflow_runs": [_workflow("CI", "completed", "success")]}
+            200,
+            json={"total_count": 1, "workflow_runs": [workflow_run("CI", "completed", "success")]},
         )
     )
     gateway = make_gateway(AuditLog())

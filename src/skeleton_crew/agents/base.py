@@ -49,11 +49,14 @@ class SessionOutcome:
     structured_output: str | None
     cost_usd: float
     turns: int
-    ok: bool
     error: str | None
     timed_out: bool
     stopped_early: str | None = None
     usage_limited: bool = False
+
+    @property
+    def ok(self) -> bool:
+        return self.error is None
 
 
 class AgentBackend(Protocol):
@@ -100,7 +103,6 @@ def failed_outcome(error: str, *, timed_out: bool = False) -> SessionOutcome:
         structured_output=None,
         cost_usd=0.0,
         turns=0,
-        ok=False,
         error=error,
         timed_out=timed_out,
     )

@@ -1,8 +1,9 @@
 from datetime import UTC, datetime
-from pathlib import Path
 
 import pytest
+from factories import seed_run, seed_task
 from fake_gateway import FakePull
+from git_helpers import commit_files, git, git_text
 from pipeline_helpers import (
     BOTH,
     BRANCH,
@@ -12,8 +13,6 @@ from pipeline_helpers import (
     Harness,
     advance_main,
     assert_no_forbidden_writes,
-    commit_files,
-    git,
     is_repo_command,
     only_task,
     open_pr,
@@ -23,29 +22,22 @@ from pipeline_helpers import (
     worker_json,
     workspace_editor,
 )
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from skeleton_crew.core.audit import AuditKind, AuditOutcome
 from skeleton_crew.core.git import GitCommandError
 from skeleton_crew.domain.ci_policy import CiState, CiStatus, FailedJob, ReviewCheck
 from skeleton_crew.domain.settings import Role
-from skeleton_crew.domain.task_state import RunTrigger, TaskKind, TaskState
+from skeleton_crew.domain.task_keys import worker_key
+from skeleton_crew.domain.task_state import TaskKind, TaskState
 from skeleton_crew.pipeline.pr_maintenance import MERGEABLE_POLL_SECONDS, MERGEABLE_POLLS
 from skeleton_crew.pipeline.texts import RERUN_CI_MESSAGE
-from skeleton_crew.store import audit_store, runs_store
+from skeleton_crew.store import runs_store
 
-
-@pytest.fixture
-def harness(tmp_path: Path, sessionmaker: async_sessionmaker[AsyncSession]) -> Harness:
-    h = Harness(tmp_path, sessionmaker)
-    h.add_ready_issue()
-    return h
+pytestmark = pytest.mark.usefixtures("ready_issue")
 
 
 async def _skip_summaries(harness: Harness) -> list[str]:
-    async with harness.sessionmaker() as session:
-        events = await audit_store.list_events(session, 500, 0)
-    return [e.summary for e in events if e.kind is AuditKind.PR_FIX_SKIPPED]
+    return [e.summary for e in await harness.audit_events(AuditKind.PR_FIX_SKIPPED)]
 
 
 async def test_mergeable_pr_gets_no_task_clone_or_quota(harness: Harness) -> None:
@@ -59,7 +51,7 @@ async def test_mergeable_pr_gets_no_task_clone_or_quota(harness: Harness) -> Non
     assert harness.backend.requests == []
     assert harness.runtime.started == []
     assert harness.gateway.writes == []
-    assert git(harness.remote, "rev-parse", BRANCH).decode().strip() == head
+    assert git_text(harness.remote, "rev-parse", BRANCH) == head
     assert not list(harness.config.tasks_dir.glob("worker-*"))
 
 
@@ -115,11 +107,11 @@ async def test_pr_that_merges_cleanly_after_all_ends_without_writes(harness: Har
     assert harness.backend.requests == []
     assert harness.runtime.started == []
     assert harness.gateway.writes == []
-    assert git(harness.remote, "rev-parse", BRANCH).decode().strip() == head
+    assert git_text(harness.remote, "rev-parse", BRANCH) == head
     async with harness.sessionmaker() as session:
         since = datetime(2000, 1, 1, tzinfo=UTC)
         assert await runs_store.count_worker_tasks_since(session, since, TaskKind.PR_FIX) == 0
-    assert not (harness.config.tasks_dir / f"worker-{task.id}" / "controller").exists()
+    assert not (harness.config.tasks_dir / worker_key(task.id) / "controller").exists()
 
 
 async def test_conflict_is_resolved_by_a_worker_into_a_merge_commit(harness: Harness) -> None:
@@ -188,7 +180,7 @@ async def test_resolution_may_not_touch_files_outside_the_conflict(harness: Harn
 async def test_check_command_waits_until_the_conflict_is_resolved(harness: Harness) -> None:
     await open_pr(harness, {"app.py": HI})
     advance_main(harness, {"app.py": HELLO})
-    harness.repo(check_command="make check")
+    harness.set("repo", check_command="make check")
     workspace_editor(harness, {"app.py": BOTH})
     harness.backend.script(Role.WORKER, worker_json())
     harness.backend.script(Role.REVIEWER, review_json())
@@ -252,11 +244,9 @@ async def test_pr_with_commits_from_someone_else_is_skipped(harness: Harness) ->
 async def test_pr_only_pushed_in_a_dry_run_counts_as_not_ours(harness: Harness) -> None:
     head = await open_pr(harness, {"app.py": HI}, recorded_head="b" * 40)
     advance_main(harness, {"app.py": HELLO})
-    async with harness.sessionmaker() as session:
-        run = await runs_store.create_run(session, RunTrigger.MANUAL, True)
-        task = await runs_store.add_worker_task(session, run.id, 1, "Add greeting")
-        await runs_store.update_worker_task(session, task.id, state=TaskState.DONE, head_sha=head)
-        await session.commit()
+    async with harness.sessionmaker.begin() as session:
+        run = await seed_run(session, dry_run=True)
+        await seed_task(session, run.id, 1, "Add greeting", state=TaskState.DONE, head_sha=head)
 
     run_id = await harness.run()
 
@@ -297,7 +287,7 @@ async def test_failed_push_keeps_the_old_head_as_ours(harness: Harness) -> None:
 async def test_no_fix_budget_means_no_update(harness: Harness) -> None:
     await open_pr(harness, {"app.py": HI})
     advance_main(harness, {"app.py": HELLO})
-    harness.limits(conflict_fixes_per_day=0)
+    harness.set("limits", conflict_fixes_per_day=0)
 
     run_id = await harness.run()
 
@@ -311,14 +301,10 @@ async def test_fix_quota_counts_only_conflicting_prs(harness: Harness) -> None:
     await open_pr(harness, {"app.py": HI}, mergeable=True)
     harness.gateway.pulls.append(FakePull(11, "skeleton/2-add-farewell", "c" * 40))
     harness.gateway.mergeable[11] = [False]
-    async with harness.sessionmaker() as session:
-        run = await runs_store.create_run(session, RunTrigger.MANUAL, False)
-        task = await runs_store.add_worker_task(session, run.id, 2, "Add farewell")
-        await runs_store.update_worker_task(
-            session, task.id, state=TaskState.DONE, head_sha="c" * 40
-        )
-        await session.commit()
-    harness.limits(conflict_fixes_per_day=1)
+    async with harness.sessionmaker.begin() as session:
+        run = await seed_run(session)
+        await seed_task(session, run.id, 2, "Add farewell", state=TaskState.DONE, head_sha="c" * 40)
+    harness.set("limits", conflict_fixes_per_day=1)
 
     run_id = await harness.run()
 
@@ -330,7 +316,7 @@ async def test_fix_quota_counts_only_conflicting_prs(harness: Harness) -> None:
 async def test_fixes_use_their_own_quota(harness: Harness) -> None:
     await open_pr(harness, {"app.py": HI})
     advance_main(harness, {"app.py": HELLO})
-    harness.limits(issues_per_day=0)
+    harness.set("limits", issues_per_day=0)
     workspace_editor(harness, {"app.py": BOTH})
     harness.backend.script(Role.WORKER, worker_json())
     harness.backend.script(Role.REVIEWER, review_json())
@@ -350,14 +336,14 @@ async def test_dry_run_update_writes_nothing(harness: Harness) -> None:
     workspace_editor(harness, {"app.py": BOTH})
     harness.backend.script(Role.WORKER, worker_json())
     harness.backend.script(Role.REVIEWER, review_json())
-    harness.settings = harness.settings.model_copy(update={"dry_run": True})
+    harness.set(dry_run=True)
 
     run_id = await harness.run()
 
     task = await only_task(harness, run_id)
     assert task.state is TaskState.DONE
     assert harness.gateway.writes == []
-    assert git(harness.remote, "rev-parse", BRANCH).decode().strip() == head
+    assert git_text(harness.remote, "rev-parse", BRANCH) == head
     assert (AuditKind.GITHUB_WRITE, AuditOutcome.DRY_RUN) in await harness.audit_kinds()
 
 
@@ -366,7 +352,7 @@ FAILED_CI = CiStatus(CiState.FAILURE, [FailedJob("tests", 7, "https://ci/7")])
 
 
 def tree_of(harness: Harness, sha: str) -> str:
-    return git(harness.remote, "rev-parse", f"{sha}^{{tree}}").decode().strip()
+    return git_text(harness.remote, "rev-parse", f"{sha}^{{tree}}")
 
 
 @pytest.mark.parametrize("state", UNFINISHED)
@@ -379,7 +365,7 @@ async def test_unfinished_pr_with_green_ci_is_reviewed(harness: Harness, state: 
     task = await only_task(harness, run_id)
     assert (task.kind, task.state) == (TaskKind.PR_FIX, TaskState.DONE)
     assert harness.gateway.mergeable_reads == []
-    assert git(harness.remote, "rev-parse", BRANCH).decode().strip() == head
+    assert git_text(harness.remote, "rev-parse", BRANCH) == head
     assert harness.gateway.review_checks[head][0] is ReviewCheck.PASSED
     assert [r.role for r in harness.backend.requests] == [Role.REVIEWER]
     assert_no_forbidden_writes(harness)
@@ -387,7 +373,7 @@ async def test_unfinished_pr_with_green_ci_is_reviewed(harness: Harness, state: 
 
 async def test_unfinished_pr_with_red_ci_reruns_it_with_an_empty_commit(harness: Harness) -> None:
     head = await open_pr(harness, {"app.py": HI}, state=TaskState.ESCALATED)
-    harness.gateway.ci_queue = [FAILED_CI, CiStatus(CiState.SUCCESS, [])]
+    harness.gateway.ci_default = [FAILED_CI, CiStatus(CiState.SUCCESS, [])]
     harness.backend.script(Role.REVIEWER, review_json())
 
     run_id = await harness.run()
@@ -397,7 +383,7 @@ async def test_unfinished_pr_with_red_ci_reruns_it_with_an_empty_commit(harness:
     [(_, rerun)] = harness.gateway.pushes
     assert parents_of(harness, rerun) == [head]
     assert tree_of(harness, rerun) == tree_of(harness, head)
-    message = git(harness.remote, "log", "-1", "--format=%s", rerun).decode().strip()
+    message = git_text(harness.remote, "log", "-1", "--format=%s", rerun)
     assert message == RERUN_CI_MESSAGE
     assert harness.gateway.leases == [head]
     assert harness.gateway.review_checks[rerun][0] is ReviewCheck.PASSED
@@ -407,7 +393,7 @@ async def test_unfinished_pr_with_red_ci_reruns_it_with_an_empty_commit(harness:
 
 async def test_ci_that_fails_again_after_the_rerun_goes_to_the_worker(harness: Harness) -> None:
     await open_pr(harness, {"app.py": HI}, state=TaskState.ESCALATED)
-    harness.gateway.ci_queue = [FAILED_CI, FAILED_CI, CiStatus(CiState.SUCCESS, [])]
+    harness.gateway.ci_default = [FAILED_CI, FAILED_CI, CiStatus(CiState.SUCCESS, [])]
     harness.gateway.job_logs[7] = "AssertionError: boom"
     workspace_editor(harness, {"app.py": BOTH})
     harness.backend.script(Role.WORKER, worker_json())
@@ -456,7 +442,7 @@ async def test_unfinished_pr_with_commits_from_someone_else_is_not_finished(
 
 async def test_unfinished_pr_needs_fix_quota(harness: Harness) -> None:
     await open_pr(harness, {"app.py": HI}, state=TaskState.ESCALATED)
-    harness.limits(conflict_fixes_per_day=0)
+    harness.set("limits", conflict_fixes_per_day=0)
 
     run_id = await harness.run()
 
@@ -466,13 +452,13 @@ async def test_unfinished_pr_needs_fix_quota(harness: Harness) -> None:
 
 async def test_finishing_a_pr_in_a_dry_run_writes_nothing(harness: Harness) -> None:
     head = await open_pr(harness, {"app.py": HI}, state=TaskState.ESCALATED)
-    harness.gateway.ci_queue = [FAILED_CI, CiStatus(CiState.SUCCESS, [])]
+    harness.gateway.ci_default = [FAILED_CI, CiStatus(CiState.SUCCESS, [])]
     harness.backend.script(Role.REVIEWER, review_json())
-    harness.settings = harness.settings.model_copy(update={"dry_run": True})
+    harness.set(dry_run=True)
 
     run_id = await harness.run()
 
     task = await only_task(harness, run_id)
     assert task.state is TaskState.DONE
     assert harness.gateway.writes == []
-    assert git(harness.remote, "rev-parse", BRANCH).decode().strip() == head
+    assert git_text(harness.remote, "rev-parse", BRANCH) == head

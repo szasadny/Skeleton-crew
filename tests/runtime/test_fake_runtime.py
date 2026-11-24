@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pytest
-from fake_runtime import FakeRuntime, argv_starts_with, ok
+from fake_runtime import FakeRuntime, argv_starts_with, exec_result
 from runtime_helpers import container_spec
 
 from skeleton_crew.domain.errors import PolicyViolation
@@ -15,8 +15,8 @@ async def test_fake_enforces_the_same_spec_checks(tmp_path: Path) -> None:
 
 async def test_scripted_exec_first_match_and_once(tmp_path: Path) -> None:
     runtime = FakeRuntime()
-    runtime.script(argv_starts_with("claude"), ok(b"first"), once=True)
-    runtime.script(argv_starts_with("claude"), lambda call: ok(call.cwd.encode()))
+    runtime.script(argv_starts_with("claude"), exec_result(stdout=b"first"), once=True)
+    runtime.script(argv_starts_with("claude"), lambda call: exec_result(stdout=call.cwd.encode()))
     handle = await runtime.start(container_spec(tmp_path))
     out = tmp_path / "o"
     first = await runtime.exec(handle, ExecRequest(["claude"], "agent", "/w", 1, stdout_path=out))
@@ -29,7 +29,7 @@ async def test_scripted_exec_first_match_and_once(tmp_path: Path) -> None:
 
 async def test_unscripted_exec_and_exec_after_remove_fail(tmp_path: Path) -> None:
     runtime = FakeRuntime()
-    runtime.script(lambda argv: True, ok())
+    runtime.script(lambda argv: True, exec_result())
     handle = await runtime.start(container_spec(tmp_path))
     assert await runtime.remove_labeled(MANAGED_LABEL, MANAGED_VALUE) == 1
     assert runtime.removed == [handle]

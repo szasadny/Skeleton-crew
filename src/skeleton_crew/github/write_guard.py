@@ -13,9 +13,9 @@ from skeleton_crew.domain.write_policy import (
     check_open_pr,
     check_push,
     check_sha,
+    new_issue_labels,
     short,
 )
-from skeleton_crew.domain.write_policy import new_issue_labels as new_issue_labels
 
 
 class WriteAction(StrEnum):

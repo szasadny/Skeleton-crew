@@ -172,6 +172,25 @@ async def test_last_pushed_task_ignores_dry_runs_and_unpushed_tasks(session: Asy
     assert await runs_store.last_pushed_task(session, 6) is None
 
 
+async def test_last_pushed_tasks_keep_the_newest_live_push_per_issue(
+    session: AsyncSession,
+) -> None:
+    live = await seed_run(session)
+    dry = await seed_run(session, dry_run=True)
+    await seed_task(session, live.id, 4, head_sha="a" * 40)
+    newest = await seed_task(session, live.id, 4, head_sha="d" * 40)
+    await seed_task(session, dry.id, 4, head_sha="b" * 40)
+    await seed_task(session, live.id, 4)
+    other = await seed_task(session, live.id, 5, head_sha="c" * 40)
+    await seed_task(session, dry.id, 7, head_sha="e" * 40)
+    await seed_task(session, live.id, 8, head_sha="f" * 40)
+
+    found = await runs_store.last_pushed_tasks(session, [4, 5, 6, 7])
+
+    assert {number: task.id for number, task in found.items()} == {4: newest.id, 5: other.id}
+    assert await runs_store.last_pushed_tasks(session, []) == {}
+
+
 async def test_awaiting_ci_count_only_counts_live_running_runs(session: AsyncSession) -> None:
     live = await seed_run(session)
     dry = await seed_run(session, dry_run=True)

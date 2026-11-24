@@ -10,12 +10,6 @@ from skeleton_crew.services.errors import NotFound
 from skeleton_crew.store import rules_store
 
 
-def test_effective_rules_prefer_the_saved_revision() -> None:
-    assert rules_service.effective_rules("worker", "Mine.") == "Mine."
-    assert rules_service.effective_rules("worker", None) == default_rules("worker")
-    assert rules_service.effective_rules("worker", "") == default_rules("worker")
-
-
 async def test_editor_starts_from_the_default(session: AsyncSession) -> None:
     editor = await rules_service.editor(session, "common")
     assert editor.content == default_rules("common")

@@ -7,6 +7,8 @@ from typing import Any
 
 import httpx
 from audit_helpers import audit_events
+from clocks import FakeClock
+from configs import make_config
 from fake_control import FakeRunControl, FakeRunnerControl
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -24,23 +26,21 @@ from skeleton_crew.web.security import CSRF_FIELD, LOGIN_PATH
 
 PASSWORD = "correct horse battery staple"  # noqa: S105
 TOKEN_SECRET = "oauth-token-value-for-tests"  # noqa: S105
-_HASH = hash_password(PASSWORD)
 _CSRF_RE = re.compile(rf'name="{CSRF_FIELD}" value="([^"]+)"')
 
 
-def make_config(data_dir: Path, **overrides: Any) -> BootstrapConfig:
-    values: dict[str, Any] = {
-        "repo": "acme/widgets",
-        "github_app_id": 1,
-        "github_app_private_key_path": "/nonexistent/key.pem",
-        "ui_password_hash": _HASH,
-        "session_secret": "s" * 32,
-        "agent_credentials": {"claude_oauth_token": TOKEN_SECRET},
-        "data_dir": data_dir,
-        "insecure_cookies": True,
-    }
-    values.update(overrides)
-    return BootstrapConfig.model_validate(values)
+_WEB_CONFIG: dict[str, Any] = {
+    "ui_password_hash": hash_password(PASSWORD),
+    "agent_credentials": {"claude_oauth_token": TOKEN_SECRET},
+    "insecure_cookies": True,
+}
+NOTICE = '<p class="notice" role="status">'
+NOTICE_CLASS = 'class="notice"'
+SAVE_BUTTON = '<button type="submit">Save</button>'
+
+
+def notice(text: str = "") -> str:
+    return f"{NOTICE}{text}</p>"
 
 
 def make_app(
@@ -56,14 +56,6 @@ def make_app(
         scheduler=RunScheduler(noop_trigger),
         runners=runners or FakeRunnerControl(),
     )
-
-
-class FakeClock:
-    def __init__(self) -> None:
-        self.now = 1000.0
-
-    def __call__(self) -> float:
-        return self.now
 
 
 @dataclass
@@ -115,11 +107,11 @@ async def open_web(
     login: bool = False,
     **config_overrides: Any,
 ) -> AsyncIterator[Web]:
-    config = make_config(data_dir, **config_overrides)
+    config = make_config(data_dir, **(_WEB_CONFIG | config_overrides))
     control = controller or FakeRunControl()
     app = make_app(config, sessionmaker, control, runners)
     clock = FakeClock()
-    app.state.web.logins.throttle.clock = clock
+    app.state.web.logins.throttle.clock = clock.monotonic
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         web = Web(client, app, config, sessionmaker, control, app.state.web.scheduler, clock)

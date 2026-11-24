@@ -4,7 +4,8 @@ from pathlib import Path
 
 import pytest
 from fake_gateway import BOT_LOGIN, FakeGitHubGateway, FakePull
-from github_helpers import SHA, AuditLog, commit_on_top, git, make_bare_remote, make_gateway
+from git_helpers import git_text
+from github_helpers import SHA, AuditLog, commit_on_top, make_bare_remote, make_gateway
 
 from skeleton_crew.core.audit import AuditKind, AuditOutcome
 from skeleton_crew.domain.ci_policy import CiState, ReviewCheck
@@ -156,6 +157,6 @@ async def test_fake_clones_source_and_pushes_to_local_remote(tmp_path: Path) -> 
     await gw.push_branch(clone, "skeleton/1-a", new)
     pr = await gw.open_pr(branch="skeleton/1-a", title="t", body="Closes #1")
 
-    assert git(bare, "rev-parse", "refs/heads/skeleton/1-a") == new
+    assert git_text(bare, "rev-parse", "refs/heads/skeleton/1-a") == new
     assert pr is not None
     assert pr.head_sha == new

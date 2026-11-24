@@ -1,5 +1,5 @@
 import pytest
-from web_helpers import Web
+from web_helpers import NOTICE_CLASS, SAVE_BUTTON, Web, notice
 
 from skeleton_crew.agents.rules import default_rules
 from skeleton_crew.core.audit import AuditKind
@@ -125,6 +125,6 @@ async def test_reset_saves_the_default_as_new_revision(web: Web) -> None:
 )
 async def test_rules_message_sits_left_of_save_button(web: Web, msg: str, text: str) -> None:
     html = (await web.client.get(f"/rules/common?msg={msg}")).text
-    assert html.count('class="notice"') == 1
-    notice = html.index(f'<p class="notice" role="status">{text}</p>')
-    assert notice < html.index('<button type="submit">Save</button>')
+    assert html.count(NOTICE_CLASS) == 1
+    message_at = html.index(notice(text))
+    assert message_at < html.index(SAVE_BUTTON)

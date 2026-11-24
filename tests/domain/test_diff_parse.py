@@ -1,8 +1,7 @@
 import os
-from pathlib import Path
 
 import pytest
-from gitrepo import GitRepo
+from git_helpers import GitRepo
 
 from skeleton_crew.domain.diff_parse import (
     AddedLine,
@@ -12,11 +11,6 @@ from skeleton_crew.domain.diff_parse import (
     parse_diff_summary,
 )
 from skeleton_crew.domain.errors import PolicyViolation
-
-
-@pytest.fixture
-def repo(tmp_path: Path) -> GitRepo:
-    return GitRepo(tmp_path)
 
 
 def summary(repo: GitRepo, base: str, head: str) -> list[FileChange]:

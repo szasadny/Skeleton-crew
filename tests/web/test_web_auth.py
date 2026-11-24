@@ -69,7 +69,7 @@ async def test_failed_login_blocks_even_the_right_password_until_backoff_ends(
 ) -> None:
     assert await _login_attempt(anon_web, "nope") == 401
     assert await _login_attempt(anon_web, PASSWORD) == 429
-    anon_web.clock.now += 1.1
+    anon_web.clock.advance(1.1)
     assert await _login_attempt(anon_web, PASSWORD) == 303
     outcomes = [summary for _, summary, _ in await _login_events(anon_web)]
     assert outcomes == ["login failed", "login throttled", "login succeeded"]
@@ -77,7 +77,7 @@ async def test_failed_login_blocks_even_the_right_password_until_backoff_ends(
 
 async def test_throttled_login_says_how_long_to_wait(anon_web: Web) -> None:
     await _login_attempt(anon_web, "nope")
-    anon_web.clock.now += 0.2
+    anon_web.clock.advance(0.2)
     token = await anon_web.csrf()
     response = await anon_web.client.post(
         LOGIN_PATH, data={"password": PASSWORD, CSRF_FIELD: token}
@@ -89,24 +89,24 @@ async def test_throttled_login_says_how_long_to_wait(anon_web: Web) -> None:
 
 async def test_backoff_doubles_and_resets_after_success(anon_web: Web) -> None:
     assert await _login_attempt(anon_web, "nope") == 401
-    anon_web.clock.now += 1.1
+    anon_web.clock.advance(1.1)
     assert await _login_attempt(anon_web, "nope") == 401
-    anon_web.clock.now += 1.1
+    anon_web.clock.advance(1.1)
     assert await _login_attempt(anon_web, PASSWORD) == 429
-    anon_web.clock.now += 1.0
+    anon_web.clock.advance(1.0)
     assert await _login_attempt(anon_web, PASSWORD) == 303
     await anon_web.post("/logout")
     assert await _login_attempt(anon_web, "nope") == 401
-    anon_web.clock.now += 1.1
+    anon_web.clock.advance(1.1)
     assert await _login_attempt(anon_web, PASSWORD) == 303
 
 
 async def test_backoff_is_capped_at_thirty_seconds(anon_web: Web) -> None:
     for _ in range(8):
         await _login_attempt(anon_web, "nope")
-        anon_web.clock.now += 31
+        anon_web.clock.advance(31)
     await _login_attempt(anon_web, "nope")
-    anon_web.clock.now += 30.1
+    anon_web.clock.advance(30.1)
     assert await _login_attempt(anon_web, PASSWORD) == 303
 
 

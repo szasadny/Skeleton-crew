@@ -222,7 +222,6 @@ def session_outcome(report: SessionReport, exit_code: int, timed_out: bool) -> S
         structured_output=structured,
         cost_usd=report.cost,
         turns=report.turns,
-        ok=error is None,
         error=error,
         timed_out=timed_out,
         stopped_early=stopped_early,

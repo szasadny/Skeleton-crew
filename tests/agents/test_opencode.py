@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from fake_agent import make_request
+from fake_agent import PROMPT_PATH, RULES_PATH, make_request
 from fake_cli import (
     HOSTILE_PROMPT,
     LARGE_PROMPT,
@@ -81,7 +81,7 @@ def _config(argv: list[str]) -> dict[str, Any]:
 def test_command_reads_the_prompt_file_on_stdin() -> None:
     argv = _backend().command(_request(prompt=HOSTILE_PROMPT, timeout_s=1800.5))
     assert argv[:2] == ["sh", "-c"]
-    assert argv[3:5] == ["sh", "/skeleton-in/prompt.md"]
+    assert argv[3:5] == ["sh", PROMPT_PATH]
     assert argv[5].startswith(f"{CONFIG_ENV}=")
     assert argv[6:8] == ["opencode", "run"]
     assert not any(HOSTILE_PROMPT in arg for arg in argv)
@@ -112,7 +112,7 @@ def test_config_limits_steps_loads_rules_and_switches_off_extras() -> None:
     config = _config(_backend().command(_request()))
     assert config["agent"]["build"]["steps"] == 150
     assert config["agent"]["title"] == {"disable": True}
-    assert config["instructions"] == ["/skeleton-in/rules.md"]
+    assert config["instructions"] == [RULES_PATH]
     assert config["autoupdate"] is False
     assert config["share"] == "disabled"
     assert config["mcp"] == {}

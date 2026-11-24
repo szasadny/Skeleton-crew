@@ -1,13 +1,13 @@
 from pathlib import Path
 
-from runtime_helpers import Repo
+from git_helpers import GitRepo
 
 from skeleton_crew.domain.repo_docs import MAX_DOC_CHARS
 from skeleton_crew.runtime.repo_docs_reader import read_repo_docs
 
 
-def _docs_repo(root: Path) -> Repo:
-    repo = Repo(root)
+def _docs_repo(root: Path) -> GitRepo:
+    repo = GitRepo(root)
     repo.write("CLAUDE.md", "root claude\n")
     repo.write(".claude/CLAUDE.md", "See [arch](./ARCHITECTURE.md).\n")
     repo.write(".claude/ARCHITECTURE.md", "Layers. See [deep](../deep.md).\n")
@@ -41,7 +41,7 @@ def test_read_repo_docs_collects_instruction_and_linked_docs(tmp_path: Path) -> 
 def test_read_repo_docs_skips_symlinks_and_untracked_files(tmp_path: Path) -> None:
     secret = tmp_path / "secret.md"
     secret.write_text("host secret\n")
-    repo = Repo(tmp_path / "repo")
+    repo = GitRepo(tmp_path / "repo")
     repo.write("AGENTS.md", "[s](linked.md) [u](untracked.md)\n")
     (repo.root / "linked.md").symlink_to(secret)
     (repo.root / "sub").mkdir()
@@ -56,7 +56,7 @@ def test_read_repo_docs_skips_symlinks_and_untracked_files(tmp_path: Path) -> No
 
 
 def test_read_repo_docs_replaces_invalid_utf8_and_bounds_reads(tmp_path: Path) -> None:
-    repo = Repo(tmp_path / "repo")
+    repo = GitRepo(tmp_path / "repo")
     repo.write("AGENTS.md", b"ok \xff\n")
     repo.write("big/AGENTS.md", "x" * (MAX_DOC_CHARS * 5))
     repo.commit()

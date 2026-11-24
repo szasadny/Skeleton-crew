@@ -20,14 +20,13 @@ from skeleton_crew.core.security import MIN_PASSWORD_CHARS, hash_password
 from skeleton_crew.domain.settings import AppSettings
 from skeleton_crew.domain.task_state import RunTrigger
 from skeleton_crew.github.gateway import Gateway, GatewayConfig, GitHubGateway, connect_github
-from skeleton_crew.pipeline.deps import PipelineDeps, audit_sink
+from skeleton_crew.pipeline.deps import PipelineDeps
 from skeleton_crew.pipeline.run_controller import RunController
 from skeleton_crew.pipeline.run_setup import preflight
 from skeleton_crew.pipeline.runner_pool import RunnerPool
 from skeleton_crew.runtime.containers import DockerRuntime
 from skeleton_crew.runtime.secret_scan import scan_patch
 from skeleton_crew.scheduler.scheduler import RunScheduler
-from skeleton_crew.store import settings_store
 from skeleton_crew.web.app import create_app
 
 
@@ -115,10 +114,8 @@ async def _preflight(config: BootstrapConfig) -> list[str]:
     try:
         sessionmaker = make_sessionmaker(engine)
         deps = await _build_deps(config, sessionmaker)
-        async with sessionmaker() as session:
-            settings = await settings_store.load_settings(session)
-        gateway = deps.gateway_factory(settings, audit_sink(sessionmaker, None))
-        return (await preflight(deps, settings, gateway)).problems
+        settings = await deps.load_settings()
+        return (await preflight(deps, settings, deps.gateway(settings))).problems
     finally:
         await engine.dispose()
 

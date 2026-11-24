@@ -27,7 +27,7 @@ from skeleton_crew.domain.label_policy import LabelChange
 from skeleton_crew.domain.settings import AppSettings, LabelNames
 from skeleton_crew.domain.text_policy import truncate_text
 from skeleton_crew.domain.trust_policy import ContentEdit, IssueComment, LabelEvent
-from skeleton_crew.domain.write_policy import check_sha
+from skeleton_crew.domain.write_policy import check_sha, new_issue_labels
 from skeleton_crew.github._auth import make_github_client
 from skeleton_crew.github._git import (
     REMOTE_PROTOCOL,
@@ -53,7 +53,6 @@ from skeleton_crew.github.write_guard import (
     WriteGuard,
     comment_spec,
     label_spec,
-    new_issue_labels,
     new_issue_spec,
     open_pr_spec,
     push_spec,

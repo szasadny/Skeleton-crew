@@ -1,6 +1,6 @@
 from factories import seed_refine, seed_run, seed_task
 from fake_control import FakeRunControl
-from web_helpers import Web, WebFactory
+from web_helpers import NOTICE, NOTICE_CLASS, Web, WebFactory, notice
 
 from skeleton_crew.core.audit import AuditKind
 from skeleton_crew.domain.settings import AppSettings, Schedule, Weekday
@@ -206,15 +206,15 @@ async def test_sidebar_marks_only_the_current_section(web: Web) -> None:
 async def test_dashboard_message_sits_between_dry_run_and_kill_switch(web: Web) -> None:
     response = await web.post("/actions/kill")
     html = (await web.client.get(response.headers["location"])).text
-    notice = html.index('<p class="notice" role="status">Kill switch engaged.')
-    assert html.index("dry run</button>") < notice < html.index("Release kill switch")
-    assert html.count('class="notice"') == 1
+    message_at = html.index(f"{NOTICE}Kill switch engaged.")
+    assert html.index("dry run</button>") < message_at < html.index("Release kill switch")
+    assert html.count(NOTICE_CLASS) == 1
     partial = (await web.client.get("/partials/status")).text
-    assert '<div id="flash" hx-preserve><p class="notice" role="status"></p></div>' in partial
+    assert f'<div id="flash" hx-preserve>{notice()}</div>' in partial
 
 
 async def test_dashboard_message_slot_sits_in_controls_row(web: Web) -> None:
     html = (await web.client.get("/")).text
-    slot = html.index('<p class="notice" role="status"></p>')
+    slot = html.index(notice())
     assert html.index("dry run</button>") < slot < html.index("Kill switch</button>")
-    assert html.count('class="notice"') == 1
+    assert html.count(NOTICE_CLASS) == 1

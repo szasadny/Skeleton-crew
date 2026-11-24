@@ -1,13 +1,10 @@
 import os
 import shutil
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any
 
 import pytest
-
-from skeleton_crew.runtime.containers import ContainerSpec, Mount
 
 GIT_ENV = {
     "GIT_CONFIG_GLOBAL": os.devnull,
@@ -21,42 +18,45 @@ GIT_ENV = {
 }
 
 
-def container_spec(root: Path, **overrides: Any) -> ContainerSpec:
-    values: dict[str, Any] = {
-        "name": "agent-1",
-        "image": "skeleton-crew-agent:latest",
-        "network": "skeleton-crew-agents",
-        "mounts": [
-            Mount(root / "agent", "/workspace", read_only=False),
-            Mount(root / "inbox", "/skeleton-in", read_only=True),
-        ],
-        "env": {"HTTPS_PROXY": "http://egress-proxy:3128", "CLAUDE_CODE_OAUTH_TOKEN": "x"},
-        "cpus": 1.5,
-        "memory_gb": 2.0,
-        "pids": 512,
-        "labels": {"skeleton-crew.task": "w-1"},
-    }
-    return ContainerSpec(**(values | overrides))
+def require_git() -> None:
+    if shutil.which("git") is None:
+        pytest.skip("git not installed")
 
 
-def run(argv: Sequence[str], cwd: Path, stdin: bytes | None = None) -> bytes:
+def run_command(argv: Sequence[str], cwd: Path, stdin: bytes | None = None) -> bytes:
     completed = subprocess.run(  # noqa: S603
         list(argv), cwd=cwd, env=GIT_ENV, input=stdin, check=True, capture_output=True
     )
     return completed.stdout
 
 
-class Repo:
+def git(cwd: Path, *args: str, stdin: bytes | None = None) -> bytes:
+    require_git()
+    return run_command(["git", *args], cwd, stdin)
+
+
+def git_text(cwd: Path, *args: str) -> str:
+    return git(cwd, *args).decode().strip()
+
+
+def commit_files(repo: Path, files: Mapping[str, str], message: str) -> str:
+    for path, content in files.items():
+        (repo / path).write_text(content)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", message)
+    return git_text(repo, "rev-parse", "HEAD")
+
+
+class GitRepo:
     def __init__(self, root: Path, *, init: bool = True) -> None:
-        if shutil.which("git") is None:
-            pytest.skip("git not installed")
+        require_git()
         self.root = root
         if init:
             root.mkdir(parents=True, exist_ok=True)
             self.git("init", "-q")
 
     def git(self, *args: str, stdin: bytes | None = None) -> bytes:
-        return run(["git", *args], self.root, stdin)
+        return git(self.root, *args, stdin=stdin)
 
     def write(self, path: str, content: str | bytes) -> None:
         target = self.root / path
@@ -72,7 +72,16 @@ class Repo:
         return self.head()
 
     def head(self) -> str:
-        return self.git("rev-parse", "HEAD").decode().strip()
+        return git_text(self.root, "rev-parse", "HEAD")
 
     def show(self, sha: str, path: str) -> bytes:
         return self.git("show", f"{sha}:{path}")
+
+    def raw(self, base: str, head: str) -> str:
+        return self.git("diff", "--no-renames", "--raw", "-z", base, head).decode()
+
+    def numstat(self, base: str, head: str) -> str:
+        return self.git("diff", "--no-renames", "--numstat", "-z", base, head).decode()
+
+    def unified(self, base: str, head: str) -> str:
+        return self.git("diff", "--no-renames", "-U0", "--no-color", base, head).decode()

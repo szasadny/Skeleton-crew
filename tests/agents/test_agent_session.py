@@ -2,13 +2,13 @@ import logging
 from pathlib import Path
 
 import pytest
-from fake_agent import ExecStep, FakeBackend, FakeExecutor, claude_result_line, make_request
+from fake_agent import ExecStep, FakeExecutor, claude_result_line, make_request
 from pydantic import SecretStr
 
 from skeleton_crew.agents.backends._shared import AuthMode
 from skeleton_crew.agents.backends.claude_code import ClaudeCodeBackend
 from skeleton_crew.agents.session import run_session
-from skeleton_crew.domain.settings import Role
+from skeleton_crew.runtime.containers import WORKSPACE
 
 _TOKEN = "oauth-token-placeholder-1234"  # noqa: S105
 
@@ -28,7 +28,7 @@ async def test_successful_session_returns_structured_output(tmp_path: Path) -> N
     [call] = executor.calls
     assert call.argv[5] == "-p"
     assert call.env["CLAUDE_CODE_OAUTH_TOKEN"] == _TOKEN
-    assert call.cwd == "/workspace"
+    assert call.cwd == WORKSPACE
     assert call.timeout_s == make_request().timeout_s
 
 
@@ -78,20 +78,3 @@ async def test_stderr_is_logged_redacted(tmp_path: Path, caplog: pytest.LogCaptu
     assert not outcome.ok
     assert "auth *** failed" in caplog.text
     assert _TOKEN not in caplog.text
-
-
-async def test_fake_backend_replays_scripted_outcomes_per_role(tmp_path: Path) -> None:
-    backend = FakeBackend({Role.WORKER: ['{"n": 1}', '{"n": 2}'], Role.REVIEWER: ['{"r": 1}']})
-    executor = FakeExecutor()
-    worker, reviewer = make_request(Role.WORKER), make_request(Role.REVIEWER)
-    first = await run_session(backend, executor, worker, tmp_path / "a")
-    review = await run_session(backend, executor, reviewer, tmp_path / "b")
-    second = await run_session(backend, executor, worker, tmp_path / "c")
-    exhausted = await run_session(backend, executor, worker, tmp_path / "d")
-    assert [first.structured_output, review.structured_output, second.structured_output] == [
-        '{"n": 1}',
-        '{"r": 1}',
-        '{"n": 2}',
-    ]
-    assert not exhausted.ok
-    assert backend.requests == [worker, reviewer, worker, worker]

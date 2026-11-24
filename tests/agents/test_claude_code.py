@@ -3,7 +3,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from fake_agent import claude_result_line, make_request
+from fake_agent import PROMPT_PATH, RULES_PATH, claude_result_line, make_request
 from fake_cli import (
     HOSTILE_PROMPT,
     LARGE_PROMPT,
@@ -36,7 +36,7 @@ def _backend(
 def test_command_reads_the_prompt_file_on_stdin(mode: AuthMode) -> None:
     argv = _backend(mode).command(make_request(prompt=HOSTILE_PROMPT, timeout_s=1800.5))
     assert argv[:2] == ["sh", "-c"]
-    assert argv[3:6] == ["sh", "/skeleton-in/prompt.md", "-p"]
+    assert argv[3:6] == ["sh", PROMPT_PATH, "-p"]
     assert not any(HOSTILE_PROMPT in arg for arg in argv)
     assert "timeout" not in argv
     assert value_after(argv, "--output-format") == "stream-json"
@@ -45,7 +45,7 @@ def test_command_reads_the_prompt_file_on_stdin(mode: AuthMode) -> None:
     assert value_after(argv, "--effort") == "medium"
     assert value_after(argv, "--max-turns") == "150"
     assert value_after(argv, "--json-schema") == '{"type":"object"}'
-    assert value_after(argv, "--append-system-prompt-file") == "/skeleton-in/rules.md"
+    assert value_after(argv, "--append-system-prompt-file") == RULES_PATH
     assert value_after(argv, "--permission-prompts") == "none"
     assert {"--dangerously-skip-permissions", "--strict-mcp-config"} <= set(argv)
     assert "--bare" not in argv

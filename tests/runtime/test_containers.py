@@ -12,12 +12,14 @@ from docker.client import DockerClient
 from runtime_helpers import container_spec
 
 from skeleton_crew.domain.errors import PolicyViolation
+from skeleton_crew.pipeline.sandbox import INBOX
 from skeleton_crew.runtime import containers
 from skeleton_crew.runtime.containers import (
     AGENT_USER,
     MANAGED_LABEL,
     MANAGED_VALUE,
     READY_FILE,
+    WORKSPACE,
     ContainerHandle,
     ContainerStartError,
     DockerRuntime,
@@ -81,8 +83,8 @@ async def test_start_builds_hardened_container(tmp_path: Path, client: MagicMock
     assert kwargs["security_opt"] == ["no-new-privileges:true"]
     assert kwargs["labels"] == {"skeleton-crew.task": "w-1", MANAGED_LABEL: "true"}
     assert kwargs["mounts"] == [
-        docker.types.Mount("/workspace", str(tmp_path / "agent"), type="bind", read_only=False),
-        docker.types.Mount("/skeleton-in", str(tmp_path / "inbox"), type="bind", read_only=True),
+        docker.types.Mount(WORKSPACE, str(tmp_path / "agent"), type="bind", read_only=False),
+        docker.types.Mount(INBOX, str(tmp_path / "inbox"), type="bind", read_only=True),
     ]
     assert "volumes" not in kwargs
 
@@ -216,7 +218,7 @@ async def test_exec_streams_stdout_to_file_with_cap(tmp_path: Path, client: Magi
     result = await DockerRuntime(client).exec(
         HANDLE,
         ExecRequest(
-            ["claude", "-p"], "agent", "/workspace", 60,
+            ["claude", "-p"], "agent", WORKSPACE, 60,
             env={"A": "1"}, stdout_path=out, max_stdout_bytes=7,
         ),
     )  # fmt: skip
@@ -231,7 +233,7 @@ async def test_exec_streams_stdout_to_file_with_cap(tmp_path: Path, client: Magi
     args, kwargs = client.api.exec_create.call_args
     assert args == ("c1", timeout_argv(["claude", "-p"], 60))
     assert kwargs["user"] == "agent"
-    assert kwargs["workdir"] == "/workspace"
+    assert kwargs["workdir"] == WORKSPACE
     assert kwargs["environment"] == {"A": "1"}
     assert client.api.exec_start.call_args.kwargs == {"stream": True, "demux": True}
 
@@ -375,7 +377,7 @@ def test_agent_exec_runs_in_the_workspace_without_env() -> None:
     agent = ExecRequest.as_agent(["x"], timeout_s=5)
     root = ExecRequest.as_root(["y"], timeout_s=5)
 
-    assert (agent.user, agent.cwd, agent.env) == ("agent", "/workspace", {})
+    assert (agent.user, agent.cwd, agent.env) == ("agent", WORKSPACE, {})
     assert (root.user, root.cwd, root.env) == ("root", "/", {})
 
 

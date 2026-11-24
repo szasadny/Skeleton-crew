@@ -4,7 +4,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from fake_runtime import FakeRuntime, argv_starts_with, ok
+from fake_runtime import FakeRuntime, argv_starts_with, exec_result
 
 from skeleton_crew.runtime.containers import ExecResult, SandboxTarget
 from skeleton_crew.runtime.egress import (
@@ -54,7 +54,7 @@ def test_render_rejects_invalid_domains(domain: str) -> None:
 
 async def test_apply_writes_file_and_reconfigures_proxy(tmp_path: Path) -> None:
     runtime = FakeRuntime()
-    runtime.script(argv_starts_with(*RECONFIGURE_ARGV), ok())
+    runtime.script(argv_starts_with(*RECONFIGURE_ARGV), exec_result())
     target = tmp_path / "egress" / "allowlist.txt"
 
     await apply_allowlist(runtime, ["pypi.org"], _target(target, "skeleton-crew-egress-proxy"))
@@ -70,7 +70,7 @@ async def test_apply_writes_file_and_reconfigures_proxy(tmp_path: Path) -> None:
 
 async def test_apply_replaces_existing_file(tmp_path: Path) -> None:
     runtime = FakeRuntime()
-    runtime.script(argv_starts_with(*RECONFIGURE_ARGV), ok())
+    runtime.script(argv_starts_with(*RECONFIGURE_ARGV), exec_result())
     target = tmp_path / "allowlist.txt"
     target.write_text("old.example.com\n")
     await apply_allowlist(runtime, ["new.example.com"], _target(target))
@@ -88,8 +88,8 @@ async def test_apply_invalid_domain_leaves_file_untouched(tmp_path: Path) -> Non
 @pytest.mark.parametrize(
     "result",
     [
-        ExecResult(1, b"", b"FATAL: bad config", False),
-        ExecResult(124, b"", b"", True),
+        exec_result(1, stderr=b"FATAL: bad config"),
+        exec_result(124, timed_out=True),
     ],
 )
 async def test_apply_fails_when_reconfigure_fails(tmp_path: Path, result: ExecResult) -> None:

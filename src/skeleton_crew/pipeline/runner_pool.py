@@ -27,7 +27,7 @@ from skeleton_crew.domain.runner_policy import (
 )
 from skeleton_crew.domain.settings import AppSettings
 from skeleton_crew.github.gateway import Gateway
-from skeleton_crew.pipeline.deps import PipelineDeps, audit_sink
+from skeleton_crew.pipeline.deps import PipelineDeps
 from skeleton_crew.runtime.containers import (
     CONTAINER_PREFIX,
     ROLE_LABEL,
@@ -41,7 +41,7 @@ from skeleton_crew.runtime.containers import (
     proxy_env,
 )
 from skeleton_crew.runtime.egress import apply_allowlist
-from skeleton_crew.store import runs_store, settings_store
+from skeleton_crew.store import runs_store
 
 RUNNER_ROLE = "runner"
 CONFIG_MOUNT = "/runner-config"
@@ -168,7 +168,7 @@ class RunnerPool:
             with suppress(asyncio.CancelledError):
                 await task
 
-    async def stop(self) -> None:
+    async def reset(self) -> None:
         restart = self._task is not None
         await self.close()
         await self._remove_all()
@@ -188,8 +188,8 @@ class RunnerPool:
 
     async def tick(self) -> None:
         async with self._lock:
+            settings = await self._deps.load_settings()
             async with self._deps.sessionmaker() as session:
-                settings = await settings_store.load_settings(session)
                 waiting = await runs_store.awaiting_ci_count(session)
             names = runner_names(settings.ci.runners)
             blocker = await self._blocker(settings)
@@ -244,7 +244,7 @@ class RunnerPool:
         return await self._eligibility.get(lambda: self._read_visibility(settings))
 
     async def _read_visibility(self, settings: AppSettings) -> tuple[str | None, bool]:
-        problem = await visibility_problem(self._gateway(settings))
+        problem = await visibility_problem(self._deps.gateway(settings))
         # Only a definite answer is cached; a failed read is retried on the next tick.
         return problem, is_definite(problem)
 
@@ -253,13 +253,10 @@ class RunnerPool:
 
     async def _read_demand(self, settings: AppSettings) -> tuple[bool, bool]:
         try:
-            return await self._gateway(settings).skeleton_ci_active(), True
+            return await self._deps.gateway(settings).skeleton_ci_active(), True
         except Exception:
             log.exception("could not read the CI runs of Skeleton Crew branches")
             return False, False
-
-    def _gateway(self, settings: AppSettings) -> Gateway:
-        return self._deps.gateway_factory(settings, audit_sink(self._deps.sessionmaker, None))
 
     async def _apply_allowlist(self, settings: AppSettings) -> None:
         domains = frozenset(settings.ci.egress_allowlist)

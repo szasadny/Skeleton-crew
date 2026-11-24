@@ -295,19 +295,25 @@ async def awaiting_ci_count(session: AsyncSession) -> int:
     return await _count(session, query)
 
 
-async def last_pushed_task(session: AsyncSession, issue_number: int) -> WorkerTask | None:
-    query = (
-        select(WorkerTask)
+async def last_pushed_tasks(
+    session: AsyncSession, issue_numbers: Collection[int]
+) -> dict[int, WorkerTask]:
+    latest = (
+        select(func.max(WorkerTask.id))
         .join(Run, Run.id == WorkerTask.run_id)
         .where(
-            WorkerTask.issue_number == issue_number,
+            WorkerTask.issue_number.in_(issue_numbers),
             WorkerTask.head_sha.is_not(None),
             Run.dry_run.is_(False),
         )
-        .order_by(WorkerTask.id.desc())
-        .limit(1)
+        .group_by(WorkerTask.issue_number)
     )
-    return await session.scalar(query)
+    tasks = await session.scalars(select(WorkerTask).where(WorkerTask.id.in_(latest)))
+    return {task.issue_number: task for task in tasks}
+
+
+async def last_pushed_task(session: AsyncSession, issue_number: int) -> WorkerTask | None:
+    return (await last_pushed_tasks(session, [issue_number])).get(issue_number)
 
 
 async def count_refine_tasks_since(session: AsyncSession, since: datetime) -> int:

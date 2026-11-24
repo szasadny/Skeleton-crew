@@ -1,8 +1,7 @@
 import os
-from pathlib import Path
 
 import pytest
-from gitrepo import GitRepo
+from git_helpers import GitRepo
 
 from skeleton_crew.domain.diff_parse import ChangeStatus, FileChange, parse_diff_summary
 from skeleton_crew.domain.diff_policy import check_diff
@@ -11,11 +10,6 @@ from skeleton_crew.domain.errors import Violation
 PROTECTED = (".github/**", ".gitmodules")
 SHA_A = "0" * 7
 SHA_B = "bdc955b"
-
-
-@pytest.fixture
-def repo(tmp_path: Path) -> GitRepo:
-    return GitRepo(tmp_path)
 
 
 def text_change(
@@ -60,7 +54,7 @@ def test_real_git_submodule_is_rejected(repo: GitRepo) -> None:
     base = repo.commit()
     repo.git("update-index", "--add", "--cacheinfo", f"160000,{'a' * 40},vendor/lib")
     repo.git("commit", "-q", "-m", "sub")
-    head = repo.git("rev-parse", "HEAD").strip()
+    head = repo.head()
     changes = summary(repo, base, head)
     assert changes[0].new_mode == "160000"
     assert check_diff(changes, (), 1000) == [Violation("vendor/lib", None, "submodule not allowed")]

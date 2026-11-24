@@ -66,9 +66,24 @@ select = [
     "ERA001",
     "TD",
     "FIX",
+    "C901",
+    "PLR0911",
+    "PLR0912",
+    "PLR0913",
+    "PLR0915",
 ]
 # Domain exceptions are named after what happened (Escalation, PolicyViolation).
 ignore = ["N818"]
+
+# Ratchets: only ever lower these.
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.pylint]
+max-args = 5
+max-returns = 6
+max-branches = 12
+max-statements = 50
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101"]
@@ -77,6 +92,9 @@ ignore = ["N818"]
 strict = true
 python_version = "3.14"
 files = ["src", "tests"]
+# Lets each test folder have its own conftest.py without an __init__.py.
+explicit_package_bases = true
+mypy_path = ["src", "tests/fakes", "tests/support", "tests"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

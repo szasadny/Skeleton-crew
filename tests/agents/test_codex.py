@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from fake_agent import make_request
+from fake_agent import PROMPT_PATH, RULES_PATH, make_request
 from fake_cli import (
     HOSTILE_PROMPT,
     LARGE_PROMPT,
@@ -46,7 +46,7 @@ def _configs(argv: list[str]) -> list[str]:
 def test_command_reads_rules_and_prompt_on_stdin(mode: AuthMode) -> None:
     argv = _backend(mode).command(make_request(prompt=HOSTILE_PROMPT, timeout_s=1800.5))
     assert argv[:2] == ["sh", "-c"]
-    assert argv[3:6] == ["sh", "/skeleton-in/prompt.md", "/skeleton-in/rules.md"]
+    assert argv[3:6] == ["sh", PROMPT_PATH, RULES_PATH]
     assert not any(HOSTILE_PROMPT in arg for arg in argv)
     assert "timeout" not in argv
     args = _codex_args(argv)

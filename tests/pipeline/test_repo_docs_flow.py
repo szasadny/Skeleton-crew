@@ -1,13 +1,15 @@
 from pathlib import Path
 
 import pytest
+from fake_runtime import ExecCall
+from git_helpers import commit_files
 from pipeline_helpers import (
     BOTH,
     HELLO,
     HI,
     Harness,
     advance_main,
-    commit_files,
+    only_task,
     open_pr,
     refine_json,
     review_json,
@@ -15,43 +17,38 @@ from pipeline_helpers import (
     worker_json,
     workspace_editor,
 )
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from skeleton_crew.agents.base import SessionOutcome
 from skeleton_crew.domain.settings import Role
 from skeleton_crew.domain.task_keys import selector_key
 from skeleton_crew.domain.task_state import RunState, TaskKind, TaskState
 from skeleton_crew.pipeline.sandbox import INBOX, RULES_FILE
-from skeleton_crew.runtime.containers import ROLE_LABEL
 
-DOCS = {
+AUTO_LOADED = {
     "CLAUDE.md": "AUTO-LOADED ROOT\n",
     ".claude/CLAUDE.md": "AUTO-LOADED DOT. See [arch](./ARCHITECTURE.md).\n",
+}
+DOCS = {
+    **AUTO_LOADED,
     ".claude/ARCHITECTURE.md": "ARCH: layers go down.\n",
     "AGENTS.md": "AGENTS: run the tests.\n",
 }
 
 
-@pytest.fixture
-def harness(tmp_path: Path, sessionmaker: async_sessionmaker[AsyncSession]) -> Harness:
-    h = Harness(tmp_path, sessionmaker)
-    (h.source / ".claude").mkdir()
-    commit_files(h.source, DOCS, "Add docs")
-    return h
+@pytest.fixture(autouse=True)
+def docs(harness: Harness) -> None:
+    harness.backend.auto_loaded = tuple(AUTO_LOADED)
+    (harness.source / ".claude").mkdir()
+    commit_files(harness.source, DOCS, "Add docs")
 
 
 def _snapshot_rules(harness: Harness) -> dict[Role, list[str]]:
     seen: dict[Role, list[str]] = {}
-    parse = harness.backend.parse
 
-    def snapshot(stdout_path: Path, exit_code: int, timed_out: bool) -> SessionOutcome:
-        role = Role(stdout_path.read_text())
-        spec = [s for s in harness.runtime.started if s.labels[ROLE_LABEL] == role.value][-1]
-        inbox = next(m.host_path for m in spec.mounts if m.container_path == INBOX)
-        seen.setdefault(role, []).append((inbox / RULES_FILE).read_text())
-        return parse(stdout_path, exit_code, timed_out)
+    def snapshot(call: ExecCall) -> None:
+        inbox = harness.mount_of(call, INBOX)
+        seen.setdefault(Role(call.argv[1]), []).append((inbox / RULES_FILE).read_text())
 
-    harness.backend.parse = snapshot  # type: ignore[method-assign]
+    harness.on_session(snapshot)
     return seen
 
 
@@ -92,7 +89,7 @@ async def test_conflict_fix_worker_gets_the_repo_docs(harness: Harness) -> None:
 
     run_id = await harness.run()
 
-    [task] = await harness.tasks(run_id)
+    task = await only_task(harness, run_id)
     assert (task.kind, task.state) == (TaskKind.PR_FIX, TaskState.DONE)
     for rules in seen[Role.WORKER] + seen[Role.REVIEWER]:
         _assert_docs_appended(rules)

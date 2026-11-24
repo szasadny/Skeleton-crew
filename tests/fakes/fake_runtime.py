@@ -26,6 +26,7 @@ class ExecCall:
     user: str
     timeout_s: float
     stdout_path: Path | None
+    max_stdout_bytes: int
 
 
 ArgvPredicate = Callable[[Sequence[str]], bool]
@@ -39,8 +40,10 @@ class _Entry:
     once: bool
 
 
-def ok(stdout: bytes = b"") -> ExecResult:
-    return ExecResult(exit_code=0, stdout=stdout, stderr=b"", timed_out=False)
+def exec_result(
+    exit_code: int = 0, stdout: bytes = b"", stderr: bytes = b"", *, timed_out: bool = False
+) -> ExecResult:
+    return ExecResult(exit_code, stdout, stderr, timed_out)
 
 
 def argv_starts_with(*prefix: str) -> ArgvPredicate:
@@ -83,6 +86,7 @@ class FakeRuntime:
             request.user,
             request.timeout_s,
             request.stdout_path,
+            request.max_stdout_bytes,
         )
         self.execs.append(call)
         entry = next((e for e in self._script if e.predicate(call.argv)), None)
@@ -91,9 +95,9 @@ class FakeRuntime:
         if entry.once:
             self._script.remove(entry)
         result = entry.response(call) if callable(entry.response) else entry.response
-        if request.stdout_path is None:
-            return result
         stdout = result.stdout[: request.max_stdout_bytes]
+        if request.stdout_path is None:
+            return ExecResult(result.exit_code, stdout, result.stderr, result.timed_out)
         await asyncio.to_thread(request.stdout_path.write_bytes, stdout)
         return ExecResult(result.exit_code, b"", result.stderr, result.timed_out)
 

@@ -179,5 +179,5 @@ def test_end_to_end_from_diff_text() -> None:
 
 @pytest.mark.parametrize("path", ["README.md", "docs/Guide.RST", "notes.txt"])
 def test_prose_files_are_not_flagged(path: str) -> None:
-    lines = [AddedLine(path, n, f"* bullet {n}") for n in range(1, 6)]
-    assert flag_long_comment_blocks(lines, 2) == []
+    bullets = [AddedLine(path, n, f"* bullet {n}") for n in range(1, 6)]
+    assert flag_long_comment_blocks(bullets, 2) == []

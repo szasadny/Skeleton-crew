@@ -1,4 +1,5 @@
 import pytest
+from ci_payloads import check_run, workflow_run
 
 from skeleton_crew.domain.ci_policy import (
     REVIEW_CHECK_NAME,
@@ -13,49 +14,41 @@ from skeleton_crew.domain.ci_policy import (
 Raw = dict[str, object]
 
 
-def _run(name: str, status: str, conclusion: str | None, slug: str = "github-actions") -> Raw:
-    return {
-        "id": 42,
-        "name": name,
-        "status": status,
-        "conclusion": conclusion,
-        "app": {"slug": slug},
-        "details_url": "https://ci/42",
-    }
-
-
-def _workflow(name: str, status: str, conclusion: str | None) -> Raw:
-    return {"name": name, "status": status, "conclusion": conclusion, "html_url": "https://wf"}
-
-
 @pytest.mark.parametrize(
     ("runs", "statuses", "expected"),
     [
         ([], [], CiState.NONE),
-        ([_run(REVIEW_CHECK_NAME, "completed", "failure")], [], CiState.NONE),
-        ([_run(REVIEW_CHECK_NAME, "in_progress", None)], [], CiState.NONE),
+        ([check_run(REVIEW_CHECK_NAME, "completed", "failure")], [], CiState.NONE),
+        ([check_run(REVIEW_CHECK_NAME, "in_progress", None)], [], CiState.NONE),
         (
-            [_run(REVIEW_CHECK_NAME, "in_progress", None), _run("t", "completed", "success")],
+            [
+                check_run(REVIEW_CHECK_NAME, "in_progress", None),
+                check_run("t", "completed", "success"),
+            ],
             [],
             CiState.SUCCESS,
         ),
         (
-            [_run("t", "completed", "success"), _run("l", "completed", "skipped")],
+            [check_run("t", "completed", "success"), check_run("l", "completed", "skipped")],
             [],
             CiState.SUCCESS,
         ),
-        ([_run("t", "completed", "neutral")], [{"state": "success"}], CiState.SUCCESS),
-        ([_run("t", "queued", None)], [], CiState.PENDING),
-        ([_run("t", "in_progress", None), _run("u", "completed", "failure")], [], CiState.PENDING),
-        ([_run("t", "completed", "success")], [{"state": "pending"}], CiState.PENDING),
-        ([_run("t", "completed", "timed_out")], [], CiState.FAILURE),
-        ([_run("t", "completed", "cancelled")], [], CiState.FAILURE),
-        ([_run("t", "completed", "action_required")], [], CiState.FAILURE),
-        ([_run("t", "completed", "startup_failure")], [], CiState.FAILURE),
-        ([_run("t", "completed", "stale")], [], CiState.FAILURE),
+        ([check_run("t", "completed", "neutral")], [{"state": "success"}], CiState.SUCCESS),
+        ([check_run("t", "queued", None)], [], CiState.PENDING),
+        (
+            [check_run("t", "in_progress", None), check_run("u", "completed", "failure")],
+            [],
+            CiState.PENDING,
+        ),
+        ([check_run("t", "completed", "success")], [{"state": "pending"}], CiState.PENDING),
+        ([check_run("t", "completed", "timed_out")], [], CiState.FAILURE),
+        ([check_run("t", "completed", "cancelled")], [], CiState.FAILURE),
+        ([check_run("t", "completed", "action_required")], [], CiState.FAILURE),
+        ([check_run("t", "completed", "startup_failure")], [], CiState.FAILURE),
+        ([check_run("t", "completed", "stale")], [], CiState.FAILURE),
         ([], [{"state": "error", "context": "ext"}], CiState.FAILURE),
         (
-            [_run(REVIEW_CHECK_NAME, "completed", "success")],
+            [check_run(REVIEW_CHECK_NAME, "completed", "success")],
             [{"state": "failure"}],
             CiState.FAILURE,
         ),
@@ -65,17 +58,17 @@ def test_evaluate_ci(runs: list[Raw], statuses: list[Raw], expected: CiState) ->
     assert evaluate_ci(runs, statuses).state == expected
 
 
-GREEN_LINT = [_run("lint", "completed", "success")]
+GREEN_LINT = [check_run("lint", "completed", "success")]
 
 
 @pytest.mark.parametrize(
     ("workflows", "required", "expected"),
     [
         ([], set(), CiState.SUCCESS),
-        ([_workflow("CI", "in_progress", None)], set(), CiState.PENDING),
-        ([_workflow("CI", "queued", None)], set(), CiState.PENDING),
-        ([_workflow("CI", "completed", "success")], set(), CiState.SUCCESS),
-        ([_workflow("CI", "completed", "startup_failure")], set(), CiState.FAILURE),
+        ([workflow_run("CI", "in_progress", None)], set(), CiState.PENDING),
+        ([workflow_run("CI", "queued", None)], set(), CiState.PENDING),
+        ([workflow_run("CI", "completed", "success")], set(), CiState.SUCCESS),
+        ([workflow_run("CI", "completed", "startup_failure")], set(), CiState.FAILURE),
         ([], {"lint"}, CiState.SUCCESS),
         ([], {"lint", "tests"}, CiState.PENDING),
         ([], {"ext"}, CiState.PENDING),
@@ -97,9 +90,9 @@ def test_missing_required_check_is_pending_even_when_nothing_reported() -> None:
 
 
 def test_failed_workflow_is_reported_only_without_failed_jobs() -> None:
-    failed_wf = [_workflow("CI", "completed", "failure")]
+    failed_wf = [workflow_run("CI", "completed", "failure")]
     alone = evaluate_ci([], [], failed_wf)
-    with_job = evaluate_ci([_run("a", "completed", "failure")], [], failed_wf)
+    with_job = evaluate_ci([check_run("a", "completed", "failure")], [], failed_wf)
 
     assert alone.failed_jobs == [FailedJob("CI", None, "https://wf")]
     assert [j.name for j in with_job.failed_jobs] == ["a"]
@@ -129,7 +122,10 @@ def test_required_checks_reads_ruleset_contexts_and_skips_the_review_check() -> 
 
 def test_failed_jobs_carry_job_id_only_for_actions() -> None:
     status = evaluate_ci(
-        [_run("a", "completed", "failure"), _run("b", "completed", "failure", slug="circleci")],
+        [
+            check_run("a", "completed", "failure"),
+            check_run("b", "completed", "failure", slug="circleci"),
+        ],
         [{"state": "failure", "context": "ext", "target_url": "https://ext"}],
     )
     assert status.failed_jobs == [

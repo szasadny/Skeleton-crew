@@ -3,7 +3,7 @@ from datetime import time
 from typing import Any
 
 import pytest
-from web_helpers import TOKEN_SECRET, Web
+from web_helpers import NOTICE_CLASS, SAVE_BUTTON, TOKEN_SECRET, Web, notice
 
 from skeleton_crew.agents.registry import available_backends
 from skeleton_crew.core.audit import AuditKind
@@ -397,19 +397,16 @@ async def test_agents_registry_problem_shows_beside_its_field(web: Web) -> None:
     assert '<div class="alert">' not in html
 
 
-_EMPTY_NOTICE = '<p class="notice" role="status"></p>'
-
-
 @pytest.mark.parametrize("path", ["/limits", "/repo", "/schedule", "/ci", "/agents"])
 async def test_saved_message_sits_left_of_save_button(web: Web, path: str) -> None:
     html = (await web.client.get(f"{path}?msg=saved")).text
-    assert html.count('class="notice"') == 1
-    notice = html.index('<p class="notice" role="status">Saved.</p>')
-    assert notice < html.index('<button type="submit">Save</button>')
+    assert html.count(NOTICE_CLASS) == 1
+    message_at = html.index(notice("Saved."))
+    assert message_at < html.index(SAVE_BUTTON)
 
 
 @pytest.mark.parametrize("path", ["/limits", "/repo", "/schedule", "/ci", "/agents"])
 async def test_message_slot_is_reserved_without_message(web: Web, path: str) -> None:
     html = (await web.client.get(path)).text
-    assert html.count('class="notice"') == 1
-    assert html.index(_EMPTY_NOTICE) < html.index('<button type="submit">Save</button>')
+    assert html.count(NOTICE_CLASS) == 1
+    assert html.index(notice()) < html.index(SAVE_BUTTON)

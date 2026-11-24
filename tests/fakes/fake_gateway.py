@@ -2,6 +2,9 @@ from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Self
+
+from sticky import sticky_next
 
 from skeleton_crew.core.audit import AuditEntry, AuditSink
 from skeleton_crew.domain.branch_policy import check_push_target, issue_number_from_branch
@@ -14,7 +17,7 @@ from skeleton_crew.domain.ci_policy import (
 )
 from skeleton_crew.domain.label_policy import LabelChange, has_label
 from skeleton_crew.domain.repo_policy import NEVER_BYPASS, REQUIRED_PERMISSIONS
-from skeleton_crew.domain.settings import LabelNames, Limits
+from skeleton_crew.domain.settings import AppSettings, LabelNames, Limits
 from skeleton_crew.domain.text_policy import truncate_text
 from skeleton_crew.domain.trust_policy import ContentEdit, IssueComment, LabelEvent
 from skeleton_crew.domain.write_policy import check_sha, new_issue_labels
@@ -79,24 +82,22 @@ class FakeGitHubGateway:
     def __init__(
         self,
         *,
-        labels: LabelNames | None = None,
-        base_branch: str = "main",
         dry_run: bool = False,
         max_comment_chars: int = Limits().max_comment_chars,
-        audit: AuditSink | None = None,
         source_repo: Path | None = None,
         push_remote: Path | None = None,
     ) -> None:
-        self.labels = labels or LabelNames()
-        self.base_branch = base_branch
+        self.labels = LabelNames()
+        self.base_branch = "main"
         self.dry_run = dry_run
         self.max_comment_chars = max_comment_chars
         self.source_repo = source_repo
         self.push_remote = push_remote
-        self._external_audit = audit
+        self._external_audit: AuditSink | None = None
         self.issues: dict[int, FakeIssue] = {}
         self.pulls: list[FakePull] = []
         self.ci: dict[str, list[CiStatus]] = {}
+        self.ci_default: list[CiStatus] = [CiStatus(CiState.NONE, [])]
         self.ci_required: list[frozenset[str]] = []
         self.job_logs: dict[int, str] = {}
         self.skeleton_ci = False
@@ -138,6 +139,14 @@ class FakeGitHubGateway:
             issue.label_events.append(LabelEvent(label, labeled_by, self.tick(), added=True))
         self.issues[number] = issue
         return issue
+
+    def bind(self, settings: AppSettings, audit: AuditSink) -> Self:
+        self.labels = settings.labels
+        self.base_branch = settings.repo.base_branch
+        self.dry_run = settings.dry_run
+        self.max_comment_chars = settings.limits.max_comment_chars
+        self._external_audit = audit
+        return self
 
     def script_ci(self, sha: str, *states: CiStatus | CiState) -> None:
         self.ci[sha] = [s if isinstance(s, CiStatus) else CiStatus(s, []) for s in states]
@@ -203,18 +212,13 @@ class FakeGitHubGateway:
         self._maybe_fail("pr_mergeable")
         self.mergeable_reads.append(number)
         script = self.mergeable.get(number)
-        if not script:
-            return None
-        return script.pop(0) if len(script) > 1 else script[0]
+        return sticky_next(script) if script else None
 
     async def ci_status(self, sha: str, required: Collection[str] = ()) -> CiStatus:
         check_sha(sha)
         self._maybe_fail("ci_status")
         self.ci_required.append(frozenset(required))
-        script = self.ci.get(sha)
-        if not script:
-            return CiStatus(CiState.NONE, [])
-        return script.pop(0) if len(script) > 1 else script[0]
+        return sticky_next(self.ci.get(sha) or self.ci_default)
 
     async def failed_job_logs(self, job_ids: Sequence[int], max_chars: int) -> str:
         logs = [(i, self.job_logs.get(i, LOGS_UNAVAILABLE)) for i in job_ids if i > 0]

@@ -1,6 +1,6 @@
 import pytest
 
-from skeleton_crew.agents.rules import compose_rules, default_rules
+from skeleton_crew.agents.rules import compose_rules, default_rules, effective_rules
 from skeleton_crew.domain.settings import RULE_KEYS
 
 _MAX_LINES = 40
@@ -65,3 +65,9 @@ def test_unknown_rules_key_is_rejected() -> None:
 
 def test_compose_puts_common_rules_first() -> None:
     assert compose_rules("common\n", "\nrole") == "common\n\nrole\n"
+
+
+def test_effective_rules_prefer_the_saved_revision() -> None:
+    assert effective_rules("worker", "Mine.") == "Mine."
+    assert effective_rules("worker", None) == default_rules("worker")
+    assert effective_rules("worker", "") == default_rules("worker")

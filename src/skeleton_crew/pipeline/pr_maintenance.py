@@ -33,10 +33,11 @@ class PrFix:
 
 
 async def choose_pr_fixes(ctx: RunContext, open_prs: Sequence[OpenPr]) -> list[PrFix]:
+    async with ctx.session() as session:
+        pushed = await runs_store.last_pushed_tasks(session, {pr.issue.number for pr in open_prs})
     owned: list[PrFix] = []
     for pr in open_prs:
-        async with ctx.session() as session:
-            last = await runs_store.last_pushed_task(session, pr.issue.number)
+        last = pushed.get(pr.issue.number)
         if last is not None and pushed_by_controller(pr.pull.head_sha, last.head_sha):
             owned.append(PrFix(pr, unfinished=needs_finishing(last.state)))
         else:
