@@ -1,26 +1,21 @@
-from collections.abc import AsyncIterator
-from pathlib import Path
-
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from web_helpers import Web, open_web
+from web_helpers import Web
 
 from skeleton_crew.agents.rules import default_rules
 from skeleton_crew.core.audit import AuditKind
-from skeleton_crew.domain.settings import RULE_KEYS
-from skeleton_crew.store import audit_store, rules_store
-
-
-@pytest.fixture
-async def web(tmp_path: Path, sessionmaker: async_sessionmaker[AsyncSession]) -> AsyncIterator[Web]:
-    async with open_web(tmp_path, sessionmaker) as harness:
-        await harness.login()
-        yield harness
+from skeleton_crew.domain.settings import MAX_RULES_CHARS, RULE_KEYS
+from skeleton_crew.services.rules_service import HISTORY_LIMIT
+from skeleton_crew.store import rules_store
 
 
 async def _active(web: Web, key: str) -> str | None:
     async with web.sessionmaker() as session:
         return await rules_store.active_rules(session, key)
+
+
+async def _oldest_id(web: Web, key: str) -> int:
+    async with web.sessionmaker() as session:
+        return (await rules_store.rule_history(session, key, HISTORY_LIMIT * 2))[-1].id
 
 
 @pytest.mark.parametrize("key", RULE_KEYS)
@@ -37,8 +32,15 @@ async def test_unknown_rules_key_is_404(web: Web, path: str) -> None:
     assert (await web.client.get(path)).status_code in {404, 422}
 
 
+async def test_unknown_rules_key_is_an_html_404(web: Web) -> None:
+    response = await web.client.get("/rules/admin")
+    assert response.status_code == 404
+    assert "<h1>Not found</h1>" in response.text
+
+
 async def test_post_to_unknown_rules_key_is_404(web: Web) -> None:
     assert (await web.post("/rules/admin", {"content": "x"})).status_code == 404
+    assert (await web.post("/rules/admin", {"content": ""})).status_code == 404
     assert (await web.post("/rules/admin/reset")).status_code == 404
 
 
@@ -52,47 +54,61 @@ async def test_save_appends_revision_and_audits(web: Web) -> None:
     assert html.count("/rules/worker/revisions/") == 2
     assert 'data-state="saved"' in html
     assert "Nothing saved yet" not in html
-    async with web.sessionmaker() as session:
-        events = await audit_store.list_events(session, 10, 0, AuditKind.RULES_CHANGED)
+    events = await web.audit(AuditKind.RULES_CHANGED)
     assert [event.summary for event in events] == ["rules changed: worker"] * 2
+
+
+async def test_saved_rules_keep_surrounding_whitespace(web: Web) -> None:
+    await web.post("/rules/worker", {"content": "  Indented.\n"})
+    assert await _active(web, "worker") == "  Indented.\n"
+
+
+async def test_saving_the_same_rules_twice_adds_no_revision(web: Web) -> None:
+    await web.post("/rules/worker", {"content": "Same."})
+    await web.post("/rules/worker", {"content": "Same."})
+    assert len(await web.audit(AuditKind.RULES_CHANGED)) == 1
 
 
 async def test_view_one_revision(web: Web) -> None:
     await web.post("/rules/reviewer", {"content": "Old <script>alert(1)</script>"})
     await web.post("/rules/reviewer", {"content": "New"})
-    async with web.sessionmaker() as session:
-        oldest = (await rules_store.rule_history(session, "reviewer", 20))[-1]
-    html = (await web.client.get(f"/rules/reviewer/revisions/{oldest.id}")).text
+    oldest = await _oldest_id(web, "reviewer")
+    html = (await web.client.get(f"/rules/reviewer/revisions/{oldest}")).text
     assert "Old &lt;script&gt;alert(1)&lt;/script&gt;" in html
-    other = await web.client.get(f"/rules/worker/revisions/{oldest.id}")
-    assert other.status_code == 404
+    assert (await web.client.get(f"/rules/worker/revisions/{oldest}")).status_code == 404
 
 
 async def test_revision_older_than_the_history_page_opens(web: Web) -> None:
     await web.post("/rules/worker", {"content": "Oldest rules"})
-    for n in range(25):
+    for n in range(HISTORY_LIMIT + 5):
         await web.post("/rules/worker", {"content": f"Version {n}"})
-    async with web.sessionmaker() as session:
-        oldest = (await rules_store.rule_history(session, "worker", 100))[-1]
+    oldest = await _oldest_id(web, "worker")
     html = (await web.client.get("/rules/worker")).text
-    assert f'/rules/worker/revisions/{oldest.id}"' not in html
-    view = await web.client.get(f"/rules/worker/revisions/{oldest.id}")
+    assert f'/rules/worker/revisions/{oldest}"' not in html
+    view = await web.client.get(f"/rules/worker/revisions/{oldest}")
     assert view.status_code == 200
     assert "Oldest rules" in view.text
 
 
 async def test_too_long_rules_are_rejected(web: Web) -> None:
-    response = await web.post("/rules/common", {"content": "x" * 20_001})
+    response = await web.post("/rules/common", {"content": "x" * (MAX_RULES_CHARS + 1)})
     assert response.status_code == 422
-    assert "limited to 20000 characters" in response.text
+    assert f"limited to {MAX_RULES_CHARS} characters" in response.text
     assert await _active(web, "common") is None
 
 
 async def test_empty_rules_are_rejected(web: Web) -> None:
     response = await web.post("/rules/common", {"content": "  \r\n"})
     assert response.status_code == 422
-    assert "Rules cannot be empty." in response.text
+    assert '<div class="alert"><p>Rules cannot be empty.</p></div>' in response.text
     assert await _active(web, "common") is None
+
+
+async def test_rejected_rules_stay_in_the_editor(web: Web) -> None:
+    await web.post("/rules/common", {"content": "Saved before."})
+    response = await web.post("/rules/common", {"content": "x" * (MAX_RULES_CHARS + 1)})
+    assert "x" * (MAX_RULES_CHARS + 1) in response.text
+    assert 'data-state="saved"' in response.text
 
 
 async def test_reset_saves_the_default_as_new_revision(web: Web) -> None:
@@ -101,7 +117,7 @@ async def test_reset_saves_the_default_as_new_revision(web: Web) -> None:
     assert response.headers["location"] == "/rules/selector?msg=rules_reset"
     assert await _active(web, "selector") == default_rules("selector")
     async with web.sessionmaker() as session:
-        assert len(await rules_store.rule_history(session, "selector", 20)) == 2
+        assert len(await rules_store.rule_history(session, "selector", HISTORY_LIMIT)) == 2
 
 
 @pytest.mark.parametrize(

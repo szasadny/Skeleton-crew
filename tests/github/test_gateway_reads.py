@@ -51,7 +51,6 @@ async def test_list_open_issues_paginates_and_skips_pull_requests() -> None:
     assert [i.number for i in issues] == [1, 3]
     assert issues[0].body == ""
     assert issues[0].labels == frozenset({"skeleton"})
-    assert issues[0].author == "alice"
     first = route.calls[0].request.url.params
     assert first["labels"] == "skeleton"
     assert first["state"] == "open"

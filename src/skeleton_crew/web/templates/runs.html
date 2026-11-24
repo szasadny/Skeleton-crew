@@ -2,11 +2,11 @@
 {% block title %}Runs{% endblock %}
 {% block content %}
 <h1>Runs</h1>
-{% if runs %}
+{% if page.items %}
 <table>
   <thead><tr><th>Run</th><th>Trigger</th><th>Dry run</th><th>State</th><th>Started</th><th>Finished</th><th>Note</th><th>Blockers</th></tr></thead>
   <tbody>
-  {% for run in runs %}
+  {% for run, blocked in page.items %}
   <tr>
     <td><a href="/runs/{{ run.id }}">{{ run.id }}</a></td>
     <td>{{ run.trigger }}</td>
@@ -15,7 +15,7 @@
     <td>{{ run.started_at | dt }}</td>
     <td>{{ run.finished_at | dt }}</td>
     <td>{{ run.note or "" }}</td>
-    <td>{{ m.blockers_badge(blocked_counts.get(run.id, 0)) }}</td>
+    <td>{{ m.blockers_badge(blocked) }}</td>
   </tr>
   {% endfor %}
   </tbody>
@@ -23,5 +23,5 @@
 {% else %}
 <p>No runs on this page.</p>
 {% endif %}
-{{ m.pager("/runs", page, has_next) }}
+{{ m.pager("/runs", page) }}
 {% endblock %}

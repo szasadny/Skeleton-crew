@@ -1,8 +1,9 @@
 import re
+from collections.abc import Mapping
 from datetime import time
 from enum import StrEnum
 from functools import partial
-from typing import Annotated
+from typing import Annotated, Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -290,6 +291,10 @@ class SelfHostedCi(_Frozen):
         return value
 
 
+CLASSIFIER_USE_CASES = ("injection_screen", "prescreen", "effort_routing")
+ISSUE_SIZES = ("small", "medium", "large")
+
+
 class ClassifierSettings(_Frozen):
     provider: _ProviderName = DEFAULT_CLASSIFIER
     model: _ModelName = DEFAULT_CLASSIFIER_MODEL
@@ -348,3 +353,14 @@ class AppSettings(_Frozen):
                 if not _OPTION_VALUE_RE.fullmatch(option):
                     raise ValueError(f"{backend}.{key} contains unsupported characters")
         return value
+
+
+def with_updates(settings: AppSettings, updates: Mapping[str, object]) -> AppSettings:
+    data: dict[str, Any] = settings.model_dump(mode="json")
+    for dotted, value in updates.items():
+        *parents, leaf = dotted.split(".")
+        target = data
+        for part in parents:
+            target = target.setdefault(part, {})
+        target[leaf] = value
+    return AppSettings.model_validate(data)

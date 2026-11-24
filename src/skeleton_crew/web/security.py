@@ -1,20 +1,21 @@
 import secrets
-import time
-from collections.abc import Callable
-from dataclasses import dataclass
 
-from fastapi import HTTPException, Request
+from fastapi import Request
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from skeleton_crew.core.security import check_csrf_token, make_csrf_token
+from skeleton_crew.web.state import get_state
 
 SESSION_MAX_AGE_S = 12 * 60 * 60
 LOGIN_PATH = "/login"
+PUBLIC_PATHS = frozenset({LOGIN_PATH})
+CSRF_FIELD = "csrf_token"
+CSRF_HEADER = "X-CSRF-Token"
 _SID = "sid"
+_SID_BYTES = 32
 _AUTH = "auth"
-_BACKOFF_START_S = 1.0
-_BACKOFF_MAX_S = 30.0
+_SAFE_METHODS = frozenset({"GET", "HEAD"})
 
 SECURITY_HEADERS = {
     "Content-Security-Policy": (
@@ -48,35 +49,16 @@ class SecurityHeadersMiddleware:
         await self.app(scope, receive, send_with_headers)
 
 
-@dataclass
-class _Failures:
-    count: int
-    blocked_until: float
-
-
-class LoginThrottle:
-    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
-        self.clock = clock
-        self._failures: dict[str, _Failures] = {}
-
-    def retry_after(self, client: str) -> float:
-        entry = self._failures.get(client)
-        if entry is None:
-            return 0.0
-        return max(0.0, entry.blocked_until - self.clock())
-
-    def failed(self, client: str) -> None:
-        entry = self._failures.get(client)
-        count = 1 if entry is None else entry.count + 1
-        delay = min(_BACKOFF_MAX_S, _BACKOFF_START_S * 2 ** (count - 1))
-        self._failures[client] = _Failures(count, self.clock() + delay)
-
-    def succeeded(self, client: str) -> None:
-        self._failures.pop(client, None)
-
-
 class LoginRequired(Exception):
     pass
+
+
+class CsrfFailed(Exception):
+    pass
+
+
+def _new_sid() -> str:
+    return secrets.token_urlsafe(_SID_BYTES)
 
 
 def client_ip(request: Request) -> str:
@@ -86,7 +68,7 @@ def client_ip(request: Request) -> str:
 def session_id(request: Request) -> str:
     sid = request.session.get(_SID)
     if not isinstance(sid, str):
-        sid = secrets.token_urlsafe(32)
+        sid = _new_sid()
         request.session[_SID] = sid
     return sid
 
@@ -98,7 +80,7 @@ def is_authenticated(request: Request) -> bool:
 def log_in(request: Request) -> None:
     # A fresh session id on login prevents session fixation and voids pre-login CSRF tokens.
     request.session.clear()
-    request.session[_SID] = secrets.token_urlsafe(32)
+    request.session[_SID] = _new_sid()
     request.session[_AUTH] = True
 
 
@@ -106,19 +88,33 @@ def log_out(request: Request) -> None:
     request.session.clear()
 
 
-def csrf_token(request: Request, secret: str) -> str:
-    return make_csrf_token(secret, session_id(request))
+def _secret(request: Request) -> str:
+    return get_state(request).config.session_secret.get_secret_value()
 
 
-async def verify_request(request: Request, secret: str) -> None:
-    sid = session_id(request)
-    if request.url.path != LOGIN_PATH and not is_authenticated(request):
+def csrf_token(request: Request) -> str:
+    return make_csrf_token(_secret(request), session_id(request))
+
+
+async def require_login(request: Request) -> None:
+    session_id(request)  # Every visitor carries a session id from the first response on.
+    if request.url.path not in PUBLIC_PATHS and not is_authenticated(request):
         raise LoginRequired
-    if request.method in {"GET", "HEAD"}:
+
+
+async def _submitted_token(request: Request) -> str | None:
+    token = request.headers.get(CSRF_HEADER)
+    if token is not None:
+        return token
+    field = (await request.form()).get(CSRF_FIELD)
+    return field if isinstance(field, str) else None
+
+
+async def require_csrf(request: Request) -> None:
+    if request.method in _SAFE_METHODS:
         return
-    token = request.headers.get("x-csrf-token")
-    if token is None:
-        token_field = (await request.form()).get("csrf_token")
-        token = token_field if isinstance(token_field, str) else None
-    if token is None or not check_csrf_token(secret, sid, token, SESSION_MAX_AGE_S):
-        raise HTTPException(status_code=403, detail="Invalid or missing CSRF token")
+    token = await _submitted_token(request)
+    if token is None or not check_csrf_token(
+        _secret(request), session_id(request), token, SESSION_MAX_AGE_S
+    ):
+        raise CsrfFailed

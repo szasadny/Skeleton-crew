@@ -16,7 +16,11 @@ from skeleton_crew.pipeline.sessions import (
 from skeleton_crew.pipeline.texts import diff_stats, tag_blockers
 from skeleton_crew.pipeline.worker_job import WorkerJob, review_root
 from skeleton_crew.pipeline.worker_policy import PolicyCheck
-from skeleton_crew.runtime.workspace import binary_diff, make_readonly_copy, refresh_readonly_copy
+from skeleton_crew.runtime.controller_git import (
+    binary_diff,
+    make_readonly_copy,
+    refresh_readonly_copy,
+)
 
 CHANGES_FILE = "changes.diff"
 SINCE_REVIEW_FILE = "since-review.diff"

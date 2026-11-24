@@ -21,9 +21,9 @@
     <td>#{{ task.issue_number }} {{ task.issue_title }}</td>
     <td>{{ task.kind.value }}</td>
     <td>{{ m.state(task.state.value) }}</td>
-    <td>{% if task.pr_number %}<a href="https://github.com/{{ repo }}/pull/{{ task.pr_number }}">#{{ task.pr_number }}</a>{% endif %}</td>
+    <td>{{ m.pr_link(task.pr_number) }}</td>
     <td>{{ task.check_rounds }} / {{ task.ci_rounds }} / {{ task.policy_rounds }} / {{ task.review_rounds }}</td>
-    <td>${{ "%.2f" | format(task.cost_usd) }}</td>
+    <td>{{ task.cost_usd | usd }}</td>
     <td>{{ task.note or "" }}</td>
     <td><a href="/runs/{{ run.id }}/transcripts/{{ worker_keys[task.id] }}">Transcripts</a></td>
   </tr>
@@ -31,7 +31,7 @@
   <tr class="blockers-row">
     <td colspan="8">
       <strong>Blockers</strong>
-      <ul class="blockers">{% for blocker in task.blockers %}<li>{{ blocker }}</li>{% endfor %}</ul>
+      {{ m.blockers(task.blockers) }}
     </td>
   </tr>
   {% endif %}
@@ -51,7 +51,7 @@
   <tr>
     <td>#{{ task.issue_number }}</td>
     <td>{{ m.state(task.state.value) }}</td>
-    <td>${{ "%.2f" | format(task.cost_usd) }}</td>
+    <td>{{ task.cost_usd | usd }}</td>
     <td>{{ task.error or "" }}</td>
     <td><a href="/runs/{{ run.id }}/transcripts/{{ refine_keys[task.id] }}">Transcripts</a></td>
   </tr>

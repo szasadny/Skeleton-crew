@@ -1,36 +1,28 @@
 import json
-from collections.abc import Mapping
-from dataclasses import replace
-from enum import StrEnum
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from pydantic import SecretStr
-
 from skeleton_crew.agents.backends._shared import (
-    jsonl_events,
+    ANTHROPIC_KEY,
+    ENDED_WITH,
+    REPORTED_ERROR,
+    AuthMode,
+    CliBackend,
+    CliFiles,
+    Credential,
+    SessionReport,
+    auth_mode_option,
+    blocked_tools,
+    missing_outcome,
     number,
+    read_stream,
     safe_reason,
     safe_session_id,
+    session_outcome,
     stdin_command,
 )
-from skeleton_crew.agents.base import (
-    BackendSpec,
-    OptionSpec,
-    SessionOutcome,
-    SessionRequest,
-    failed_outcome,
-)
-from skeleton_crew.agents.output import extract_json_text
-from skeleton_crew.core.config import credential_setting, secret_value
-
-NAME = "claude_code"
-
-
-class AuthMode(StrEnum):
-    SUBSCRIPTION = "subscription"
-    API_KEY = "api_key"
-
+from skeleton_crew.agents.base import BackendSpec, SessionOutcome, SessionRequest
 
 INTERACTIVE_TOOLS = (
     "AskUserQuestion",
@@ -43,14 +35,6 @@ INTERACTIVE_TOOLS = (
     "PushNotification",
 )
 WEB_TOOLS = ("WebSearch", "WebFetch")
-
-
-def disallowed_tools(*, web_tools: bool) -> str:
-    return ",".join(INTERACTIVE_TOOLS if web_tools else (*INTERACTIVE_TOOLS, *WEB_TOOLS))
-
-
-EGRESS_DOMAINS = ("api.anthropic.com",)
-AUTO_LOADED_DOCS = ("CLAUDE.md", ".claude/CLAUDE.md")
 # Aliases follow the latest model; full ids pin one.
 MODELS = (
     "opus",
@@ -64,8 +48,8 @@ MODELS = (
 )
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 _CREDENTIALS = {
-    AuthMode.SUBSCRIPTION: ("claude_oauth_token", "CLAUDE_CODE_OAUTH_TOKEN"),
-    AuthMode.API_KEY: ("anthropic_api_key", "ANTHROPIC_API_KEY"),
+    AuthMode.SUBSCRIPTION: Credential("claude_oauth_token", "CLAUDE_CODE_OAUTH_TOKEN"),
+    AuthMode.API_KEY: ANTHROPIC_KEY,
 }
 _BASE_ENV = {"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "DISABLE_AUTOUPDATER": "1"}
 
@@ -80,54 +64,58 @@ def _is_limit_signal(event: dict[str, Any]) -> bool:
     return isinstance(info, dict) and info.get("status") == "rejected"
 
 
-def _scan(stdout_path: Path) -> tuple[dict[str, Any] | None, bool]:
+@dataclass
+class _Stream:
     result: dict[str, Any] | None = None
-    limited = False
-    for event in jsonl_events(stdout_path):
+    limited: bool = False
+
+    def add(self, event: dict[str, Any]) -> None:
         if event.get("type") == "result":
-            result = event
+            self.result = event
         elif _is_limit_signal(event):
-            limited = True
-    return result, limited
+            self.limited = True
 
 
-def _structured_output(result: dict[str, Any]) -> str | None:
+def _answer(result: dict[str, Any]) -> str | None:
     value = result.get("structured_output")
     if isinstance(value, dict):
         return json.dumps(value)
     answer = result.get("result")
-    return extract_json_text(answer) if isinstance(answer, str) else None
+    return answer if isinstance(answer, str) else None
 
 
-class ClaudeCodeBackend:
-    name = NAME
+def _failure(result: dict[str, Any]) -> str | None:
+    subtype = result.get("subtype")
+    if subtype != "success":
+        return ENDED_WITH.format(safe_reason(subtype) or "unknown")
+    return REPORTED_ERROR if result.get("is_error") is not False else None
 
-    def __init__(self, *, auth_mode: AuthMode, credentials: Mapping[str, SecretStr]) -> None:
-        self._auth_mode = auth_mode
-        self._credentials = dict(credentials)
+
+def _report(result: dict[str, Any], limited: bool) -> SessionReport:
+    return SessionReport(
+        session_id=safe_session_id(result.get("session_id")),
+        answer=_answer(result),
+        failure=_failure(result),
+        cost=number(result.get("total_cost_usd")),
+        turns=int(number(result.get("num_turns"))),
+        stop_reason=result.get("terminal_reason"),
+        limited=limited,
+        stops_without_session=True,
+    )
+
+
+class ClaudeCodeBackend(CliBackend):
+    name = "claude_code"
+    display_name = "Claude Code"
+    auto_loaded = ("CLAUDE.md", ".claude/CLAUDE.md")
+    base_env = _BASE_ENV
+    credentials = _CREDENTIALS
 
     def egress_domains(self) -> tuple[str, ...]:
-        return EGRESS_DOMAINS
-
-    def auto_loaded_docs(self) -> tuple[str, ...]:
-        return AUTO_LOADED_DOCS
-
-    def _credential(self) -> tuple[str, str | None]:
-        name, var = _CREDENTIALS[self._auth_mode]
-        return var, secret_value(self._credentials.get(name))
-
-    def credential_problems(self) -> list[str]:
-        _, value = self._credential()
-        if value is None:
-            setting = credential_setting(_CREDENTIALS[self._auth_mode][0])
-            return [f"Claude Code ({self._auth_mode.value} mode): {setting} is not set"]
-        return []
-
-    def env(self) -> dict[str, str]:
-        var, value = self._credential()
-        return {**_BASE_ENV, var: value} if value is not None else dict(_BASE_ENV)
+        return (ANTHROPIC_KEY.host,)
 
     def command(self, req: SessionRequest) -> list[str]:
+        disallowed = blocked_tools(INTERACTIVE_TOOLS, WEB_TOOLS, web_tools=req.agent.web_tools)
         args = [
             "-p",
             "--output-format",
@@ -148,64 +136,29 @@ class ClaudeCodeBackend:
             "--dangerously-skip-permissions",
             "--strict-mcp-config",
             "--disallowedTools",
-            disallowed_tools(web_tools=req.agent.web_tools),
+            ",".join(disallowed),
         ]
         if req.resume_session_id is not None:
             args += ["--resume", req.resume_session_id]
         if self._auth_mode is AuthMode.API_KEY and req.max_budget_usd is not None:
             args += ["--max-budget-usd", str(req.max_budget_usd)]
-        return stdin_command("claude", args, prompt_path=req.prompt_path_in_container)
+        return stdin_command("claude", args, CliFiles(req.prompt_path_in_container))
 
     def parse(self, stdout_path: Path, exit_code: int, timed_out: bool) -> SessionOutcome:
-        result, limited = _scan(stdout_path)
-        if result is None:
-            missing = "timed out" if timed_out else f"no result in output (exit code {exit_code})"
-            return replace(failed_outcome(missing, timed_out=timed_out), usage_limited=limited)
-        session_id = result.get("session_id")
-        subtype = result.get("subtype")
-        structured = _structured_output(result)
-        error: str | None = None
-        stopped_early: str | None = None
-        if timed_out:
-            error = "timed out"
-        elif subtype != "success":
-            error = f"session ended with {safe_reason(subtype) or 'unknown'}"
-        elif result.get("is_error") is not False:
-            error = "session reported an error"
-        elif exit_code != 0:
-            error = f"exit code {exit_code}"
-        elif structured is None:
-            error = "no structured output"
-            stopped_early = safe_reason(result.get("terminal_reason")) or "no_result"
-        return SessionOutcome(
-            session_id=safe_session_id(session_id),
-            structured_output=structured,
-            cost_usd=number(result.get("total_cost_usd"), 0.0),
-            turns=int(number(result.get("num_turns"), 0)),
-            ok=error is None,
-            error=error,
-            timed_out=timed_out,
-            stopped_early=stopped_early,
-            # A rejected window can still succeed on paid overage, so only a failure counts.
-            usage_limited=limited and error is not None,
-        )
-
-
-def _create(credentials: Mapping[str, SecretStr], options: Mapping[str, str]) -> ClaudeCodeBackend:
-    return ClaudeCodeBackend(auth_mode=AuthMode(options["auth_mode"]), credentials=credentials)
+        stream = read_stream(stdout_path, _Stream())
+        if stream.result is None:
+            missing = missing_outcome("result", exit_code, timed_out)
+            return replace(missing, usage_limited=stream.limited)
+        return session_outcome(_report(stream.result, stream.limited), exit_code, timed_out)
 
 
 SPEC = BackendSpec(
-    name=NAME,
-    display_name="Claude Code",
+    name=ClaudeCodeBackend.name,
+    display_name=ClaudeCodeBackend.display_name,
     models=MODELS,
     efforts=EFFORTS,
-    factory=_create,
-    options={
-        "auth_mode": OptionSpec(
-            allowed=tuple(mode.value for mode in AuthMode), default=AuthMode.SUBSCRIPTION.value
-        )
-    },
-    credentials=tuple(name for name, _ in _CREDENTIALS.values()),
+    factory=ClaudeCodeBackend.create,
+    options={"auth_mode": auth_mode_option(AuthMode.SUBSCRIPTION)},
+    credentials=ClaudeCodeBackend.credential_names(),
     web_tools=True,
 )

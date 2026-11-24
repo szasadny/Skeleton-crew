@@ -1,15 +1,14 @@
 from collections.abc import AsyncIterator
-from pathlib import Path
 from typing import Any
 
 import pytest
 from fake_control import FakeRunnerControl
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from web_helpers import Web, open_web
+from web_helpers import Web, WebFactory
 
 from skeleton_crew.domain.runner_policy import RunnerState, RunnerStatus
 from skeleton_crew.domain.settings import AppSettings, SelfHostedCi
 from skeleton_crew.store.settings_store import save_settings
+from skeleton_crew.web.views.dashboard import runner_counts
 
 STATES = [
     RunnerState("runner-1", RunnerStatus.BUSY),
@@ -18,9 +17,8 @@ STATES = [
 
 
 @pytest.fixture
-async def web(tmp_path: Path, sessionmaker: async_sessionmaker[AsyncSession]) -> AsyncIterator[Web]:
-    async with open_web(tmp_path, sessionmaker, runners=FakeRunnerControl(STATES)) as harness:
-        await harness.login()
+async def web(web_factory: WebFactory) -> AsyncIterator[Web]:
+    async with web_factory(runners=FakeRunnerControl(STATES)) as harness:
         yield harness
 
 
@@ -109,3 +107,9 @@ async def test_dashboard_summarises_runners_only_when_enabled(web: Web) -> None:
 
     assert "CI runners" in html
     assert "1 busy, 1 offline" in html
+
+
+def test_runner_counts_are_sorted_by_status() -> None:
+    states = [*STATES, RunnerState("runner-3", RunnerStatus.BUSY)]
+    assert runner_counts(states) == [("busy", 2), ("offline", 1)]
+    assert runner_counts([]) == []

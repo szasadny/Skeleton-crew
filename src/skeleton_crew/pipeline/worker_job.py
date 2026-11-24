@@ -11,7 +11,7 @@ from skeleton_crew.github.gateway import IssueRef
 from skeleton_crew.pipeline.deps import RunContext
 from skeleton_crew.pipeline.sessions import Sandbox
 from skeleton_crew.pipeline.task_record import WorkerTaskRecord
-from skeleton_crew.runtime.workspace import TaskPaths
+from skeleton_crew.runtime.task_dirs import TaskPaths
 
 
 class FollowUpKind(StrEnum):

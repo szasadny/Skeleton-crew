@@ -12,7 +12,7 @@ from skeleton_crew.domain.task_keys import (
     worker_key,
 )
 from skeleton_crew.pipeline.deps import PipelineDeps
-from skeleton_crew.runtime.workspace import list_task_keys, remove_task_dirs
+from skeleton_crew.runtime.task_dirs import list_task_keys, remove_task_dirs
 from skeleton_crew.store import runs_store
 
 log = logging.getLogger(__name__)

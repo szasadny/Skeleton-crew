@@ -4,7 +4,7 @@
 <h1>Agents</h1>
 {{ m.general_errors(errors) }}
 <form id="agents-form" method="post" action="/agents"
-  hx-get="/agents/draft" hx-trigger="change" hx-sync="this:replace" hx-params="not csrf_token"
+  hx-get="/agents/draft" hx-trigger="change" hx-sync="this:replace" hx-params="not {{ csrf_field }}"
   hx-select="#agents-form" hx-target="this" hx-swap="outerHTML">
   {{ m.csrf() }}
   <h2>Crew</h2>
@@ -30,12 +30,12 @@
     <section class="panel backend{% if not view.used_by %} unused{% endif %}">
       <header class="card-head">
         <h3>{{ view.spec.display_name }}</h3>
-        {% if not view.used_by %}{{ m.state("unused") }}{% elif view.problems %}{{ m.state("no credential") }}{% else %}{{ m.state("ready") }}{% endif %}
+        {{ m.state(view.status) }}
       </header>
       <p class="used-by">{% if view.used_by %}Used by {{ view.used_by | map(attribute="value") | join(", ") }}{% else %}No role uses it.{% endif %}</p>
       {% for option_name, option in view.spec.options.items() %}
       {% set name = "backend_options." ~ view.spec.name ~ "." ~ option_name %}
-      {{ m.select(name, option_name | replace("_", " ") | capitalize, option.allowed, {name: values.get(name) or option.default}, errors) }}
+      {{ m.select(name, option_name | label, option.allowed, {name: view.options[option_name]}, errors) }}
       {% endfor %}
       {% for problem in view.problems %}<p class="field-error">{{ problem }}</p>{% endfor %}
     </section>
@@ -47,7 +47,7 @@
   <fieldset class="classifier">
     <legend>
       Fast checks before agents run
-      {% if not classifier.enabled %}{{ m.state("off") }}{% elif classifier.problems %}{{ m.state("no credential") }}{% else %}{{ m.state("ready") }}{% endif %}
+      {{ m.state(classifier.status) }}
     </legend>
     <div class="grid">
       {{ m.select(c ~ "provider", "Provider", classifier_names, values, errors) }}
@@ -62,7 +62,7 @@
     <div class="routing">
       <p class="routing-title">Worker effort per issue size</p>
       <div class="grid">
-        {% for size in ("small", "medium", "large") %}
+        {% for size in issue_sizes %}
         {{ m.select(c ~ "effort_" ~ size, size | capitalize ~ " issues", routed_efforts, values, errors) }}
         {% endfor %}
       </div>

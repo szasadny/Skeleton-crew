@@ -8,10 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.routing import BaseRoute, Mount
 from web_helpers import Web, open_web
 
-from skeleton_crew.web.security import LOGIN_PATH
+from skeleton_crew.web.security import LOGIN_PATH, PUBLIC_PATHS
 
-# Reachable without a session. Every other route must refuse an anonymous request.
-PUBLIC_PATHS = frozenset({LOGIN_PATH})
 PUBLIC_MOUNTS = frozenset({"/static"})
 _SAFE_METHODS = frozenset({"GET", "HEAD"})
 _PATH_PARAM = re.compile(r"\{[^}]+\}")

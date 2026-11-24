@@ -11,7 +11,7 @@
   <script src="/static/htmx.min.js" defer></script>
   <script src="/static/break-glass.js" type="module"></script>
 </head>
-<body hx-headers='{{ {"X-CSRF-Token": csrf_token} | tojson }}' class="{{ 'console' if authenticated else 'boot' }}">
+<body hx-headers='{{ {csrf_header: csrf_token} | tojson }}' class="{{ 'console' if authenticated else 'boot' }}">
   {% if authenticated %}
   <aside class="spine">
     <a href="/" class="brand">
@@ -22,9 +22,9 @@
     <nav class="vertebrae">
       {% for group in nav %}
       <p class="region">{{ group.title }}</p>
-      {% for href, label, prefix in group.links %}
-      <a href="{{ href }}" class="vertebra{% if (path == "/" if prefix == "/" else path.startswith(prefix)) %} current{% endif %}">
-        <span class="bone"></span><span class="label">{{ label }}</span><span class="segment">{{ group.title[0] }}{{ loop.index }}</span>
+      {% for link in group.links %}
+      <a href="{{ link.href }}" class="vertebra{% if link.is_current(path) %} current{% endif %}">
+        <span class="bone"></span><span class="label">{{ link.label }}</span><span class="segment">{{ group.title[0] }}{{ loop.index }}</span>
       </a>
       {% endfor %}
       {% endfor %}

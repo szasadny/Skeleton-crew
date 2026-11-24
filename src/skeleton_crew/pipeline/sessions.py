@@ -13,20 +13,29 @@ from pydantic import BaseModel
 from skeleton_crew.agents.base import ExecOutcome, Executor, SessionOutcome, SessionRequest
 from skeleton_crew.agents.prompting import PromptName, render_prompt
 from skeleton_crew.agents.session import run_session
+from skeleton_crew.core.config import BootstrapConfig
 from skeleton_crew.domain.errors import PolicyViolation
 from skeleton_crew.domain.schemas import json_schema, parse_output
 from skeleton_crew.domain.settings import Role
 from skeleton_crew.pipeline.deps import RunContext
-from skeleton_crew.runtime.containers import AgentContainerSpec, ContainerHandle, Mount
+from skeleton_crew.runtime.containers import (
+    AGENT_USER,
+    CONTAINER_PREFIX,
+    ROLE_LABEL,
+    TASK_LABEL,
+    WORKSPACE,
+    ContainerHandle,
+    ContainerSpec,
+    ExecRequest,
+    Mount,
+    SandboxTarget,
+    proxy_env,
+)
 
-AGENT_USER = "agent"
-WORKSPACE = "/workspace"
 INBOX = "/skeleton-in"
 RULES_FILE = "rules.md"
 PROMPT_FILE = "prompt.md"
 SCHEMA_FILE = "schema.json"
-TASK_LABEL = "skeleton-crew.task"
-ROLE_LABEL = "skeleton-crew.role"
 _STDERR_TAIL_CHARS = 4000
 
 log = logging.getLogger(__name__)
@@ -50,31 +59,29 @@ class AgentReply[T: BaseModel]:
     error: str | None
 
 
-def proxy_env(proxy_url: str) -> dict[str, str]:
-    no_proxy = "localhost,127.0.0.1"
-    return {
-        "HTTP_PROXY": proxy_url,
-        "HTTPS_PROXY": proxy_url,
-        "http_proxy": proxy_url,
-        "https_proxy": proxy_url,
-        "NO_PROXY": no_proxy,
-        "no_proxy": no_proxy,
-    }
+def agent_target(config: BootstrapConfig) -> SandboxTarget:
+    return SandboxTarget(
+        image=config.agent_image,
+        network=config.agent_network,
+        proxy_url=config.egress_proxy_url,
+        proxy_container=config.egress_proxy_container,
+        allowlist_path=config.egress_allowlist_path,
+    )
 
 
 def container_spec(
     ctx: RunContext, *, task_key: str, role: Role, workspace: Path, writable: bool, inbox: Path
-) -> AgentContainerSpec:
-    config, limits = ctx.deps.config, ctx.settings.runtime
-    return AgentContainerSpec(
-        name=f"skeleton-crew-{task_key}-{role.value}-{secrets.token_hex(4)}",
-        image=config.agent_image,
-        network=config.agent_network,
+) -> ContainerSpec:
+    target, limits = agent_target(ctx.deps.config), ctx.settings.runtime
+    return ContainerSpec(
+        name=f"{CONTAINER_PREFIX}{task_key}-{role.value}-{secrets.token_hex(4)}",
+        image=target.image,
+        network=target.network,
         mounts=[
             Mount(workspace, WORKSPACE, read_only=not writable),
             Mount(inbox, INBOX, read_only=True),
         ],
-        env=proxy_env(config.egress_proxy_url),
+        env=proxy_env(target.proxy_url),
         cpus=limits.cpus,
         memory_gb=limits.memory_gb,
         pids=limits.pids,
@@ -126,15 +133,8 @@ def container_executor(ctx: RunContext, handle: ContainerHandle) -> Executor:
         timeout_s: float,
         stdout_path: Path,
     ) -> ExecOutcome:
-        result = await ctx.deps.runtime.exec(
-            handle,
-            argv,
-            env=env,
-            cwd=cwd,
-            user=AGENT_USER,
-            timeout_s=timeout_s,
-            stdout_path=stdout_path,
-        )
+        request = ExecRequest(argv, AGENT_USER, cwd, timeout_s, env=env, stdout_path=stdout_path)
+        result = await ctx.deps.runtime.exec(handle, request)
         tail = result.stderr.decode(errors="replace")[-_STDERR_TAIL_CHARS:]
         return ExecOutcome(result.exit_code, result.timed_out, tail)
 

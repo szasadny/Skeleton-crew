@@ -41,6 +41,7 @@ from skeleton_crew.pipeline.runner_pool import RunnerPool
 from skeleton_crew.pipeline.selector import select_issues
 from skeleton_crew.pipeline.texts import INTERRUPTED_COMMENT, decision_reason
 from skeleton_crew.pipeline.worker_flow import run_worker
+from skeleton_crew.runtime.containers import MANAGED_LABEL, MANAGED_VALUE
 from skeleton_crew.store import runs_store, settings_store
 
 KILLED_NOTE = "killed"
@@ -112,7 +113,7 @@ class RunController:
 
     async def _remove_containers(self) -> None:
         try:
-            await self._deps.runtime.remove_all_managed()
+            await self._deps.runtime.remove_labeled(MANAGED_LABEL, MANAGED_VALUE)
         except Exception:
             log.exception("could not remove managed containers")
 

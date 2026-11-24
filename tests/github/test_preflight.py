@@ -10,9 +10,7 @@ from skeleton_crew.github.preflight import check_repository
 
 
 async def _problems(gw: FakeGitHubGateway) -> list[str]:
-    report = await check_repository(gw, base_branch="main")
-    assert report.ok == (not report.problems)
-    return report.problems
+    return await check_repository(gw, base_branch="main")
 
 
 async def test_protected_repo_with_minimal_permissions_passes() -> None:
@@ -120,16 +118,16 @@ async def test_rules_endpoint_error_through_real_gateway_fails_closed() -> None:
         )
     )
 
-    report = await check_repository(make_gateway(AuditLog()), base_branch="main")
+    problems = await check_repository(make_gateway(AuditLog()), base_branch="main")
     allowed = await check_repository(
         make_gateway(AuditLog()), base_branch="main", allow_unprotected=True
     )
 
-    assert report.problems == [
+    assert problems == [
         "rulesets are unavailable for this repository; "
         "enable 'Allow unprotected base branch' to run without one"
     ]
-    assert allowed.ok
+    assert allowed == []
 
 
 @respx.mock
@@ -151,9 +149,9 @@ async def test_real_gateway_reads_rules_and_bypass() -> None:
     )
     respx.get(f"{API}/repos/o/r/installation").mock(return_value=httpx.Response(500))
 
-    report = await check_repository(make_gateway(AuditLog()), base_branch="main")
+    problems = await check_repository(make_gateway(AuditLog()), base_branch="main")
 
-    assert report.problems == [
+    assert problems == [
         "the App can bypass ruleset 9 (always)",
         "cannot read installation permissions: HTTP 500",
     ]
@@ -166,17 +164,16 @@ async def test_unprotected_repo_needs_explicit_opt_in() -> None:
     blocked = await check_repository(gw, base_branch="main")
     allowed = await check_repository(gw, base_branch="main", allow_unprotected=True)
 
-    assert not blocked.ok
-    assert "Allow unprotected base branch" in blocked.problems[0]
-    assert allowed.ok
+    assert "Allow unprotected base branch" in blocked[0]
+    assert allowed == []
 
 
 async def test_unavailable_rulesets_need_explicit_opt_in() -> None:
     gw = FakeGitHubGateway()
     gw.failures["branch_rules"] = RulesUnavailable()
 
-    assert not (await check_repository(gw, base_branch="main")).ok
-    assert (await check_repository(gw, base_branch="main", allow_unprotected=True)).ok
+    assert await check_repository(gw, base_branch="main") != []
+    assert await check_repository(gw, base_branch="main", allow_unprotected=True) == []
 
 
 @pytest.mark.parametrize("bypass", ["always", "pull_requests_only", "exempt"])
@@ -184,7 +181,7 @@ async def test_opt_in_never_accepts_a_bypassable_ruleset(bypass: str) -> None:
     gw = FakeGitHubGateway()
     gw.ruleset_bypasses[1] = bypass
 
-    assert not (await check_repository(gw, base_branch="main", allow_unprotected=True)).ok
+    assert await check_repository(gw, base_branch="main", allow_unprotected=True) != []
 
 
 async def test_opt_in_still_checks_app_permissions() -> None:
@@ -192,6 +189,6 @@ async def test_opt_in_still_checks_app_permissions() -> None:
     gw.rules = []
     gw.installation_perms["workflows"] = "write"
 
-    report = await check_repository(gw, base_branch="main", allow_unprotected=True)
+    problems = await check_repository(gw, base_branch="main", allow_unprotected=True)
 
-    assert report.problems == ["App must not have the workflows permission"]
+    assert problems == ["App must not have the workflows permission"]

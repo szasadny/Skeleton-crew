@@ -34,7 +34,7 @@ from skeleton_crew.pipeline.texts import (
 from skeleton_crew.pipeline.worker_job import FollowUp, FollowUpKind, WorkerJob, remove_work_dirs
 from skeleton_crew.pipeline.worker_policy import PolicyCheck, check_change
 from skeleton_crew.pipeline.worker_review import review_change
-from skeleton_crew.runtime.workspace import checkout_commit, make_agent_copy
+from skeleton_crew.runtime.controller_git import checkout_commit, make_agent_copy
 
 CI_LOG_CHARS = 20_000
 # Produced by the repo's code and dependencies, not by a trusted person.

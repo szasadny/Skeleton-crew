@@ -1,11 +1,12 @@
 import inspect
 import re
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
 import skeleton_crew.github
-from skeleton_crew.github import _git
+from skeleton_crew.github import _auth, _git, _parse
 from skeleton_crew.github.gateway import Gateway, GitHubGateway
 
 GITHUB_SRC = Path(skeleton_crew.github.__file__).parent
@@ -41,7 +42,9 @@ def test_github_package_sources_found() -> None:
     names = {p.name for p in _sources()}
     assert {
         "gateway.py",
+        "_auth.py",
         "_git.py",
+        "_parse.py",
         "trust.py",
         "preflight.py",
         "write_guard.py",
@@ -113,7 +116,6 @@ def test_gateway_exposes_no_merge_like_method() -> None:
         "clone",
         "push_branch",
         "labels",
-        "base_branch",
         "dry_run",
     }
     for cls in (Gateway, GitHubGateway):
@@ -121,12 +123,35 @@ def test_gateway_exposes_no_merge_like_method() -> None:
         assert public <= allowed
 
 
-def test_private_gateway_module_exposes_no_merge_like_function() -> None:
+@pytest.mark.parametrize(
+    ("module", "allowed"),
+    [
+        (_git, {"auth_env", "git_clone", "git_fetch", "git_branch_head", "git_push"}),
+        (_auth, {"make_github_client"}),
+        (
+            _parse,
+            {
+                "json_list",
+                "key_list",
+                "login",
+                "timestamp",
+                "label_event",
+                "rename_edit",
+                "body_edit",
+                "issue_comment",
+                "branch_rule",
+            },
+        ),
+    ],
+)
+def test_private_gateway_modules_expose_no_merge_like_function(
+    module: ModuleType, allowed: set[str]
+) -> None:
     functions = {
         name
-        for name, value in vars(_git).items()
+        for name, value in vars(module).items()
         if inspect.isfunction(value)
-        and value.__module__ == _git.__name__
+        and value.__module__ == module.__name__
         and not name.startswith("_")
     }
-    assert functions == {"auth_env", "git_clone", "git_fetch", "git_branch_head", "git_push"}
+    assert functions == allowed

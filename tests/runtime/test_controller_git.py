@@ -1,30 +1,31 @@
 import shutil
+import subprocess
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 import pytest
 from runtime_helpers import Repo, run
 
+from skeleton_crew.core.git import HARDENING, git_env
 from skeleton_crew.domain.diff_parse import parse_diff_summary
 from skeleton_crew.domain.errors import PolicyViolation
-from skeleton_crew.domain.repo_docs import MAX_DOC_CHARS
-from skeleton_crew.runtime.workspace import (
+from skeleton_crew.runtime.controller_git import (
     MAX_PATCH_BYTES,
-    TaskPaths,
+    CommitSpec,
     agent_patch_argv,
     apply_agent_patch,
     binary_diff,
     checkout_commit,
     commit_tree,
     diff_summary,
-    list_task_keys,
     make_agent_copy,
     make_readonly_copy,
     merge_trees,
-    read_repo_docs,
     refresh_readonly_copy,
-    remove_task_dirs,
-    task_paths,
+    tree_of,
 )
+from skeleton_crew.runtime.task_dirs import TaskPaths, task_paths
 
 AUTHOR = "Skeleton Crew <crew@example.invalid>"
 
@@ -53,18 +54,6 @@ def agent_repo(paths: TaskPaths) -> Repo:
     return Repo(paths.agent_repo, init=False)
 
 
-@pytest.mark.parametrize("key", ["../x", "a/b", "", ".hidden", "x" * 65, "w-1", "worker-1/.."])
-def test_task_paths_rejects_unsafe_keys(tmp_path: Path, key: str) -> None:
-    with pytest.raises(ValueError, match="task key"):
-        task_paths(tmp_path, key)
-
-
-def test_task_paths_layout(tmp_path: Path) -> None:
-    paths = task_paths(tmp_path, "worker-7")
-    assert paths.root == tmp_path / "worker-7"
-    assert paths.controller_repo.parent == paths.agent_repo.parent == paths.root
-
-
 def test_agent_copy_is_independent_and_keeps_symlinks(paths: TaskPaths, controller: Repo) -> None:
     (paths.controller_repo / "link").symlink_to("README.md")
     make_agent_copy(paths)
@@ -74,12 +63,10 @@ def test_agent_copy_is_independent_and_keeps_symlinks(paths: TaskPaths, controll
     assert (paths.controller_repo / "README.md").read_text() == "hello\n"
 
 
-def test_agent_copy_fresh_replaces_and_resume_keeps(paths: TaskPaths, controller: Repo) -> None:
+def test_agent_copy_replaces_an_existing_copy(paths: TaskPaths, controller: Repo) -> None:
     make_agent_copy(paths)
     (paths.agent_repo / "work.txt").write_text("in progress\n")
-    make_agent_copy(paths, fresh=False)
-    assert (paths.agent_repo / "work.txt").exists()
-    make_agent_copy(paths, fresh=True)
+    make_agent_copy(paths)
     assert not (paths.agent_repo / "work.txt").exists()
 
 
@@ -178,9 +165,7 @@ async def test_apply_patch_commits_on_parent_with_controller_identity(
         paths.controller_repo,
         patch=patch,
         base_sha=base,
-        parent_sha=base,
-        message="Fix #1",
-        author=AUTHOR,
+        commit=CommitSpec((base,), "Fix #1", AUTHOR),
     )
 
     assert controller.git("rev-parse", f"{sha}^").decode().strip() == base
@@ -202,9 +187,7 @@ async def test_apply_patch_ignores_identity_in_patch_headers(
         paths.controller_repo,
         patch=patch,
         base_sha=base,
-        parent_sha=base,
-        message="m",
-        author=AUTHOR,
+        commit=CommitSpec((base,), "m", AUTHOR),
     )
     assert b"mallory" not in controller.git("log", "-1", "--format=%an%ae%cn%ce", sha)
 
@@ -219,18 +202,14 @@ async def test_follow_up_patch_is_full_diff_from_base_on_previous_tip(
         paths.controller_repo,
         patch=agent_patch(paths, base),
         base_sha=base,
-        parent_sha=base,
-        message="1",
-        author=AUTHOR,
+        commit=CommitSpec((base,), "1", AUTHOR),
     )
     agent.write("b.txt", "two\n")
     second = await apply_agent_patch(
         paths.controller_repo,
         patch=agent_patch(paths, base),
         base_sha=base,
-        parent_sha=first,
-        message="2",
-        author=AUTHOR,
+        commit=CommitSpec((first,), "2", AUTHOR),
     )
     assert controller.git("rev-parse", f"{second}^").decode().strip() == first
     assert controller.show(second, "a.txt") == b"one\n"
@@ -248,9 +227,7 @@ async def test_apply_patch_with_binary_file(paths: TaskPaths, controller: Repo) 
         paths.controller_repo,
         patch=patch,
         base_sha=base,
-        parent_sha=base,
-        message="m",
-        author=AUTHOR,
+        commit=CommitSpec((base,), "m", AUTHOR),
     )
     assert controller.show(sha, "img.bin") == blob
 
@@ -271,9 +248,7 @@ async def test_patch_touching_git_dir_is_rejected(paths: TaskPaths, controller: 
             paths.controller_repo,
             patch=patch,
             base_sha=base,
-            parent_sha=base,
-            message="m",
-            author=AUTHOR,
+            commit=CommitSpec((base,), "m", AUTHOR),
         )
     assert "evil" not in (paths.controller_repo / ".git" / "config").read_text()
 
@@ -295,9 +270,7 @@ async def test_patch_escaping_repo_is_rejected(
             paths.controller_repo,
             patch=patch,
             base_sha=base,
-            parent_sha=base,
-            message="m",
-            author=AUTHOR,
+            commit=CommitSpec((base,), "m", AUTHOR),
         )
 
 
@@ -316,9 +289,7 @@ async def test_patch_that_does_not_apply_is_rejected(paths: TaskPaths, controlle
             paths.controller_repo,
             patch=patch,
             base_sha=base,
-            parent_sha=base,
-            message="m",
-            author=AUTHOR,
+            commit=CommitSpec((base,), "m", AUTHOR),
         )
 
 
@@ -330,9 +301,7 @@ async def test_empty_patch_is_no_changes(paths: TaskPaths, controller: Repo, pat
             paths.controller_repo,
             patch=patch,
             base_sha=base,
-            parent_sha=base,
-            message="m",
-            author=AUTHOR,
+            commit=CommitSpec((base,), "m", AUTHOR),
         )
 
 
@@ -345,18 +314,14 @@ async def test_patch_equal_to_parent_tree_is_no_changes(paths: TaskPaths, contro
         paths.controller_repo,
         patch=patch,
         base_sha=base,
-        parent_sha=base,
-        message="1",
-        author=AUTHOR,
+        commit=CommitSpec((base,), "1", AUTHOR),
     )
     with pytest.raises(PolicyViolation, match="no changes"):
         await apply_agent_patch(
             paths.controller_repo,
             patch=patch,
             base_sha=base,
-            parent_sha=first,
-            message="2",
-            author=AUTHOR,
+            commit=CommitSpec((first,), "2", AUTHOR),
         )
 
 
@@ -367,9 +332,7 @@ async def test_oversized_patch_is_rejected(paths: TaskPaths, controller: Repo) -
             paths.controller_repo,
             patch=b"x" * (MAX_PATCH_BYTES + 1),
             base_sha=base,
-            parent_sha=base,
-            message="m",
-            author=AUTHOR,
+            commit=CommitSpec((base,), "m", AUTHOR),
         )
 
 
@@ -385,9 +348,7 @@ async def test_malformed_author_is_rejected(
             paths.controller_repo,
             patch=agent_patch(paths, base),
             base_sha=base,
-            parent_sha=base,
-            message="m",
-            author=author,
+            commit=CommitSpec((base,), "m", author),
         )
 
 
@@ -408,9 +369,7 @@ async def test_controller_hooks_never_run(
         paths.controller_repo,
         patch=patch,
         base_sha=base,
-        parent_sha=base,
-        message="m",
-        author=AUTHOR,
+        commit=CommitSpec((base,), "m", AUTHOR),
     )
     assert not marker.exists()
 
@@ -427,9 +386,7 @@ async def test_agent_repo_config_cannot_change_patch_prefixes(
         paths.controller_repo,
         patch=agent_patch(paths, base),
         base_sha=base,
-        parent_sha=base,
-        message="m",
-        author=AUTHOR,
+        commit=CommitSpec((base,), "m", AUTHOR),
     )
     assert controller.show(sha, "README.md") == b"agent\n"
 
@@ -443,14 +400,12 @@ async def test_diff_summary_feeds_domain_parser(paths: TaskPaths, controller: Re
         paths.controller_repo,
         patch=agent_patch(paths, base),
         base_sha=base,
-        parent_sha=base,
-        message="m",
-        author=AUTHOR,
+        commit=CommitSpec((base,), "m", AUTHOR),
     )
-    raw, numstat, unified = await diff_summary(paths.controller_repo, base, sha)
-    changes = {c.path: c.status.value for c in parse_diff_summary(raw, numstat)}
+    summary = await diff_summary(paths.controller_repo, base, sha)
+    changes = {c.path: c.status.value for c in parse_diff_summary(summary.raw, summary.numstat)}
     assert changes == {"README.md": "D", "src/app.py": "M"}
-    assert "+print('b')" in unified
+    assert "+print('b')" in summary.unified
 
 
 def test_agent_patch_argv_rejects_non_sha() -> None:
@@ -477,7 +432,7 @@ async def test_clean_merge_tree_and_two_parent_commit(controller: Repo) -> None:
 
     attempt = await merge_trees(controller.root, branch, main)
     merged = await commit_tree(
-        controller.root, tree=attempt.tree, parents=[branch, main], message="m", author=AUTHOR
+        controller.root, tree=attempt.tree, commit=CommitSpec((branch, main), "m", AUTHOR)
     )
 
     assert attempt.conflicts == ()
@@ -496,7 +451,7 @@ async def test_conflicting_merge_tree_lists_files_and_keeps_markers(controller: 
 
     assert attempt.conflicts == ("src/app.py",)
     wip = await commit_tree(
-        controller.root, tree=attempt.tree, parents=[branch], message="wip", author=AUTHOR
+        controller.root, tree=attempt.tree, commit=CommitSpec((branch,), "wip", AUTHOR)
     )
     assert b"<<<<<<<" in controller.show(wip, "src/app.py")
 
@@ -507,7 +462,7 @@ async def test_merge_parents_reach_the_agent_commit(paths: TaskPaths, controller
     )
     attempt = await merge_trees(controller.root, branch, main)
     wip = await commit_tree(
-        controller.root, tree=attempt.tree, parents=[branch], message="wip", author=AUTHOR
+        controller.root, tree=attempt.tree, commit=CommitSpec((branch,), "wip", AUTHOR)
     )
     await checkout_commit(controller.root, wip)
     agent = agent_repo(paths)
@@ -517,10 +472,7 @@ async def test_merge_parents_reach_the_agent_commit(paths: TaskPaths, controller
         controller.root,
         patch=agent_patch(paths, wip),
         base_sha=wip,
-        parent_sha=branch,
-        extra_parents=[main],
-        message="merge",
-        author=AUTHOR,
+        commit=CommitSpec((branch, main), "merge", AUTHOR),
     )
 
     parents = controller.git("rev-list", "--parents", "-n", "1", merged).decode().split()[1:]
@@ -547,126 +499,43 @@ async def test_new_git_helpers_require_full_shas(controller: Repo, sha: str) -> 
     with pytest.raises(ValueError, match="sha"):
         await checkout_commit(controller.root, sha)
     with pytest.raises(ValueError, match="sha"):
-        await commit_tree(controller.root, tree=sha, parents=[head], message="m", author=AUTHOR)
+        await commit_tree(controller.root, tree=sha, commit=CommitSpec((head,), "m", AUTHOR))
+    with pytest.raises(ValueError, match="sha"):
+        CommitSpec((head, sha), "m", AUTHOR)
 
 
-def _outside(tmp_path: Path) -> Path:
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    (outside / "keep.txt").write_text("keep")
-    return outside
+@pytest.mark.parametrize(
+    ("parents", "message", "error"),
+    [
+        (("a" * 40,), "", "message"),
+        (("a" * 40,), "  \n", "message"),
+        (("a" * 40,), "a\0b", "message"),
+        ((), "m", "parent"),
+    ],
+)
+def test_commit_spec_rejects_bad_metadata(
+    parents: tuple[str, ...], message: str, error: str
+) -> None:
+    with pytest.raises(ValueError, match=error):
+        CommitSpec(parents, message, AUTHOR)
 
 
-def test_remove_task_dirs_removes_only_listed_task_keys(tmp_path: Path) -> None:
-    tasks = tmp_path / "tasks"
-    for name in ("worker-1", "worker-2", "notes"):
-        (tasks / name / "transcripts").mkdir(parents=True)
+async def test_controller_git_runs_with_the_core_hardening_and_env(
+    controller: Repo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    head = controller.head()
+    calls: list[tuple[list[str], Mapping[str, str]]] = []
+    real_run = subprocess.run
 
-    removed = remove_task_dirs(tasks, ["worker-1", "worker-3", "notes", "..", ""])
+    def spy(argv: list[str], **kwargs: Any) -> Any:
+        calls.append((argv, kwargs["env"]))
+        return real_run(argv, **kwargs)
 
-    assert removed == ["worker-1"]
-    assert sorted(p.name for p in tasks.iterdir()) == ["notes", "worker-2"]
-    assert tmp_path.exists()
+    monkeypatch.setattr(subprocess, "run", spy)
 
+    await tree_of(controller.root, head)
 
-def test_remove_task_dirs_refuses_a_symlinked_task_dir(tmp_path: Path) -> None:
-    outside = _outside(tmp_path)
-    tasks = tmp_path / "tasks"
-    tasks.mkdir()
-    (tasks / "worker-1").symlink_to(outside, target_is_directory=True)
-
-    assert remove_task_dirs(tasks, ["worker-1"]) == []
-    assert (outside / "keep.txt").read_text() == "keep"
-
-
-def test_remove_task_dirs_does_not_follow_links_inside(tmp_path: Path) -> None:
-    outside = _outside(tmp_path)
-    task = tmp_path / "tasks" / "refine-4"
-    task.mkdir(parents=True)
-    (task / "escape").symlink_to(outside, target_is_directory=True)
-
-    assert remove_task_dirs(tmp_path / "tasks", ["refine-4"]) == ["refine-4"]
-    assert not task.exists()
-    assert (outside / "keep.txt").read_text() == "keep"
-
-
-def test_remove_task_dirs_ignores_a_plain_file(tmp_path: Path) -> None:
-    tasks = tmp_path / "tasks"
-    tasks.mkdir()
-    (tasks / "run-3-selector").write_text("file")
-
-    assert remove_task_dirs(tasks, ["run-3-selector"]) == []
-    assert (tasks / "run-3-selector").is_file()
-
-
-def test_list_task_keys_skips_links_files_and_other_names(tmp_path: Path) -> None:
-    outside = _outside(tmp_path)
-    tasks = tmp_path / "tasks"
-    for name in ("worker-1", "refine-2", "run-3-selector", "notes", "worker-x"):
-        (tasks / name).mkdir(parents=True)
-    (tasks / "worker-4").symlink_to(outside, target_is_directory=True)
-    (tasks / "worker-5").write_text("file")
-
-    assert list_task_keys(tasks) == ["refine-2", "run-3-selector", "worker-1"]
-    assert list_task_keys(tmp_path / "missing") == []
-
-
-def _docs_repo(root: Path) -> Repo:
-    repo = Repo(root)
-    repo.write("CLAUDE.md", "root claude\n")
-    repo.write(".claude/CLAUDE.md", "See [arch](./ARCHITECTURE.md).\n")
-    repo.write(".claude/ARCHITECTURE.md", "Layers. See [deep](../deep.md).\n")
-    repo.write("deep.md", "too deep\n")
-    repo.write("AGENTS.md", "Read [security](SECURITY.md) and [gone](missing.md).\n")
-    repo.write("SECURITY.md", "threats\n")
-    repo.write("pkg/AGENTS.md", "nested ü\n")
-    repo.write("README.md", "readme\n")
-    return repo
-
-
-def test_read_repo_docs_collects_instruction_and_linked_docs(tmp_path: Path) -> None:
-    repo = _docs_repo(tmp_path / "repo")
-    repo.commit()
-
-    sources = read_repo_docs(repo.root)
-
-    assert sources.candidates == (
-        "AGENTS.md",
-        "CLAUDE.md",
-        ".claude/CLAUDE.md",
-        "pkg/AGENTS.md",
-        "SECURITY.md",
-        ".claude/ARCHITECTURE.md",
-    )
-    assert sources.texts["pkg/AGENTS.md"] == "nested ü\n"
-    assert "deep.md" not in sources.texts
-    assert "README.md" not in sources.texts
-
-
-def test_read_repo_docs_skips_symlinks_and_untracked_files(tmp_path: Path) -> None:
-    secret = tmp_path / "secret.md"
-    secret.write_text("host secret\n")
-    repo = Repo(tmp_path / "repo")
-    repo.write("AGENTS.md", "[s](linked.md) [u](untracked.md)\n")
-    (repo.root / "linked.md").symlink_to(secret)
-    (repo.root / "sub").mkdir()
-    (repo.root / "sub" / "AGENTS.md").symlink_to(secret)
-    repo.commit()
-    repo.write("untracked.md", "not committed\n")
-
-    sources = read_repo_docs(repo.root)
-
-    assert sources.candidates == ("AGENTS.md",)
-    assert set(sources.texts) == {"AGENTS.md"}
-
-
-def test_read_repo_docs_replaces_invalid_utf8_and_bounds_reads(tmp_path: Path) -> None:
-    repo = Repo(tmp_path / "repo")
-    repo.write("AGENTS.md", b"ok \xff\n")
-    repo.write("big/AGENTS.md", "x" * (MAX_DOC_CHARS * 5))
-    repo.commit()
-
-    texts = read_repo_docs(repo.root).texts
-
-    assert texts["AGENTS.md"] == "ok �\n"
-    assert MAX_DOC_CHARS < len(texts["big/AGENTS.md"]) < MAX_DOC_CHARS * 5
+    assert calls
+    for argv, env in calls:
+        assert argv[: 1 + len(HARDENING)] == ["git", *HARDENING]
+        assert env == git_env()

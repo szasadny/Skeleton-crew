@@ -6,7 +6,6 @@ from pydantic import SecretStr
 from skeleton_crew.agents import registry
 from skeleton_crew.agents.base import BackendSpec, OptionSpec
 from skeleton_crew.agents.registry import (
-    UnknownBackendError,
     allowed_models,
     available_backends,
     backend_for,
@@ -14,7 +13,7 @@ from skeleton_crew.agents.registry import (
     settings_problems,
     spec_for,
 )
-from skeleton_crew.domain.settings import AppSettings, Role, RoleAgent
+from skeleton_crew.domain.settings import AppSettings, ClassifierSettings, Role, RoleAgent
 
 _CREDENTIALS = {
     "claude_oauth_token": SecretStr("oauth-token-placeholder"),
@@ -71,10 +70,19 @@ def test_backend_never_sees_undeclared_credentials() -> None:
 
 
 def test_unknown_backend_is_rejected() -> None:
-    with pytest.raises(UnknownBackendError):
+    with pytest.raises(ValueError, match="unknown agent backend: nope"):
         backend_for("nope", credentials=_CREDENTIALS, options={})
     problems = field_problems(_with_worker(backend="nope"))
     assert problems == {"agents.worker.backend": ["unknown agent backend nope"]}
+
+
+def test_routed_efforts_must_suit_the_worker_backend_when_routing_is_on() -> None:
+    gemini = {**AppSettings().agents, Role.WORKER: RoleAgent(backend="gemini", effort="default")}
+    gemini_worker = AppSettings(agents=gemini, classifier=ClassifierSettings(effort_routing=True))
+    problems = field_problems(gemini_worker)
+    assert problems["classifier.effort_small"] == ["not a Gemini CLI effort"]
+    off = gemini_worker.model_copy(update={"classifier": ClassifierSettings()})
+    assert "classifier.effort_small" not in field_problems(off)
 
 
 def test_unknown_model_and_effort_are_problems() -> None:

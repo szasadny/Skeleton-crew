@@ -54,7 +54,7 @@ class RunScheduler:
         )
 
     def shutdown(self) -> None:
-        if self._scheduler.running:
+        if self.running:
             self._scheduler.shutdown(wait=False)
 
     @property

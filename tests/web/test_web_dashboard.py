@@ -1,29 +1,15 @@
-from collections.abc import AsyncIterator
-from pathlib import Path
-
-import pytest
+from factories import seed_refine, seed_run, seed_task
 from fake_control import FakeRunControl
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from web_helpers import Web, open_web
+from web_helpers import Web, WebFactory
 
 from skeleton_crew.core.audit import AuditKind
 from skeleton_crew.domain.settings import AppSettings, Schedule, Weekday
 from skeleton_crew.domain.task_state import RefineState, RunStep, RunTrigger, TaskState
-from skeleton_crew.store import audit_store, runs_store
-from skeleton_crew.store.settings_store import save_settings
-
-
-@pytest.fixture
-async def web(tmp_path: Path, sessionmaker: async_sessionmaker[AsyncSession]) -> AsyncIterator[Web]:
-    async with open_web(tmp_path, sessionmaker) as harness:
-        await harness.login()
-        yield harness
+from skeleton_crew.web.routes.dashboard import STATUS_POLL_S
 
 
 async def _kill_switch_summaries(web: Web) -> list[str]:
-    async with web.sessionmaker() as session:
-        events = await audit_store.list_events(session, 50, 0, AuditKind.KILL_SWITCH)
-    return [event.summary for event in reversed(events)]
+    return [event.summary for event in await web.audit(AuditKind.KILL_SWITCH)]
 
 
 async def test_dashboard_shows_idle_state_without_schedule(web: Web) -> None:
@@ -31,7 +17,7 @@ async def test_dashboard_shows_idle_state_without_schedule(web: Web) -> None:
     assert "Idle" in html
     assert "Not scheduled" in html
     assert 'hx-get="/partials/status"' in html
-    assert 'hx-trigger="every 5s"' in html
+    assert f'hx-trigger="every {STATUS_POLL_S}s"' in html
     assert "X-CSRF-Token" in html
 
 
@@ -57,9 +43,10 @@ async def test_dashboard_shows_running_state_and_next_run(web: Web) -> None:
 
 async def test_status_partial_lists_active_tasks_with_pr_link(web: Web) -> None:
     async with web.sessionmaker() as session:
-        run = await runs_store.create_run(session, RunTrigger.MANUAL, dry_run=False)
-        task = await runs_store.add_worker_task(session, run.id, 7, "Fix <b>parser</b>")
-        await runs_store.update_worker_task(session, task.id, state=TaskState.CODING, pr_number=42)
+        run = await seed_run(session)
+        await seed_task(
+            session, run.id, 7, "Fix <b>parser</b>", state=TaskState.CODING, pr_number=42
+        )
         await session.commit()
     html = (await web.client.get("/partials/status", headers={"HX-Request": "true"})).text
     assert "#7 Fix &lt;b&gt;parser&lt;/b&gt;" in html
@@ -71,7 +58,7 @@ async def test_status_partial_lists_active_tasks_with_pr_link(web: Web) -> None:
 
 async def test_status_partial_shows_the_running_selector(web: Web) -> None:
     async with web.sessionmaker() as session:
-        run = await runs_store.create_run(session, RunTrigger.MANUAL, dry_run=False)
+        run = await seed_run(session)
         await session.commit()
     web.controller.running = True
     web.controller.current_step = RunStep.SELECTOR
@@ -90,11 +77,9 @@ async def test_status_partial_hides_a_step_once_idle(web: Web) -> None:
 
 async def test_status_partial_lists_active_refines_only(web: Web) -> None:
     async with web.sessionmaker() as session:
-        run = await runs_store.create_run(session, RunTrigger.MANUAL, dry_run=False)
-        active = await runs_store.add_refine_task(session, run.id, 5)
-        await runs_store.update_refine_task(session, active.id, state=RefineState.REFINING)
-        done = await runs_store.add_refine_task(session, run.id, 6)
-        await runs_store.update_refine_task(session, done.id, state=RefineState.DONE)
+        run = await seed_run(session)
+        await seed_refine(session, run.id, 5, state=RefineState.REFINING)
+        await seed_refine(session, run.id, 6, state=RefineState.DONE)
         await session.commit()
     html = (await web.client.get("/partials/status")).text
     assert "<td>#5</td>" in html
@@ -110,11 +95,8 @@ async def test_run_now_starts_a_manual_run(web: Web) -> None:
     assert "Run started." in (await web.client.get(response.headers["location"])).text
 
 
-async def test_run_now_reports_refusal(
-    tmp_path: Path, sessionmaker: async_sessionmaker[AsyncSession]
-) -> None:
-    async with open_web(tmp_path, sessionmaker, FakeRunControl(start_result=None)) as web:
-        await web.login()
+async def test_run_now_reports_refusal(web_factory: WebFactory) -> None:
+    async with web_factory(controller=FakeRunControl(start_result=None)) as web:
         response = await web.post("/actions/run-now")
     assert response.headers["location"] == "/?msg=run_refused"
 
@@ -149,17 +131,23 @@ async def test_release_kill_switch(web: Web) -> None:
 
 async def test_dry_run_toggle(web: Web) -> None:
     assert (await web.settings()).dry_run is True
-    await web.post("/actions/dry-run", {"enabled": "off"})
+    response = await web.post("/actions/dry-run", {"enabled": "off"})
+    assert response.headers["location"] == "/?msg=dry_run_off"
     assert (await web.settings()).dry_run is False
     await web.post("/actions/dry-run", {"enabled": "on"})
     assert (await web.settings()).dry_run is True
 
 
+async def test_dry_run_accepts_only_the_exact_on_value(web: Web) -> None:
+    await web.post("/actions/dry-run", {"enabled": "off"})
+    await web.post("/actions/dry-run", {"enabled": " on"})
+    assert (await web.settings()).dry_run is False
+
+
 async def test_last_run_summary(web: Web) -> None:
     async with web.sessionmaker() as session:
-        await save_settings(session, AppSettings())
-        run = await runs_store.create_run(session, RunTrigger.SCHEDULE, dry_run=True)
-        await runs_store.add_worker_task(session, run.id, 1, "One")
+        run = await seed_run(session, RunTrigger.SCHEDULE, dry_run=True)
+        await seed_task(session, run.id, 1, "One")
         await session.commit()
     html = (await web.client.get("/")).text
     assert f"Run {run.id}</a>: running, schedule, dry run." in html
@@ -168,12 +156,10 @@ async def test_last_run_summary(web: Web) -> None:
 
 async def test_last_run_shows_tasks_with_blockers(web: Web) -> None:
     async with web.sessionmaker() as session:
-        await save_settings(session, AppSettings())
-        run = await runs_store.create_run(session, RunTrigger.MANUAL, dry_run=False)
-        for number in (1, 2, 3):
-            task = await runs_store.add_worker_task(session, run.id, number, "T")
-            if number < 3:
-                await runs_store.update_worker_task(session, task.id, blockers=["worker: x"])
+        run = await seed_run(session)
+        for number in (1, 2):
+            await seed_task(session, run.id, number, blockers=["worker: x"])
+        await seed_task(session, run.id, 3)
         await session.commit()
     html = (await web.client.get("/partials/status")).text
     assert "2 tasks with blockers" in html
@@ -181,9 +167,8 @@ async def test_last_run_shows_tasks_with_blockers(web: Web) -> None:
 
 async def test_last_run_without_blockers_shows_no_badge(web: Web) -> None:
     async with web.sessionmaker() as session:
-        await save_settings(session, AppSettings())
-        run = await runs_store.create_run(session, RunTrigger.MANUAL, dry_run=False)
-        await runs_store.add_worker_task(session, run.id, 1, "T")
+        run = await seed_run(session)
+        await seed_task(session, run.id)
         await session.commit()
     assert "with blockers" not in (await web.client.get("/")).text
 
@@ -207,6 +192,15 @@ async def test_sidebar_puts_monitoring_before_configuration(web: Web) -> None:
     assert monitor < positions[0] < configure < positions[3]
     assert '<span class="segment">M4</span>' in html
     assert '<span class="segment">C6</span>' in html
+
+
+async def test_sidebar_marks_only_the_current_section(web: Web) -> None:
+    html = (await web.client.get("/rules/worker")).text
+    assert '<a href="/rules/common" class="vertebra current">' in html
+    assert html.count("vertebra current") == 1
+    home = (await web.client.get("/")).text
+    assert '<a href="/" class="vertebra current">' in home
+    assert home.count("vertebra current") == 1
 
 
 async def test_dashboard_message_sits_between_dry_run_and_kill_switch(web: Web) -> None:

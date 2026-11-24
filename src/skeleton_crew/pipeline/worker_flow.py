@@ -16,7 +16,8 @@ from skeleton_crew.pipeline.job_engine import iterate, run_job, start_worker_san
 from skeleton_crew.pipeline.task_record import WorkerTaskRecord
 from skeleton_crew.pipeline.texts import continued_comment
 from skeleton_crew.pipeline.worker_job import WorkerJob
-from skeleton_crew.runtime.workspace import task_paths, tree_of
+from skeleton_crew.runtime.controller_git import tree_of
+from skeleton_crew.runtime.task_dirs import task_paths
 from skeleton_crew.store import runs_store
 
 

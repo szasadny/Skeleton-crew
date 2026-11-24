@@ -37,7 +37,7 @@ from skeleton_crew.domain.task_state import (
 )
 from skeleton_crew.github.gateway import RulesUnavailable
 from skeleton_crew.pipeline.run_controller import USAGE_LIMIT_NOTE, RunController
-from skeleton_crew.runtime.containers import ContainerHandle
+from skeleton_crew.runtime.containers import MANAGED_LABEL, MANAGED_VALUE, ContainerHandle
 from skeleton_crew.store import runs_store
 from skeleton_crew.web.ports import RunControl
 
@@ -522,6 +522,7 @@ async def test_reconcile_on_startup_aborts_leftovers_and_comments(harness: Harne
         await runs_store.add_worker_task(session, dry.id, 2, "Dry")
         await session.commit()
     harness.runtime.running["leftover"] = ContainerHandle("leftover", "skeleton-crew-x")
+    harness.runtime.labels["leftover"] = {MANAGED_LABEL: MANAGED_VALUE}
     await harness.save_settings()
     controller = RunController(harness.deps())
 

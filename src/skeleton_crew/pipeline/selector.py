@@ -10,7 +10,7 @@ from skeleton_crew.pipeline.deps import RunContext
 from skeleton_crew.pipeline.readonly import readonly_copy_of_clone, remove_checkout
 from skeleton_crew.pipeline.run_setup import Candidate
 from skeleton_crew.pipeline.sessions import Sandbox, remove_sandbox, run_agent, start_sandbox
-from skeleton_crew.runtime.workspace import TaskPaths, task_paths
+from skeleton_crew.runtime.task_dirs import TaskPaths, task_paths
 
 
 def _candidate_context(candidates: Sequence[Candidate]) -> list[dict[str, object]]:

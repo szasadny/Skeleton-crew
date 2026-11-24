@@ -11,8 +11,8 @@
     <li>operator identity ............. <strong>unverified</strong></li>
   </ol>
   <h1>Authorization required</h1>
-  {% if error %}<div class="alert"><p>{{ error }}</p></div>{% endif %}
-  <form method="post" action="/login">
+  {{ m.alert(alerts) }}
+  <form method="post" action="{{ login_path }}">
     {{ m.csrf() }}
     <div class="field">
       <label for="password">Password</label>

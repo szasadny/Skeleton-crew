@@ -2,6 +2,8 @@ import asyncio
 from datetime import UTC, datetime, time
 from zoneinfo import ZoneInfo
 
+from triggers import noop_trigger
+
 from skeleton_crew.domain.settings import AppSettings, Schedule, Weekday
 from skeleton_crew.scheduler.scheduler import RunScheduler, cron_trigger
 
@@ -12,19 +14,15 @@ def _settings(*days: Weekday, at: time = time(1, 0), tz: str = "Europe/Amsterdam
     return AppSettings(schedule=Schedule(weekdays=frozenset(days), start_time=at, timezone=tz))
 
 
-async def _noop() -> None:
-    return None
-
-
 def test_no_weekdays_means_no_trigger_and_no_next_run() -> None:
-    scheduler = RunScheduler(_noop)
+    scheduler = RunScheduler(noop_trigger)
     scheduler.apply(_settings())
     assert cron_trigger(_settings()) is None
     assert scheduler.next_run_time() is None
 
 
 def test_next_run_is_the_next_selected_weekday_in_the_schedule_timezone() -> None:
-    scheduler = RunScheduler(_noop)
+    scheduler = RunScheduler(noop_trigger)
     scheduler.apply(_settings(Weekday.MON, Weekday.THU, at=time(1, 30)))
     wednesday_noon = datetime(2026, 10, 28, 12, 0, tzinfo=UTC)
     assert scheduler.next_run_time(wednesday_noon) == datetime(
@@ -35,7 +33,7 @@ def test_next_run_is_the_next_selected_weekday_in_the_schedule_timezone() -> Non
 
 
 def test_timezone_is_respected() -> None:
-    scheduler = RunScheduler(_noop)
+    scheduler = RunScheduler(noop_trigger)
     scheduler.apply(_settings(Weekday.FRI, at=time(9, 0), tz="America/New_York"))
     next_run = scheduler.next_run_time(datetime(2026, 10, 30, 12, 0, tzinfo=UTC))
     assert next_run is not None
@@ -43,7 +41,7 @@ def test_timezone_is_respected() -> None:
 
 
 def test_apply_replaces_and_clears_the_schedule() -> None:
-    scheduler = RunScheduler(_noop)
+    scheduler = RunScheduler(noop_trigger)
     scheduler.apply(_settings(Weekday.MON))
     scheduler.apply(_settings(Weekday.SUN, at=time(6, 0)))
     next_run = scheduler.next_run_time(datetime(2026, 10, 28, tzinfo=UTC))

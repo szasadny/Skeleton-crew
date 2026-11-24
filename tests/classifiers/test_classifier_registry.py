@@ -1,7 +1,6 @@
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from skeleton_crew.agents.registry import field_problems as agent_field_problems
 from skeleton_crew.classifiers.registry import (
     available_classifiers,
     credential_problems,
@@ -12,8 +11,6 @@ from skeleton_crew.domain.settings import (
     DEFAULT_CLASSIFIER_MODEL,
     AppSettings,
     ClassifierSettings,
-    Role,
-    RoleAgent,
 )
 
 
@@ -46,15 +43,6 @@ def test_unknown_provider_and_foreign_model_are_rejected() -> None:
 def test_routed_efforts_must_look_like_an_effort(effort: str) -> None:
     with pytest.raises(ValidationError):
         ClassifierSettings(effort_small=effort)
-
-
-def test_routed_efforts_must_suit_the_worker_backend_when_routing_is_on() -> None:
-    gemini = {**AppSettings().agents, Role.WORKER: RoleAgent(backend="gemini", effort="default")}
-    gemini_worker = AppSettings(agents=gemini, classifier=ClassifierSettings(effort_routing=True))
-    problems = agent_field_problems(gemini_worker)
-    assert problems["classifier.effort_small"] == ["not a Gemini CLI effort"]
-    off = gemini_worker.model_copy(update={"classifier": ClassifierSettings()})
-    assert "classifier.effort_small" not in agent_field_problems(off)
 
 
 def test_credential_problems_name_only_the_providers_own_variable() -> None:

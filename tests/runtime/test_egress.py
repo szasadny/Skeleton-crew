@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from fake_runtime import FakeRuntime, argv_starts_with, ok
 
-from skeleton_crew.runtime.containers import ExecResult
+from skeleton_crew.runtime.containers import ExecResult, SandboxTarget
 from skeleton_crew.runtime.egress import (
     PLACEHOLDER_DOMAIN,
     RECONFIGURE_ARGV,
@@ -16,6 +16,10 @@ from skeleton_crew.runtime.egress import (
 )
 
 IMAGES = Path(__file__).parents[2] / "src" / "skeleton_crew" / "runtime" / "images"
+
+
+def _target(allowlist: Path, proxy: str = "proxy") -> SandboxTarget:
+    return SandboxTarget("img", "net", "http://proxy:3128", proxy, allowlist)
 
 
 def test_render_sorts_dedupes_and_normalizes() -> None:
@@ -53,7 +57,7 @@ async def test_apply_writes_file_and_reconfigures_proxy(tmp_path: Path) -> None:
     runtime.script(argv_starts_with(*RECONFIGURE_ARGV), ok())
     target = tmp_path / "egress" / "allowlist.txt"
 
-    await apply_allowlist(runtime, ["pypi.org"], target, "skeleton-crew-egress-proxy")
+    await apply_allowlist(runtime, ["pypi.org"], _target(target, "skeleton-crew-egress-proxy"))
 
     assert target.read_text() == "pypi.org\n"
     assert target.stat().st_mode & 0o777 == 0o644
@@ -61,6 +65,7 @@ async def test_apply_writes_file_and_reconfigures_proxy(tmp_path: Path) -> None:
     (call,) = runtime.execs
     assert call.handle.id == "skeleton-crew-egress-proxy"
     assert call.argv == RECONFIGURE_ARGV
+    assert (call.user, call.cwd, call.env) == ("root", "/", {})
 
 
 async def test_apply_replaces_existing_file(tmp_path: Path) -> None:
@@ -68,7 +73,7 @@ async def test_apply_replaces_existing_file(tmp_path: Path) -> None:
     runtime.script(argv_starts_with(*RECONFIGURE_ARGV), ok())
     target = tmp_path / "allowlist.txt"
     target.write_text("old.example.com\n")
-    await apply_allowlist(runtime, ["new.example.com"], target, "proxy")
+    await apply_allowlist(runtime, ["new.example.com"], _target(target))
     assert target.read_text() == "new.example.com\n"
 
 
@@ -76,22 +81,22 @@ async def test_apply_invalid_domain_leaves_file_untouched(tmp_path: Path) -> Non
     target = tmp_path / "allowlist.txt"
     target.write_text("pypi.org\n")
     with pytest.raises(ValueError, match="invalid egress domain"):
-        await apply_allowlist(FakeRuntime(), ["bad domain"], target, "proxy")
+        await apply_allowlist(FakeRuntime(), ["bad domain"], _target(target))
     assert target.read_text() == "pypi.org\n"
 
 
 @pytest.mark.parametrize(
     "result",
     [
-        ExecResult(1, None, b"", b"FATAL: bad config", False),
-        ExecResult(124, None, b"", b"", True),
+        ExecResult(1, b"", b"FATAL: bad config", False),
+        ExecResult(124, b"", b"", True),
     ],
 )
 async def test_apply_fails_when_reconfigure_fails(tmp_path: Path, result: ExecResult) -> None:
     runtime = FakeRuntime()
     runtime.script(argv_starts_with(*RECONFIGURE_ARGV), result)
     with pytest.raises(EgressError, match="reconfigure failed"):
-        await apply_allowlist(runtime, ["pypi.org"], tmp_path / "a.txt", "proxy")
+        await apply_allowlist(runtime, ["pypi.org"], _target(tmp_path / "a.txt"))
 
 
 def test_squid_config_is_deny_by_default() -> None:

@@ -4,11 +4,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from skeleton_crew.core.audit import AuditEntry, AuditSink
-from skeleton_crew.domain.branch_policy import (
-    check_issue_number,
-    check_push_target,
-    issue_number_from_branch,
-)
+from skeleton_crew.domain.branch_policy import check_push_target, issue_number_from_branch
 from skeleton_crew.domain.ci_policy import (
     BranchRule,
     CiState,
@@ -16,21 +12,30 @@ from skeleton_crew.domain.ci_policy import (
     ReviewCheck,
     format_job_logs,
 )
-from skeleton_crew.domain.label_policy import LabelChange, check_label_change, has_label
+from skeleton_crew.domain.label_policy import LabelChange, has_label
 from skeleton_crew.domain.repo_policy import REQUIRED_PERMISSIONS
-from skeleton_crew.domain.settings import LabelNames
+from skeleton_crew.domain.settings import LabelNames, Limits
 from skeleton_crew.domain.text_policy import truncate_text
 from skeleton_crew.domain.trust_policy import ContentEdit, IssueComment, LabelEvent
-from skeleton_crew.domain.write_policy import (
-    check_new_issue,
-    check_open_pr,
-    check_push,
-    check_sha,
-    short,
+from skeleton_crew.domain.write_policy import check_sha
+from skeleton_crew.github._git import (
+    GitRemote,
+    git_branch_head,
+    git_clone,
+    git_fetch,
+    git_push,
 )
-from skeleton_crew.github._git import git_branch_head, git_clone, git_fetch, git_push
-from skeleton_crew.github.gateway import IssueRef, PullRef, TrustData
-from skeleton_crew.github.write_guard import guarded_write, label_payload
+from skeleton_crew.github.gateway import LOGS_UNAVAILABLE, IssueRef, PullRef, TrustData
+from skeleton_crew.github.write_guard import (
+    WriteGuard,
+    comment_spec,
+    label_spec,
+    new_issue_labels,
+    new_issue_spec,
+    open_pr_spec,
+    push_spec,
+    review_check_spec,
+)
 
 BOT_LOGIN = "skeleton-crew[bot]"
 LOCAL_PROTOCOL = "file"
@@ -44,20 +49,12 @@ class FakeIssue:
     title: str
     body: str = ""
     labels: set[str] = field(default_factory=set)
-    author: str = "author"
     label_events: list[LabelEvent] = field(default_factory=list)
     edits: list[ContentEdit] = field(default_factory=list)
     comments: list[IssueComment] = field(default_factory=list)
 
     def ref(self) -> IssueRef:
-        return IssueRef(
-            number=self.number,
-            title=self.title,
-            body=self.body,
-            labels=frozenset(self.labels),
-            author=self.author,
-            url=f"https://github.com/o/r/issues/{self.number}",
-        )
+        return IssueRef(self.number, self.title, self.body, frozenset(self.labels))
 
 
 @dataclass
@@ -70,9 +67,7 @@ class FakePull:
     merged: bool = False
 
     def ref(self) -> PullRef:
-        return PullRef(
-            self.number, self.head_ref, self.head_sha, f"https://github.com/o/r/pull/{self.number}"
-        )
+        return PullRef(self.number, self.head_ref, self.head_sha)
 
 
 @dataclass(frozen=True)
@@ -88,7 +83,7 @@ class FakeGitHubGateway:
         labels: LabelNames | None = None,
         base_branch: str = "main",
         dry_run: bool = False,
-        max_comment_chars: int = 1500,
+        max_comment_chars: int = Limits().max_comment_chars,
         audit: AuditSink | None = None,
         source_repo: Path | None = None,
         push_remote: Path | None = None,
@@ -136,10 +131,9 @@ class FakeGitHubGateway:
         *,
         body: str = "",
         labels: Iterable[str] = (),
-        author: str = "author",
         labeled_by: str = MAINTAINER,
     ) -> FakeIssue:
-        issue = FakeIssue(number, title, body, set(), author)
+        issue = FakeIssue(number, title, body)
         for label in labels:
             issue.labels.add(label)
             issue.label_events.append(LabelEvent(label, labeled_by, self.tick(), added=True))
@@ -160,6 +154,15 @@ class FakeGitHubGateway:
 
     def _record(self, action: str, **args: object) -> None:
         self.writes.append(WriteRecord(action, args))
+
+    def _guard(self) -> WriteGuard:
+        return WriteGuard(self._audit, dry_run=self.dry_run)
+
+    def _next_number(self) -> int:
+        return max([*self.issues, *(p.number for p in self.pulls), 0]) + 1
+
+    def _remote(self, path: Path) -> GitRemote:
+        return GitRemote(str(path), LOCAL_PROTOCOL, None)
 
     async def list_open_issues(self, label: str) -> list[IssueRef]:
         self._maybe_fail("list_open_issues")
@@ -215,7 +218,7 @@ class FakeGitHubGateway:
         return script.pop(0) if len(script) > 1 else script[0]
 
     async def failed_job_logs(self, job_ids: Sequence[int], max_chars: int) -> str:
-        logs = [(i, self.job_logs.get(i, "(logs unavailable)")) for i in job_ids if i > 0]
+        logs = [(i, self.job_logs.get(i, LOGS_UNAVAILABLE)) for i in job_ids if i > 0]
         return format_job_logs(logs, max_chars)
 
     async def skeleton_ci_active(self) -> bool:
@@ -240,6 +243,8 @@ class FakeGitHubGateway:
         return self.private
 
     async def change_labels(self, change: LabelChange) -> None:
+        spec = label_spec(change, self.labels)
+
         async def perform() -> None:
             issue = self.issues[change.issue_number]
             removed = {name.casefold() for name in change.remove}
@@ -249,141 +254,85 @@ class FakeGitHubGateway:
             for name in [n for n in issue.labels if n.casefold() in removed]:
                 issue.labels.discard(name)
                 issue.label_events.append(LabelEvent(name, BOT_LOGIN, self.tick(), added=False))
-            self._record("change_labels", **label_payload(change))
+            self._record(spec.action, **spec.payload)
 
-        await guarded_write(
-            self._audit,
-            dry_run=self.dry_run,
-            action="change_labels",
-            payload=label_payload(change),
-            check=lambda: check_label_change(change, self.labels),
-            perform=perform,
-            dry_result=None,
-        )
+        await self._guard().run(spec, perform)
 
     async def comment(self, issue_number: int, body: str) -> None:
         capped = truncate_text(body, self.max_comment_chars)
+        spec = comment_spec(issue_number, capped)
 
         async def perform() -> None:
             self.issues[issue_number].comments.append(IssueComment(BOT_LOGIN, capped, self.tick()))
-            self._record("comment", issue=issue_number, body=capped)
+            self._record(spec.action, issue=issue_number, body=capped)
 
-        await guarded_write(
-            self._audit,
-            dry_run=self.dry_run,
-            action="comment",
-            payload={"issue": issue_number, "body": short(capped)},
-            check=lambda: check_issue_number(issue_number),
-            perform=perform,
-            dry_result=None,
-        )
+        await self._guard().run(spec, perform)
 
     async def create_hitl_issue(self, title: str, body: str) -> int | None:
         capped = truncate_text(body, self.max_comment_chars)
-        labels = frozenset({self.labels.hitl})
+        spec = new_issue_spec(title, capped, self.labels)
 
-        def check() -> None:
-            check_new_issue(title, self.labels)
-
-        async def perform() -> int | None:
-            number = max([*self.issues, *(p.number for p in self.pulls), 0]) + 1
+        async def perform() -> int:
+            number = self._next_number()
+            labels = new_issue_labels(self.labels)
             self.add_issue(number, title, body=capped, labels=labels, labeled_by=BOT_LOGIN)
-            self._record("create_issue", number=number, title=title, body=capped)
+            self._record(spec.action, number=number, title=title, body=capped)
             return number
 
-        return await guarded_write(
-            self._audit,
-            dry_run=self.dry_run,
-            action="create_issue",
-            payload={"title": short(title), "body": short(capped), "labels": sorted(labels)},
-            check=check,
-            perform=perform,
-            dry_result=None,
-        )
+        return await self._guard().run(spec, perform)
 
     async def open_pr(self, *, branch: str, title: str, body: str) -> PullRef | None:
-        async def perform() -> PullRef | None:
-            number = max([*self.issues, *(p.number for p in self.pulls), 0]) + 1
+        spec = open_pr_spec(branch, title, body, self.base_branch)
+
+        async def perform() -> PullRef:
             head = next((sha for b, sha in reversed(self.pushes) if b == branch), "0" * 40)
-            pull = FakePull(number, branch, head)
+            pull = FakePull(self._next_number(), branch, head)
             self.pulls.append(pull)
-            self._record("open_pr", branch=branch, title=title, body=body)
+            self._record(spec.action, branch=branch, title=title, body=body)
             return pull.ref()
 
-        return await guarded_write(
-            self._audit,
-            dry_run=self.dry_run,
-            action="open_pr",
-            payload={"branch": short(branch), "title": short(title), "body": short(body)},
-            check=lambda: check_open_pr(branch, title, self.base_branch),
-            perform=perform,
-            dry_result=None,
-        )
+        return await self._guard().run(spec, perform)
 
     async def set_review_check(self, *, sha: str, state: ReviewCheck, summary: str) -> None:
         capped = truncate_text(summary, self.max_comment_chars)
+        spec = review_check_spec(sha, state, capped)
 
         async def perform() -> None:
             self.review_checks[sha] = (state, capped)
-            self._record("set_review_check", sha=sha, state=state, summary=capped)
+            self._record(spec.action, sha=sha, state=state, summary=capped)
 
-        await guarded_write(
-            self._audit,
-            dry_run=self.dry_run,
-            action="set_review_check",
-            payload={"sha": short(sha), "state": state.value, "summary": short(capped)},
-            check=lambda: check_sha(sha),
-            perform=perform,
-            dry_result=None,
-        )
+        await self._guard().run(spec, perform)
 
     async def clone(self, dest: Path) -> str:
         if self.source_repo is None:
             raise RuntimeError("FakeGitHubGateway.clone needs source_repo")
-        return await git_clone(
-            str(self.source_repo), dest, self.base_branch, None, protocol=LOCAL_PROTOCOL
-        )
+        return await git_clone(self._remote(self.source_repo), dest, self.base_branch)
 
     async def fetch_branch(self, repo_dir: Path, branch: str) -> str:
         check_push_target(branch, self.base_branch)
         if self.push_remote is None:
             raise RuntimeError("FakeGitHubGateway.fetch_branch needs push_remote")
-        return await git_fetch(
-            repo_dir, str(self.push_remote), branch, None, protocol=LOCAL_PROTOCOL
-        )
+        return await git_fetch(repo_dir, self._remote(self.push_remote), branch)
 
     async def branch_head(self, branch: str) -> str | None:
         check_push_target(branch, self.base_branch)
         self._maybe_fail("branch_head")
         if self.push_remote is None:
             return None
-        return await git_branch_head(str(self.push_remote), branch, None, protocol=LOCAL_PROTOCOL)
+        return await git_branch_head(self._remote(self.push_remote), branch)
 
     async def push_branch(
         self, repo_dir: Path, branch: str, sha: str, expected_sha: str | None = None
     ) -> None:
+        spec = push_spec(branch, sha, self.base_branch, expected_sha)
+
         async def perform() -> None:
             self._maybe_fail("push_branch")
             if self.push_remote is not None:
-                await git_push(
-                    repo_dir,
-                    str(self.push_remote),
-                    sha,
-                    branch,
-                    None,
-                    expected_sha,
-                    protocol=LOCAL_PROTOCOL,
-                )
+                remote = self._remote(self.push_remote)
+                await git_push(repo_dir, remote, sha, branch, expected_sha=expected_sha)
             self.pushes.append((branch, sha))
             self.leases.append(expected_sha)
-            self._record("push_branch", branch=branch, sha=sha)
+            self._record(spec.action, branch=branch, sha=sha)
 
-        await guarded_write(
-            self._audit,
-            dry_run=self.dry_run,
-            action="push_branch",
-            payload={"branch": short(branch), "sha": short(sha)},
-            check=lambda: check_push(branch, sha, self.base_branch),
-            perform=perform,
-            dry_result=None,
-        )
+        await self._guard().run(spec, perform)

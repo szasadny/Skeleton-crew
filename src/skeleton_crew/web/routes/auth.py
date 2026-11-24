@@ -1,24 +1,16 @@
-import asyncio
 import math
 
 from fastapi import APIRouter, Request
 from fastapi.responses import Response
+from starlette.status import HTTP_401_UNAUTHORIZED, HTTP_429_TOO_MANY_REQUESTS
 
-from skeleton_crew.core.audit import AuditEntry, AuditKind, AuditOutcome
-from skeleton_crew.core.security import MAX_PASSWORD_CHARS, verify_password
-from skeleton_crew.store import audit_store
+from skeleton_crew.services.login_service import LoginOutcome
+from skeleton_crew.web.forms import form_value
 from skeleton_crew.web.rendering import redirect, render
 from skeleton_crew.web.security import LOGIN_PATH, client_ip, is_authenticated, log_in, log_out
-from skeleton_crew.web.state import get_state
+from skeleton_crew.web.state import SessionDep, get_state
 
 router = APIRouter()
-
-
-async def _audit(request: Request, outcome: AuditOutcome, summary: str, client: str) -> None:
-    async with get_state(request).sessionmaker() as session:
-        entry = AuditEntry(AuditKind.LOGIN, outcome, summary, {"client": client})
-        await audit_store.record(session, entry)
-        await session.commit()
 
 
 @router.get(LOGIN_PATH)
@@ -29,29 +21,15 @@ async def login_page(request: Request) -> Response:
 
 
 @router.post(LOGIN_PATH)
-async def login(request: Request) -> Response:
-    state = get_state(request)
-    client = client_ip(request)
-    wait_s = state.throttle.retry_after(client)
-    if wait_s > 0:
-        await _audit(request, AuditOutcome.BLOCKED, "login throttled", client)
-        error = f"Too many failed attempts. Try again in {math.ceil(wait_s)} s."
-        return render(request, "login.html", {"error": error}, 429)
-    password = (await request.form()).get("password")
-    valid = (
-        isinstance(password, str)
-        and len(password) <= MAX_PASSWORD_CHARS
-        and await asyncio.to_thread(
-            verify_password, state.config.ui_password_hash.get_secret_value(), password
-        )
-    )
-    if not valid:
-        state.throttle.failed(client)
-        await _audit(request, AuditOutcome.BLOCKED, "login failed", client)
-        return render(request, "login.html", {"error": "Wrong password."}, 401)
-    state.throttle.succeeded(client)
+async def login(request: Request, session: SessionDep) -> Response:
+    password = form_value(await request.form(), "password")
+    result = await get_state(request).logins.attempt(session, client_ip(request), password)
+    if result.outcome is LoginOutcome.THROTTLED:
+        alert = f"Too many failed attempts. Try again in {math.ceil(result.retry_after_s)} s."
+        return render(request, "login.html", {"alerts": [alert]}, HTTP_429_TOO_MANY_REQUESTS)
+    if result.outcome is LoginOutcome.FAILED:
+        return render(request, "login.html", {"alerts": ["Wrong password."]}, HTTP_401_UNAUTHORIZED)
     log_in(request)
-    await _audit(request, AuditOutcome.ALLOWED, "login succeeded", client)
     return redirect("/")
 
 

@@ -7,11 +7,12 @@ import respx
 from githubkit import AppAuthStrategy, GitHub
 from githubkit.auth.app import AppAuth
 
-from skeleton_crew.github.gateway import (
+from skeleton_crew.github._auth import (
     API_TOKEN_PERMISSIONS,
     RepoTokenProvider,
     make_github_client,
 )
+from skeleton_crew.github.gateway import connect_github
 
 API = "https://api.github.com"
 FAKE_KEY = "not-a-real-key"
@@ -46,6 +47,23 @@ async def test_make_github_client_resolves_installation_with_app_jwt() -> None:
     body = json.loads(mint.calls[0].request.content)
     assert body == {"repositories": ["r"], "permissions": {"contents": "write"}}
     assert mint.calls[0].request.headers["authorization"] == "Bearer app-jwt"
+
+
+@respx.mock
+async def test_connect_github_gives_an_https_remote_with_a_fresh_git_token() -> None:
+    respx.post(f"{API}/app/installations/77/access_tokens").mock(
+        return_value=_token_response("git-token-1", datetime.now(UTC) + timedelta(hours=1))
+    )
+
+    _, remote_factory = await connect_github(1, FAKE_KEY, 77, "o/r")
+    remote = await remote_factory()
+
+    assert (remote.url, remote.protocol, remote.token) == (
+        "https://github.com/o/r.git",
+        "https",
+        "git-token-1",
+    )
+    assert "git-token-1" not in repr(remote)
 
 
 @respx.mock(assert_all_mocked=True)

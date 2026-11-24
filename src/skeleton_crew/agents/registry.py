@@ -24,10 +24,6 @@ _BACKENDS: Mapping[str, BackendSpec] = {
 }
 
 
-class UnknownBackendError(ValueError):
-    pass
-
-
 def available_backends() -> tuple[BackendSpec, ...]:
     return tuple(_BACKENDS.values())
 
@@ -36,7 +32,7 @@ def spec_for(name: str) -> BackendSpec:
     try:
         return _BACKENDS[name]
     except KeyError:
-        raise UnknownBackendError(f"unknown agent backend: {name}") from None
+        raise ValueError(f"unknown agent backend: {name}") from None
 
 
 def option_problems(spec: BackendSpec, options: Mapping[str, str]) -> dict[str, list[str]]:
@@ -65,16 +61,14 @@ def allowed_models(spec: BackendSpec, options: Mapping[str, str]) -> tuple[str, 
 def _model_problem(spec: BackendSpec, model: str, options: Mapping[str, str]) -> str | None:
     if model not in spec.models:
         return f"not a {spec.display_name} model"
-    if spec.model_filter is None or option_problems(spec, options):
+    if model in allowed_models(spec, options):
         return None
     resolved = resolved_options(spec, options)
-    if spec.model_filter(model, resolved):
-        return None
     shown = ", ".join(f"{key}={value}" for key, value in sorted(resolved.items()))
     return f"not a {spec.display_name} model for {shown}"
 
 
-def field_problems(settings: AppSettings) -> dict[str, list[str]]:
+def _role_problems(settings: AppSettings) -> dict[str, list[str]]:
     errors: dict[str, list[str]] = {}
     for role, agent in settings.agents.items():
         prefix = f"agents.{role}"
@@ -89,13 +83,26 @@ def field_problems(settings: AppSettings) -> dict[str, list[str]]:
             errors[f"{prefix}.effort"] = [f"not a {spec.display_name} effort"]
         if agent.web_tools and not spec.web_tools:
             errors[f"{prefix}.web_tools"] = [f"{spec.display_name} has no web tools"]
+    return errors
+
+
+def _backend_option_problems(settings: AppSettings) -> dict[str, list[str]]:
+    errors: dict[str, list[str]] = {}
     for name, options in settings.backend_options.items():
         spec = _BACKENDS.get(name)
         if spec is None:
             errors[f"backend_options.{name}"] = [f"unknown agent backend {name}"]
         else:
             errors |= option_problems(spec, options)
-    return errors | _routed_effort_problems(settings)
+    return errors
+
+
+def field_problems(settings: AppSettings) -> dict[str, list[str]]:
+    return (
+        _role_problems(settings)
+        | _backend_option_problems(settings)
+        | _routed_effort_problems(settings)
+    )
 
 
 def _routed_effort_problems(settings: AppSettings) -> dict[str, list[str]]:

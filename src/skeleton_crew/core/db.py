@@ -35,7 +35,7 @@ def make_sessionmaker(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
     return async_sessionmaker(engine, expire_on_commit=False)
 
 
-def _alembic_config(connection: Connection) -> Config:
+def alembic_config(connection: Connection) -> Config:
     config = Config()
     config.set_main_option("script_location", str(files("skeleton_crew") / "migrations"))
     config.attributes["connection"] = connection
@@ -43,7 +43,7 @@ def _alembic_config(connection: Connection) -> Config:
 
 
 def _upgrade_head(connection: Connection) -> None:
-    command.upgrade(_alembic_config(connection), "head")
+    command.upgrade(alembic_config(connection), "head")
 
 
 async def run_migrations(engine: AsyncEngine) -> None:

@@ -12,7 +12,7 @@ from skeleton_crew.pipeline.job_engine import Skip, run_job
 from skeleton_crew.pipeline.run_setup import OpenPr
 from skeleton_crew.pipeline.task_record import WorkerTaskRecord
 from skeleton_crew.pipeline.worker_job import GitState, WorkerJob
-from skeleton_crew.runtime.workspace import task_paths
+from skeleton_crew.runtime.task_dirs import task_paths
 from skeleton_crew.store import runs_store
 
 MERGEABLE_POLLS = 3

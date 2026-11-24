@@ -1,18 +1,12 @@
 import asyncio
 from pathlib import Path
 
-from fake_control import FakeRunControl, FakeRunnerControl
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from web_helpers import make_config
+from web_helpers import make_app, make_config
 
 from skeleton_crew.domain.settings import AppSettings, Schedule, Weekday
 from skeleton_crew.scheduler.scheduler import RunScheduler
 from skeleton_crew.store.settings_store import save_settings
-from skeleton_crew.web.app import create_app
-
-
-async def _noop() -> None:
-    return None
 
 
 async def test_lifespan_starts_scheduler_from_stored_settings_and_stops_it(
@@ -23,14 +17,8 @@ async def test_lifespan_starts_scheduler_from_stored_settings_and_stops_it(
             session, AppSettings(schedule=Schedule(weekdays=frozenset({Weekday.WED})))
         )
         await session.commit()
-    scheduler = RunScheduler(_noop)
-    app = create_app(
-        config=make_config(tmp_path),
-        sessionmaker=sessionmaker,
-        controller=FakeRunControl(),
-        scheduler=scheduler,
-        runners=FakeRunnerControl(),
-    )
+    app = make_app(make_config(tmp_path), sessionmaker)
+    scheduler: RunScheduler = app.state.web.scheduler
     async with app.router.lifespan_context(app):
         assert scheduler.running
         next_run = scheduler.next_run_time()
@@ -41,12 +29,6 @@ async def test_lifespan_starts_scheduler_from_stored_settings_and_stops_it(
 
 
 def test_api_docs_are_disabled(tmp_path: Path) -> None:
-    app = create_app(
-        config=make_config(tmp_path),
-        sessionmaker=async_sessionmaker(),
-        controller=FakeRunControl(),
-        scheduler=RunScheduler(_noop),
-        runners=FakeRunnerControl(),
-    )
+    app = make_app(make_config(tmp_path), async_sessionmaker())
     assert app.openapi_url is None
     assert app.docs_url is None

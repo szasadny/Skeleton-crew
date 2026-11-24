@@ -1,78 +1,58 @@
-from fastapi import APIRouter, HTTPException, Request
+from functools import partial
+
+from fastapi import APIRouter, Request
 from fastapi.responses import Response
 
-from skeleton_crew.agents.rules import default_rules
-from skeleton_crew.domain.settings import MAX_RULES_CHARS, RULE_KEYS, InvalidRules, check_rule_key
-from skeleton_crew.store import rules_store
-from skeleton_crew.web.rendering import redirect, render
-from skeleton_crew.web.state import get_state
+from skeleton_crew.domain.settings import MAX_RULES_CHARS, RULE_KEYS
+from skeleton_crew.services import rules_service
+from skeleton_crew.web.errors import Errors, on_invalid
+from skeleton_crew.web.forms import form_value
+from skeleton_crew.web.rendering import Message, redirect, render
+from skeleton_crew.web.state import SessionDep
 
 router = APIRouter()
 
-HISTORY_LIMIT = 20
 
-
-def _check_key(key: str) -> None:
-    try:
-        check_rule_key(key)
-    except ValueError:
-        raise HTTPException(status_code=404) from None
-
-
-async def _render_editor(
-    request: Request, key: str, content: str | None = None, error: str | None = None
+async def _editor_page(
+    request: Request,
+    key: str,
+    content: str | None,
+    session: SessionDep,
+    errors: Errors,
 ) -> Response:
-    async with get_state(request).sessionmaker() as session:
-        active = await rules_store.active_rules(session, key)
-        history = await rules_store.rule_history(session, key, HISTORY_LIMIT)
+    editor = await rules_service.editor(session, key)
     context = {
         "keys": RULE_KEYS,
         "key": key,
-        "content": content if content is not None else active or default_rules(key),
-        "is_default": active is None,
-        "history": history,
-        "error": error,
+        "content": editor.content if content is None else content,
+        "is_default": editor.is_default,
+        "history": editor.history,
+        "errors": errors,
         "max_chars": MAX_RULES_CHARS,
     }
-    return render(request, "rules.html", context, 422 if error else 200)
+    return render(request, "rules.html", context)
 
 
 @router.get("/rules/{key}")
-async def editor(request: Request, key: str) -> Response:
-    _check_key(key)
-    return await _render_editor(request, key)
-
-
-async def _save(request: Request, key: str, content: str) -> None:
-    async with get_state(request).sessionmaker() as session:
-        await rules_store.save_rules(session, key, content)
-        await session.commit()
+async def editor(request: Request, key: str, session: SessionDep) -> Response:
+    return await _editor_page(request, key, None, session, {})
 
 
 @router.post("/rules/{key}")
-async def save(request: Request, key: str) -> Response:
-    _check_key(key)
-    raw = (await request.form()).get("content")
-    content = raw.replace("\r\n", "\n") if isinstance(raw, str) else ""
-    try:
-        await _save(request, key, content)
-    except InvalidRules as error:
-        return await _render_editor(request, key, content, str(error))
-    return redirect(f"/rules/{key}", "saved")
+async def save(request: Request, key: str, session: SessionDep) -> Response:
+    content = form_value(await request.form(), "content").replace("\r\n", "\n")
+    on_invalid(request, partial(_editor_page, request, key, content))
+    await rules_service.save_rules(session, key, content)
+    return redirect(f"/rules/{key}", Message.SAVED)
 
 
 @router.post("/rules/{key}/reset")
-async def reset(request: Request, key: str) -> Response:
-    _check_key(key)
-    await _save(request, key, default_rules(key))
-    return redirect(f"/rules/{key}", "rules_reset")
+async def reset(key: str, session: SessionDep) -> Response:
+    await rules_service.reset_rules(session, key)
+    return redirect(f"/rules/{key}", Message.RULES_RESET)
 
 
 @router.get("/rules/{key}/revisions/{revision_id}")
-async def revision(request: Request, key: str, revision_id: int) -> Response:
-    _check_key(key)
-    async with get_state(request).sessionmaker() as session:
-        match = await rules_store.get_revision(session, key, revision_id)
-    if match is None:
-        raise HTTPException(status_code=404)
-    return render(request, "rule_revision.html", {"keys": RULE_KEYS, "key": key, "revision": match})
+async def revision(request: Request, key: str, revision_id: int, session: SessionDep) -> Response:
+    shown = await rules_service.revision(session, key, revision_id)
+    return render(request, "rule_revision.html", {"keys": RULE_KEYS, "key": key, "revision": shown})

@@ -27,14 +27,14 @@ from skeleton_crew.pipeline.runner_pool import (
     runner_spec,
 )
 from skeleton_crew.runtime.containers import (
-    AgentContainerSpec,
     ContainerHandle,
+    ContainerSpec,
     ContainerStartError,
     ExecResult,
 )
 from skeleton_crew.store import runs_store
 
-NOT_BUSY = ExecResult(1, None, b"", b"", timed_out=False)
+NOT_BUSY = ExecResult(1, b"", b"", timed_out=False)
 
 
 class Clock:
@@ -89,7 +89,7 @@ def register(harness: Harness, runner: str) -> Path:
     return directory
 
 
-def runner_starts(harness: Harness) -> list[AgentContainerSpec]:
+def runner_starts(harness: Harness) -> list[ContainerSpec]:
     return [s for s in harness.runtime.started if s.image == harness.config.runner_image]
 
 
@@ -137,7 +137,7 @@ async def test_no_proxy_hosts_reach_the_runner(harness: Harness, pool: RunnerPoo
 
 async def test_a_github_token_in_the_runner_env_is_refused(harness: Harness) -> None:
     spec = runner_spec(harness.deps(), harness.settings, "runner-1")
-    leaky = AgentContainerSpec(**{**vars(spec), "env": {**spec.env, "GH_TOKEN": "ghs_x"}})
+    leaky = ContainerSpec(**{**vars(spec), "env": {**spec.env, "GH_TOKEN": "ghs_x"}})
 
     with pytest.raises(PolicyViolation):
         await harness.runtime.start(leaky)
@@ -253,7 +253,7 @@ async def test_crash_loop_backs_off(harness: Harness, pool: RunnerPool, clock: C
 async def test_start_failure_backs_off(harness: Harness, pool: RunnerPool) -> None:
     register(harness, "runner-1")
 
-    async def refuse(spec: AgentContainerSpec) -> ContainerHandle:
+    async def refuse(spec: ContainerSpec) -> ContainerHandle:
         raise ContainerStartError("container skeleton-crew-runner-1 stopped during startup")
 
     harness.runtime.start = refuse  # type: ignore[method-assign]

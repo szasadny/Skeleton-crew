@@ -2,6 +2,8 @@ import asyncio
 import json
 from collections.abc import Awaitable, Callable, Sequence
 
+from skeleton_crew.runtime.containers import error_tail
+
 GITLEAKS_ARGV = (
     "gitleaks",
     "stdin",
@@ -65,8 +67,7 @@ async def scan_patch(patch: bytes, *, runner: Runner = _run) -> list[str]:
     except TimeoutError as exc:
         raise SecretScanError("gitleaks timed out") from exc
     if exit_code != 0:
-        detail = stderr.decode(errors="replace").strip()[-300:]
-        raise SecretScanError(f"gitleaks failed ({exit_code}): {detail}")
+        raise SecretScanError(f"gitleaks failed ({exit_code}): {error_tail(stderr)}")
     try:
         findings = json.loads(stdout)
     except json.JSONDecodeError as exc:

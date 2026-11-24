@@ -1,11 +1,9 @@
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import Mapping
 from datetime import time
-from pathlib import Path
 from typing import Any
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from web_helpers import TOKEN_SECRET, Web, open_web
+from web_helpers import TOKEN_SECRET, Web
 
 from skeleton_crew.agents.registry import available_backends
 from skeleton_crew.core.audit import AuditKind
@@ -16,14 +14,7 @@ from skeleton_crew.domain.settings import (
     Role,
     Weekday,
 )
-from skeleton_crew.store import audit_store
-
-
-@pytest.fixture
-async def web(tmp_path: Path, sessionmaker: async_sessionmaker[AsyncSession]) -> AsyncIterator[Web]:
-    async with open_web(tmp_path, sessionmaker) as harness:
-        await harness.login()
-        yield harness
+from skeleton_crew.web.security import CSRF_FIELD
 
 
 def _limits_form(**overrides: Any) -> dict[str, str]:
@@ -146,9 +137,8 @@ async def test_limits_round_trip_and_audit(web: Web) -> None:
     assert (limits.issues_per_day, limits.max_budget_usd_per_session) == (7, 12.5)
     await _post(web, "/limits", _limits_form(issues_per_day=7))
     assert (await web.settings()).limits.max_budget_usd_per_session is None
-    async with web.sessionmaker() as session:
-        events = await audit_store.list_events(session, 10, 0, AuditKind.SETTINGS_CHANGED)
-    assert events[0].summary == "settings changed: limits"
+    events = await web.audit(AuditKind.SETTINGS_CHANGED)
+    assert [event.summary for event in events] == ["settings changed: limits"] * 2
 
 
 async def test_limits_validation_error(web: Web) -> None:
@@ -322,7 +312,7 @@ async def test_agents_draft_follows_the_chosen_backend_without_saving(web: Web) 
 
 async def test_agents_draft_never_writes_even_with_a_valid_csrf_token(web: Web) -> None:
     token = await web.csrf("/agents")
-    form = _agents_form(**{"agents.worker.backend": "codex", "csrf_token": token})
+    form = _agents_form(**{"agents.worker.backend": "codex", CSRF_FIELD: token})
     assert (await web.client.get("/agents/draft", params=form)).status_code == 200
     assert await web.settings() == AppSettings()
 
@@ -365,6 +355,25 @@ async def test_repo_model_level_error_is_shown_at_the_top(web: Web) -> None:
     status, html = await _post(web, "/repo", _repo_form(**{"labels.hitl": "Skeleton"}))
     assert status == 422
     assert '<div class="alert"><p>label names must be distinct</p></div>' in html
+
+
+async def test_invalid_form_rerenders_as_html_with_the_field_error_beside_its_field(
+    web: Web,
+) -> None:
+    response = await web.post("/limits", _limits_form(issues_per_day=999))
+    assert response.status_code == 422
+    assert response.headers["content-type"].startswith("text/html")
+    field = response.text.index('name="limits.issues_per_day"')
+    error = response.text.index('<p class="field-error">Input should be less than or equal to 100')
+    assert field < error < response.text.index('name="limits.refines_per_day"')
+
+
+async def test_agents_registry_problem_shows_beside_its_field(web: Web) -> None:
+    status, html = await _post(web, "/agents", _agents_form(**{"agents.worker.backend": "evil"}))
+    assert status == 422
+    error = html.index('<p class="field-error">unknown agent backend evil</p>')
+    assert html.index('id="agents.worker.backend"') < error < html.index('id="agents.worker.model"')
+    assert '<div class="alert">' not in html
 
 
 _EMPTY_NOTICE = '<p class="notice" role="status"></p>'

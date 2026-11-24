@@ -1,21 +1,16 @@
-import asyncio
-from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
 from pathlib import Path
-from typing import Any, Literal, Protocol, cast
+from typing import Any, Literal, Protocol, Self
 from urllib.parse import quote
 
-from githubkit import AppAuthStrategy, AppInstallationAuthStrategy, GitHub, Response
+from githubkit import GitHub
 from githubkit.exception import RequestFailed
-from githubkit_schemas.latest.types import AppPermissionsType
 
 from skeleton_crew.core.audit import AuditSink
-from skeleton_crew.core.clock import utc_now
 from skeleton_crew.core.config import GITHUB_URL
 from skeleton_crew.domain.branch_policy import (
-    check_issue_number,
     check_push_target,
     is_skeleton_branch,
     issue_number_from_branch,
@@ -28,43 +23,52 @@ from skeleton_crew.domain.ci_policy import (
     evaluate_ci,
     format_job_logs,
 )
-from skeleton_crew.domain.label_policy import LabelChange, check_label_change
-from skeleton_crew.domain.repo_policy import REQUIRED_PERMISSIONS
-from skeleton_crew.domain.settings import LabelNames
+from skeleton_crew.domain.label_policy import LabelChange
+from skeleton_crew.domain.settings import AppSettings, LabelNames
 from skeleton_crew.domain.text_policy import truncate_text
 from skeleton_crew.domain.trust_policy import ContentEdit, IssueComment, LabelEvent
-from skeleton_crew.domain.write_policy import (
-    check_new_issue,
-    check_open_pr,
-    check_push,
-    check_sha,
-    short,
-)
+from skeleton_crew.domain.write_policy import check_sha
+from skeleton_crew.github._auth import make_github_client
 from skeleton_crew.github._git import (
     REMOTE_PROTOCOL,
+    GitRemote,
     git_branch_head,
     git_clone,
     git_fetch,
     git_push,
 )
-from skeleton_crew.github.write_guard import guarded_write, label_payload
+from skeleton_crew.github._parse import (
+    EDITS_QUERY,
+    PER_PAGE,
+    Extract,
+    body_edit,
+    branch_rule,
+    issue_comment,
+    json_list,
+    key_list,
+    label_event,
+    rename_edit,
+)
+from skeleton_crew.github.write_guard import (
+    WriteGuard,
+    comment_spec,
+    label_spec,
+    new_issue_labels,
+    new_issue_spec,
+    open_pr_spec,
+    push_spec,
+    review_check_spec,
+)
 
-TOKEN_REFRESH_MARGIN = timedelta(minutes=5)
-_PER_PAGE = 100
 _ACTIVE_RUN_STATUSES: tuple[Literal["queued", "in_progress"], ...] = ("queued", "in_progress")
 LOGS_UNAVAILABLE = "(logs unavailable)"
-_EDITS_QUERY = """
-query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
-  repository(owner: $owner, name: $name) {
-    issue(number: $number) {
-      userContentEdits(first: 100, after: $cursor) {
-        nodes { editedAt editor { login } }
-        pageInfo { hasNextPage endCursor }
-      }
-    }
-  }
+_REVIEW_CHECK_RUNS: dict[ReviewCheck, tuple[str, str | None, str]] = {
+    ReviewCheck.PENDING: ("in_progress", None, "Waiting for review"),
+    ReviewCheck.PASSED: ("completed", "success", "Review passed"),
+    ReviewCheck.CHANGES_REQUESTED: ("completed", "failure", "Changes requested"),
 }
-"""
+
+type RemoteFactory = Callable[[], Awaitable[GitRemote]]
 
 
 @dataclass(frozen=True)
@@ -73,8 +77,14 @@ class IssueRef:
     title: str
     body: str
     labels: frozenset[str]
-    author: str
-    url: str
+
+    @classmethod
+    def from_api(cls, raw: Mapping[str, Any]) -> Self:
+        labels = frozenset(
+            str(label["name"]) if isinstance(label, Mapping) else str(label)
+            for label in raw.get("labels") or []
+        )
+        return cls(int(raw["number"]), str(raw["title"]), str(raw.get("body") or ""), labels)
 
 
 @dataclass(frozen=True)
@@ -89,26 +99,54 @@ class PullRef:
     number: int
     head_ref: str
     head_sha: str
-    url: str
+
+    @classmethod
+    def from_api(cls, raw: Mapping[str, Any]) -> Self:
+        return cls(int(raw["number"]), str(raw["head"]["ref"]), str(raw["head"]["sha"]))
+
+
+@dataclass(frozen=True)
+class GatewayConfig:
+    repo: str
+    labels: LabelNames
+    base_branch: str
+    dry_run: bool
+    max_comment_chars: int
+
+    @classmethod
+    def from_settings(cls, repo: str, settings: AppSettings) -> Self:
+        return cls(
+            repo=repo,
+            labels=settings.labels,
+            base_branch=settings.repo.base_branch,
+            dry_run=settings.dry_run,
+            max_comment_chars=settings.limits.max_comment_chars,
+        )
 
 
 class RulesUnavailable(Exception):
     pass
 
 
-# Read-only contents: GitHub then rejects any attempt to land a PR with the API token.
-API_TOKEN_PERMISSIONS = cast(AppPermissionsType, {**REQUIRED_PERMISSIONS, "contents": "read"})
-
-
 def github_remote_url(repo: str) -> str:
     return f"{GITHUB_URL}/{repo}.git"
+
+
+async def connect_github(
+    app_id: int, private_key: str, installation_id: int | None, repo: str
+) -> tuple[GitHub[Any], RemoteFactory]:
+    client, token_provider = await make_github_client(app_id, private_key, installation_id, repo)
+    url = github_remote_url(repo)
+
+    async def remote() -> GitRemote:
+        return GitRemote(url, REMOTE_PROTOCOL, await token_provider())
+
+    return client, remote
 
 
 class Gateway(Protocol):
     @property
     def labels(self) -> LabelNames: ...
-    @property
-    def base_branch(self) -> str: ...
     @property
     def dry_run(self) -> bool: ...
 
@@ -138,169 +176,82 @@ class Gateway(Protocol):
     ) -> None: ...
 
 
-def _json_list(resp: Response[Any, Any]) -> list[Any]:
-    data = resp.json()
-    if not isinstance(data, list):
-        raise TypeError("expected a JSON list")
-    return data
-
-
-def _key_list(key: str) -> Callable[[Response[Any, Any]], list[Any]]:
-    def extract(resp: Response[Any, Any]) -> list[Any]:
-        data = resp.json().get(key)
-        if not isinstance(data, list):
-            raise TypeError(f"expected a JSON list in {key!r}")
-        return data
-
-    return extract
-
-
-def _login(user: Any) -> str:
-    if isinstance(user, Mapping) and isinstance(user.get("login"), str):
-        return str(user["login"])
-    return ""
-
-
-def _ts(value: str) -> datetime:
-    return datetime.fromisoformat(value)
-
-
-def _issue_ref(raw: Mapping[str, Any]) -> IssueRef:
-    labels = frozenset(
-        str(label["name"]) if isinstance(label, Mapping) else str(label)
-        for label in raw.get("labels") or []
-    )
-    return IssueRef(
-        number=int(raw["number"]),
-        title=str(raw["title"]),
-        body=str(raw.get("body") or ""),
-        labels=labels,
-        author=_login(raw.get("user")),
-        url=str(raw["html_url"]),
-    )
-
-
-def _pull_ref(raw: Mapping[str, Any]) -> PullRef:
-    return PullRef(
-        number=int(raw["number"]),
-        head_ref=str(raw["head"]["ref"]),
-        head_sha=str(raw["head"]["sha"]),
-        url=str(raw["html_url"]),
-    )
-
-
 class GitHubGateway:
     def __init__(
         self,
-        *,
         client: GitHub[Any],
-        repo: str,
-        labels: LabelNames,
-        base_branch: str,
-        dry_run: bool,
+        config: GatewayConfig,
         audit: AuditSink,
-        max_comment_chars: int,
-        token_provider: Callable[[], Awaitable[str]],
-        remote_url: Callable[[str], str] = github_remote_url,
-        remote_protocol: str = REMOTE_PROTOCOL,
+        remote_factory: RemoteFactory,
     ) -> None:
         self._client = client
-        self._repo = repo
-        self._owner, self._name = repo.split("/", 1)
-        self._labels = labels
-        self._base_branch = base_branch
-        self._dry_run = dry_run
-        self._audit = audit
-        self._max_comment_chars = max_comment_chars
-        self._token_provider = token_provider
-        self._remote_url = remote_url
-        self._remote_protocol = remote_protocol
+        self._config = config
+        self._owner, self._name = config.repo.split("/", 1)
+        self._guard = WriteGuard(audit, dry_run=config.dry_run)
+        self._remote = remote_factory
         self._permissions: dict[str, str] = {}
 
     @property
     def labels(self) -> LabelNames:
-        return self._labels
-
-    @property
-    def base_branch(self) -> str:
-        return self._base_branch
+        return self._config.labels
 
     @property
     def dry_run(self) -> bool:
-        return self._dry_run
+        return self._config.dry_run
+
+    def _pages(
+        self,
+        request: Callable[..., Awaitable[Any]],
+        *args: object,
+        extract: Extract = json_list,
+        **params: object,
+    ) -> AsyncIterator[Any]:
+        rest = self._client.rest
+        return rest.paginate(
+            request, extract, self._owner, self._name, *args, per_page=PER_PAGE, **params
+        )
+
+    def _capped(self, text: str) -> str:
+        return truncate_text(text, self._config.max_comment_chars)
 
     async def list_open_issues(self, label: str) -> list[IssueRef]:
         rest = self._client.rest
-        pages = rest.paginate(
-            rest.issues.async_list_for_repo,
-            _json_list,
-            self._owner,
-            self._name,
-            state="open",
-            labels=label,
-            per_page=_PER_PAGE,
-        )
-        return [_issue_ref(raw) async for raw in pages if raw.get("pull_request") is None]
+        issues = self._pages(rest.issues.async_list_for_repo, state="open", labels=label)
+        return [IssueRef.from_api(raw) async for raw in issues if raw.get("pull_request") is None]
 
     async def trust_data(self, issue_number: int) -> TrustData:
         rest = self._client.rest
         label_events: list[LabelEvent] = []
         edits: list[ContentEdit] = []
-        timeline = rest.paginate(
-            rest.issues.async_list_events_for_timeline,
-            _json_list,
-            self._owner,
-            self._name,
-            issue_number,
-            per_page=_PER_PAGE,
-        )
-        async for event in timeline:
+        async for event in self._pages(rest.issues.async_list_events_for_timeline, issue_number):
             kind = event.get("event")
             if kind in ("labeled", "unlabeled"):
-                label_events.append(
-                    LabelEvent(
-                        label=str(event["label"]["name"]),
-                        actor=_login(event.get("actor")),
-                        at=_ts(event["created_at"]),
-                        added=kind == "labeled",
-                    )
-                )
+                label_events.append(label_event(event))
             elif kind == "renamed":
-                edits.append(ContentEdit(_login(event.get("actor")), _ts(event["created_at"])))
+                edits.append(rename_edit(event))
         edits.extend(await self._body_edits(issue_number))
-        comments = rest.paginate(
-            rest.issues.async_list_comments,
-            _json_list,
-            self._owner,
-            self._name,
-            issue_number,
-            per_page=_PER_PAGE,
-        )
-        issue_comments = [
-            IssueComment(_login(c.get("user")), str(c.get("body") or ""), _ts(c["created_at"]))
-            async for c in comments
-        ]
-        return TrustData(label_events, edits, issue_comments)
+        comments = self._pages(rest.issues.async_list_comments, issue_number)
+        return TrustData(label_events, edits, [issue_comment(c) async for c in comments])
 
     async def _body_edits(self, issue_number: int) -> list[ContentEdit]:
         edits: list[ContentEdit] = []
         cursor: str | None = None
         while True:
             data = await self._client.async_graphql(
-                _EDITS_QUERY,
+                EDITS_QUERY,
                 {
                     "owner": self._owner,
                     "name": self._name,
                     "number": issue_number,
                     "cursor": cursor,
+                    "first": PER_PAGE,
                 },
             )
             issue = data["repository"]["issue"]
             if issue is None:
                 raise LookupError(f"issue #{issue_number} not found")
             page = issue["userContentEdits"]
-            for node in page["nodes"]:
-                edits.append(ContentEdit(_login(node.get("editor")), _ts(node["editedAt"])))
+            edits.extend(body_edit(node) for node in page["nodes"])
             if not page["pageInfo"]["hasNextPage"]:
                 return edits
             cursor = page["pageInfo"]["endCursor"]
@@ -315,17 +266,8 @@ class GitHubGateway:
         return self._permissions[key]
 
     async def open_skeleton_prs(self) -> dict[int, tuple[PullRef, ...]]:
-        rest = self._client.rest
-        pulls = rest.paginate(
-            rest.pulls.async_list,
-            _json_list,
-            self._owner,
-            self._name,
-            state="open",
-            per_page=_PER_PAGE,
-        )
         found: dict[int, tuple[PullRef, ...]] = {}
-        async for pr in pulls:
+        async for pr in self._pages(self._client.rest.pulls.async_list, state="open"):
             head_repo = (pr.get("head") or {}).get("repo") or {}
             base_repo = (pr.get("base") or {}).get("repo") or {}
             same_repo = head_repo.get("id") is not None and head_repo.get("id") == base_repo.get(
@@ -333,25 +275,18 @@ class GitHubGateway:
             )
             issue_number = issue_number_from_branch(pr["head"]["ref"])
             if same_repo and issue_number is not None:
-                found[issue_number] = (*found.get(issue_number, ()), _pull_ref(pr))
+                found[issue_number] = (*found.get(issue_number, ()), PullRef.from_api(pr))
         return found
 
     async def closed_unmerged_pr_for(self, branch: str) -> PullRef | None:
-        check_push_target(branch, self._base_branch)
-        rest = self._client.rest
-        pulls = rest.paginate(
-            rest.pulls.async_list,
-            _json_list,
-            self._owner,
-            self._name,
-            state="all",
-            head=f"{self._owner}:{branch}",
-            per_page=_PER_PAGE,
+        check_push_target(branch, self._config.base_branch)
+        pulls = self._pages(
+            self._client.rest.pulls.async_list, state="all", head=f"{self._owner}:{branch}"
         )
         async for pr in pulls:
             ended = pr.get("state") != "open" and pr.get("merged_at") is None
             if ended and pr["head"]["ref"] == branch:
-                return _pull_ref(pr)
+                return PullRef.from_api(pr)
         return None
 
     async def pr_mergeable(self, number: int) -> bool | None:
@@ -362,29 +297,14 @@ class GitHubGateway:
     async def ci_status(self, sha: str, required: Collection[str] = ()) -> CiStatus:
         check_sha(sha)
         rest = self._client.rest
-        runs = rest.paginate(
-            rest.checks.async_list_for_ref,
-            _key_list("check_runs"),
-            self._owner,
-            self._name,
-            sha,
-            per_page=_PER_PAGE,
+        runs = self._pages(rest.checks.async_list_for_ref, sha, extract=key_list("check_runs"))
+        statuses = self._pages(
+            rest.repos.async_get_combined_status_for_ref, sha, extract=key_list("statuses")
         )
-        statuses = rest.paginate(
-            rest.repos.async_get_combined_status_for_ref,
-            _key_list("statuses"),
-            self._owner,
-            self._name,
-            sha,
-            per_page=_PER_PAGE,
-        )
-        workflows = rest.paginate(
+        workflows = self._pages(
             rest.actions.async_list_workflow_runs_for_repo,
-            _key_list("workflow_runs"),
-            self._owner,
-            self._name,
+            extract=key_list("workflow_runs"),
             head_sha=sha,
-            per_page=_PER_PAGE,
         )
         return evaluate_ci(
             [r async for r in runs],
@@ -408,15 +328,11 @@ class GitHubGateway:
         return format_job_logs(logs, max_chars)
 
     async def skeleton_ci_active(self) -> bool:
-        rest = self._client.rest
         for status in _ACTIVE_RUN_STATUSES:
-            runs = rest.paginate(
-                rest.actions.async_list_workflow_runs_for_repo,
-                _key_list("workflow_runs"),
-                self._owner,
-                self._name,
+            runs = self._pages(
+                self._client.rest.actions.async_list_workflow_runs_for_repo,
+                extract=key_list("workflow_runs"),
                 status=status,
-                per_page=_PER_PAGE,
             )
             async for run in runs:
                 if is_skeleton_branch(str(run.get("head_branch") or "")):
@@ -424,24 +340,9 @@ class GitHubGateway:
         return False
 
     async def branch_rules(self, branch: str) -> list[BranchRule]:
-        rest = self._client.rest
-        rules = rest.paginate(
-            rest.repos.async_get_branch_rules,
-            _json_list,
-            self._owner,
-            self._name,
-            branch,
-            per_page=_PER_PAGE,
-        )
+        rules = self._pages(self._client.rest.repos.async_get_branch_rules, branch)
         try:
-            return [
-                BranchRule(
-                    type=str(rule.get("type") or ""),
-                    ruleset_id=rule.get("ruleset_id"),
-                    parameters=rule.get("parameters") or {},
-                )
-                async for rule in rules
-            ]
+            return [branch_rule(rule) async for rule in rules]
         except RequestFailed as exc:
             # GitHub answers 403 when the plan has no rulesets (free private repos).
             if exc.response.status_code == HTTPStatus.FORBIDDEN:
@@ -476,218 +377,79 @@ class GitHubGateway:
                         self._owner, self._name, change.issue_number, quote(name, safe="")
                     )
                 except RequestFailed as exc:
-                    if exc.response.status_code != 404:
+                    if exc.response.status_code != HTTPStatus.NOT_FOUND:
                         raise
 
-        await guarded_write(
-            self._audit,
-            dry_run=self._dry_run,
-            action="change_labels",
-            payload=label_payload(change),
-            check=lambda: check_label_change(change, self._labels),
-            perform=perform,
-            dry_result=None,
-        )
+        await self._guard.run(label_spec(change, self._config.labels), perform)
 
     async def comment(self, issue_number: int, body: str) -> None:
-        capped = truncate_text(body, self._max_comment_chars)
+        capped = self._capped(body)
 
         async def perform() -> None:
             await self._client.rest.issues.async_create_comment(
                 self._owner, self._name, issue_number, body=capped
             )
 
-        await guarded_write(
-            self._audit,
-            dry_run=self._dry_run,
-            action="comment",
-            payload={"issue": issue_number, "body": short(capped)},
-            check=lambda: check_issue_number(issue_number),
-            perform=perform,
-            dry_result=None,
-        )
+        await self._guard.run(comment_spec(issue_number, capped), perform)
 
     async def create_hitl_issue(self, title: str, body: str) -> int | None:
-        capped = truncate_text(body, self._max_comment_chars)
-        labels = frozenset({self._labels.hitl})
+        capped = self._capped(body)
+        labels = self._config.labels
 
-        def check() -> None:
-            check_new_issue(title, self._labels)
-
-        async def perform() -> int | None:
+        async def perform() -> int:
             resp = await self._client.rest.issues.async_create(
-                self._owner, self._name, title=title, body=capped, labels=sorted(labels)
+                self._owner, self._name, title=title, body=capped, labels=new_issue_labels(labels)
             )
             return int(resp.json()["number"])
 
-        return await guarded_write(
-            self._audit,
-            dry_run=self._dry_run,
-            action="create_issue",
-            payload={"title": short(title), "body": short(capped), "labels": sorted(labels)},
-            check=check,
-            perform=perform,
-            dry_result=None,
-        )
+        return await self._guard.run(new_issue_spec(title, capped, labels), perform)
 
     async def open_pr(self, *, branch: str, title: str, body: str) -> PullRef | None:
-        async def perform() -> PullRef | None:
+        base_branch = self._config.base_branch
+
+        async def perform() -> PullRef:
             resp = await self._client.rest.pulls.async_create(
                 self._owner,
                 self._name,
                 title=title,
                 head=branch,
-                base=self._base_branch,
+                base=base_branch,
                 body=body,
                 draft=False,
             )
-            return _pull_ref(resp.json())
+            return PullRef.from_api(resp.json())
 
-        return await guarded_write(
-            self._audit,
-            dry_run=self._dry_run,
-            action="open_pr",
-            payload={"branch": short(branch), "title": short(title), "body": short(body)},
-            check=lambda: check_open_pr(branch, title, self._base_branch),
-            perform=perform,
-            dry_result=None,
-        )
+        return await self._guard.run(open_pr_spec(branch, title, body, base_branch), perform)
 
     async def set_review_check(self, *, sha: str, state: ReviewCheck, summary: str) -> None:
-        capped = truncate_text(summary, self._max_comment_chars)
+        capped = self._capped(summary)
 
         async def perform() -> None:
-            rest = self._client.rest.checks
-            if state is ReviewCheck.PENDING:
-                await rest.async_create(
-                    self._owner,
-                    self._name,
-                    name=REVIEW_CHECK_NAME,
-                    head_sha=sha,
-                    status="in_progress",
-                    output={"title": "Waiting for review", "summary": capped},
-                )
-                return
-            passed = state is ReviewCheck.PASSED
-            await rest.async_create(
-                self._owner,
-                self._name,
-                name=REVIEW_CHECK_NAME,
-                head_sha=sha,
-                status="completed",
-                conclusion="success" if passed else "failure",
-                output={
-                    "title": "Review passed" if passed else "Changes requested",
-                    "summary": capped,
-                },
-            )
+            status, conclusion, title = _REVIEW_CHECK_RUNS[state]
+            fields: dict[str, Any] = {"name": REVIEW_CHECK_NAME, "head_sha": sha, "status": status}
+            if conclusion is not None:
+                fields["conclusion"] = conclusion
+            fields["output"] = {"title": title, "summary": capped}
+            await self._client.rest.checks.async_create(self._owner, self._name, **fields)
 
-        await guarded_write(
-            self._audit,
-            dry_run=self._dry_run,
-            action="set_review_check",
-            payload={"sha": short(sha), "state": state.value, "summary": short(capped)},
-            check=lambda: check_sha(sha),
-            perform=perform,
-            dry_result=None,
-        )
+        await self._guard.run(review_check_spec(sha, state, capped), perform)
 
     async def clone(self, dest: Path) -> str:
-        token = await self._token_provider()
-        return await git_clone(
-            self._remote_url(self._repo),
-            dest,
-            self._base_branch,
-            token,
-            protocol=self._remote_protocol,
-        )
+        return await git_clone(await self._remote(), dest, self._config.base_branch)
 
     async def fetch_branch(self, repo_dir: Path, branch: str) -> str:
-        check_push_target(branch, self._base_branch)
-        token = await self._token_provider()
-        return await git_fetch(
-            repo_dir, self._remote_url(self._repo), branch, token, protocol=self._remote_protocol
-        )
+        check_push_target(branch, self._config.base_branch)
+        return await git_fetch(repo_dir, await self._remote(), branch)
 
     async def branch_head(self, branch: str) -> str | None:
-        check_push_target(branch, self._base_branch)
-        token = await self._token_provider()
-        return await git_branch_head(
-            self._remote_url(self._repo), branch, token, protocol=self._remote_protocol
-        )
+        check_push_target(branch, self._config.base_branch)
+        return await git_branch_head(await self._remote(), branch)
 
     async def push_branch(
         self, repo_dir: Path, branch: str, sha: str, expected_sha: str | None = None
     ) -> None:
         async def perform() -> None:
-            token = await self._token_provider()
-            url = self._remote_url(self._repo)
-            await git_push(
-                repo_dir, url, sha, branch, token, expected_sha, protocol=self._remote_protocol
-            )
+            await git_push(repo_dir, await self._remote(), sha, branch, expected_sha=expected_sha)
 
-        def check() -> None:
-            check_push(branch, sha, self._base_branch)
-            if expected_sha is not None:
-                check_sha(expected_sha)
-
-        payload = {"branch": short(branch), "sha": short(sha)}
-        await guarded_write(
-            self._audit,
-            dry_run=self._dry_run,
-            action="push_branch",
-            payload=payload if expected_sha is None else {**payload, "expected": expected_sha},
-            check=check,
-            perform=perform,
-            dry_result=None,
-        )
-
-
-class RepoTokenProvider:
-    def __init__(
-        self,
-        app_client: GitHub[Any],
-        installation_id: int,
-        repo_name: str,
-        clock: Callable[[], datetime] = utc_now,
-    ) -> None:
-        self._app_client = app_client
-        self._installation_id = installation_id
-        self._repo_name = repo_name
-        self._clock = clock
-        self._lock = asyncio.Lock()
-        self._token: str | None = None
-        self._expires_at = datetime.min.replace(tzinfo=UTC)
-
-    async def __call__(self) -> str:
-        async with self._lock:
-            if self._token is None or self._clock() >= self._expires_at - TOKEN_REFRESH_MARGIN:
-                resp = await self._app_client.rest.apps.async_create_installation_access_token(
-                    self._installation_id,
-                    repositories=[self._repo_name],
-                    permissions={"contents": "write"},
-                )
-                data = resp.json()
-                self._token = str(data["token"])
-                self._expires_at = _ts(data["expires_at"])
-            return self._token
-
-
-async def make_github_client(
-    app_id: int, private_key: str, installation_id: int | None, repo: str
-) -> tuple[GitHub[Any], Callable[[], Awaitable[str]]]:
-    owner, name = repo.split("/", 1)
-    app_client = GitHub(AppAuthStrategy(app_id, private_key))
-    if installation_id is None:
-        resp = await app_client.rest.apps.async_get_repo_installation(owner, name)
-        installation_id = int(resp.json()["id"])
-    client = GitHub(
-        AppInstallationAuthStrategy(
-            app_id,
-            private_key,
-            installation_id,
-            repositories=[name],
-            permissions=API_TOKEN_PERMISSIONS,
-        )
-    )
-    return client, RepoTokenProvider(app_client, installation_id, name)
+        spec = push_spec(branch, sha, self._config.base_branch, expected_sha)
+        await self._guard.run(spec, perform)

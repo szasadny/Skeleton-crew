@@ -26,8 +26,10 @@ from skeleton_crew.github.preflight import check_repository
 from skeleton_crew.github.trust import trusted_issues
 from skeleton_crew.pipeline.deps import PipelineDeps
 from skeleton_crew.pipeline.runner_pool import runner_problems
+from skeleton_crew.pipeline.sessions import agent_target
 from skeleton_crew.runtime.egress import apply_allowlist
-from skeleton_crew.runtime.workspace import read_repo_docs, task_paths
+from skeleton_crew.runtime.repo_docs_reader import read_repo_docs
+from skeleton_crew.runtime.task_dirs import task_paths
 from skeleton_crew.store import rules_store, runs_store
 
 log = logging.getLogger(__name__)
@@ -94,17 +96,12 @@ async def _environment_problems(
     config = deps.config
     problems: list[str] = []
     try:
-        report = await check_repository(
+        problems += await check_repository(
             gw,
             base_branch=settings.repo.base_branch,
             allow_unprotected=settings.repo.allow_unprotected_base_branch,
         )
-        problems += report.problems
-        problems += await deps.runtime.health(
-            image=config.agent_image,
-            network=config.agent_network,
-            proxy_container=config.egress_proxy_container,
-        )
+        problems += await deps.runtime.health(agent_target(config))
         problems += [p for p in await runner_problems(deps, settings, gw) if p not in problems]
     except Exception as exc:
         log.exception("preflight check failed")
@@ -125,12 +122,7 @@ async def apply_egress(
     domains = set(settings.runtime.egress_allowlist)
     for backend in backends.values():
         domains.update(backend.egress_domains())
-    await apply_allowlist(
-        deps.runtime,
-        domains,
-        deps.config.egress_allowlist_path,
-        deps.config.egress_proxy_container,
-    )
+    await apply_allowlist(deps.runtime, domains, agent_target(deps.config))
 
 
 async def find_candidates(

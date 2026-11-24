@@ -1,5 +1,5 @@
 {% import "_macros.html" as m with context %}
-{% if path == "/partials/status" %}{{ m.skull(running, oob=true) }}{% endif %}
+{% if oob %}{{ m.skull(running, oob=true) }}{% endif %}
 <section class="vitals">
   <div class="vital{% if running %} live{% endif %}">
     <span class="vital-label">State</span>
@@ -87,7 +87,7 @@
         <td>#{{ task.issue_number }} {{ task.issue_title }}</td>
         <td>{{ task.kind.value }}</td>
         <td>{{ m.state(task.state.value) }}</td>
-        <td>{% if task.pr_number %}<a href="https://github.com/{{ repo }}/pull/{{ task.pr_number }}">#{{ task.pr_number }}</a>{% endif %}</td>
+        <td>{{ m.pr_link(task.pr_number) }}</td>
       </tr>
       {% endfor %}
       </tbody>

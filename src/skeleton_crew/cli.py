@@ -19,7 +19,7 @@ from skeleton_crew.core.logging import configure_logging
 from skeleton_crew.core.security import MIN_PASSWORD_CHARS, hash_password
 from skeleton_crew.domain.settings import AppSettings
 from skeleton_crew.domain.task_state import RunTrigger
-from skeleton_crew.github.gateway import Gateway, GitHubGateway, make_github_client
+from skeleton_crew.github.gateway import Gateway, GatewayConfig, GitHubGateway, connect_github
 from skeleton_crew.pipeline.deps import PipelineDeps, audit_sink
 from skeleton_crew.pipeline.run_controller import RunController
 from skeleton_crew.pipeline.run_setup import preflight
@@ -43,21 +43,13 @@ async def _build_deps(
     config: BootstrapConfig, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> PipelineDeps:
     private_key = config.github_app_private_key_path.read_text()
-    client, token_provider = await make_github_client(
+    client, remote = await connect_github(
         config.github_app_id, private_key, config.github_app_installation_id, config.repo
     )
 
     def gateway_factory(settings: AppSettings, audit: AuditSink) -> Gateway:
-        return GitHubGateway(
-            client=client,
-            repo=config.repo,
-            labels=settings.labels,
-            base_branch=settings.repo.base_branch,
-            dry_run=settings.dry_run,
-            audit=audit,
-            max_comment_chars=settings.limits.max_comment_chars,
-            token_provider=token_provider,
-        )
+        gateway_config = GatewayConfig.from_settings(config.repo, settings)
+        return GitHubGateway(client, gateway_config, audit, remote)
 
     def backend_factory(name: str, settings: AppSettings) -> AgentBackend:
         options = settings.backend_options.get(name, {})

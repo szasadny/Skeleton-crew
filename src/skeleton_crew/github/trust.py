@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Collection, Iterable
 
 from skeleton_crew.domain.label_policy import same_label
@@ -11,6 +12,8 @@ from skeleton_crew.domain.trust_policy import (
     trusted_role,
 )
 from skeleton_crew.github.gateway import Gateway, IssueRef
+
+log = logging.getLogger(__name__)
 
 
 class _TrustResolver:
@@ -28,7 +31,9 @@ class _TrustResolver:
                 continue
             try:
                 role = await self._gw.permission_of(login)
-            except Exception:
+            except Exception as exc:
+                reason = type(exc).__name__
+                log.warning("role of %s unreadable (%s), treated as untrusted", login, reason)
                 role = ""
             self._known[key] = trusted_role(role)
 

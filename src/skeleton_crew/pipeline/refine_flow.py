@@ -16,7 +16,7 @@ from skeleton_crew.pipeline.readonly import readonly_checkout, remove_checkout
 from skeleton_crew.pipeline.sessions import Sandbox, remove_sandbox, run_agent, start_sandbox
 from skeleton_crew.pipeline.task_record import RefineTaskRecord
 from skeleton_crew.pipeline.texts import REFINE_RESERVED_CHARS, refine_comment
-from skeleton_crew.runtime.workspace import task_paths
+from skeleton_crew.runtime.task_dirs import task_paths
 
 ERROR_CHARS = 1000
 

@@ -1,4 +1,5 @@
 import re
+from pathlib import Path
 
 import pytest
 from jinja2 import UndefinedError
@@ -319,3 +320,84 @@ def test_comment_author_with_unsafe_characters_fails_closed() -> None:
     }
     with pytest.raises(ValueError, match="label"):
         render_prompt(PromptName.REFINER, context, json_schema=_SCHEMA)
+
+
+_SNAPSHOTS = Path(__file__).parent / "prompt_snapshots"
+_UPDATE_AFTER_CI = {
+    **_CONTEXTS[PromptName.WORKER_UPDATE],
+    "setup_command": "make setup",
+    "check_command": "make check",
+    "conflicts": [],
+    "kind": "ci_failed",
+    "details": _HOSTILE,
+}
+_SNAPSHOT_CASES: dict[str, tuple[PromptName, dict[str, object]]] = {
+    "selector": (PromptName.SELECTOR, _CONTEXTS[PromptName.SELECTOR]),
+    "selector_without_candidates": (
+        PromptName.SELECTOR,
+        {**_CONTEXTS[PromptName.SELECTOR], "candidates": []},
+    ),
+    "refiner": (PromptName.REFINER, _CONTEXTS[PromptName.REFINER]),
+    "refiner_without_comments": (
+        PromptName.REFINER,
+        {**_CONTEXTS[PromptName.REFINER], "comments": []},
+    ),
+    "worker": (PromptName.WORKER, _CONTEXTS[PromptName.WORKER]),
+    "worker_bare": (
+        PromptName.WORKER,
+        {
+            **_CONTEXTS[PromptName.WORKER],
+            "comments": [],
+            "setup_command": None,
+            "check_command": None,
+            "contestable_checks": [],
+            "protected_paths": [],
+        },
+    ),
+    "worker_followup": (PromptName.WORKER_FOLLOWUP, _CONTEXTS[PromptName.WORKER_FOLLOWUP]),
+    "worker_update_conflicts": (PromptName.WORKER_UPDATE, _CONTEXTS[PromptName.WORKER_UPDATE]),
+    "worker_update_conflicts_with_commands": (
+        PromptName.WORKER_UPDATE,
+        {
+            **_CONTEXTS[PromptName.WORKER_UPDATE],
+            "setup_command": "make setup",
+            "check_command": "make check",
+        },
+    ),
+    "worker_update_after_ci": (PromptName.WORKER_UPDATE, _UPDATE_AFTER_CI),
+    "worker_update_bare": (
+        PromptName.WORKER_UPDATE,
+        {
+            **_UPDATE_AFTER_CI,
+            "comments": [],
+            "setup_command": None,
+            "check_command": None,
+            "contestable_checks": [],
+            "protected_paths": [],
+            "kind": "check_failed",
+        },
+    ),
+    "reviewer": (PromptName.REVIEWER, _CONTEXTS[PromptName.REVIEWER]),
+    "reviewer_uncontested": (
+        PromptName.REVIEWER,
+        {**_CONTEXTS[PromptName.REVIEWER], "contested": []},
+    ),
+    "reviewer_followup": (PromptName.REVIEWER_FOLLOWUP, _CONTEXTS[PromptName.REVIEWER_FOLLOWUP]),
+    "reviewer_followup_uncontested": (
+        PromptName.REVIEWER_FOLLOWUP,
+        {**_CONTEXTS[PromptName.REVIEWER_FOLLOWUP], "contested": []},
+    ),
+    "continue": (PromptName.CONTINUE, _CONTEXTS[PromptName.CONTINUE]),
+}
+
+
+def test_every_prompt_has_a_snapshot() -> None:
+    assert {name for name, _ in _SNAPSHOT_CASES.values()} == set(PromptName)
+    assert {path.stem for path in _SNAPSHOTS.glob("*.md")} == set(_SNAPSHOT_CASES)
+
+
+@pytest.mark.parametrize("case", sorted(_SNAPSHOT_CASES))
+def test_rendered_prompt_matches_its_snapshot(case: str) -> None:
+    name, context = _SNAPSHOT_CASES[case]
+    text = render_prompt(name, context, json_schema=_SCHEMA)
+    assert text == (_SNAPSHOTS / f"{case}.md").read_text(encoding="utf-8")

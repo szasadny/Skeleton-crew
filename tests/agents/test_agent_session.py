@@ -5,7 +5,8 @@ import pytest
 from fake_agent import ExecStep, FakeBackend, FakeExecutor, claude_result_line, make_request
 from pydantic import SecretStr
 
-from skeleton_crew.agents.backends.claude_code import AuthMode, ClaudeCodeBackend
+from skeleton_crew.agents.backends._shared import AuthMode
+from skeleton_crew.agents.backends.claude_code import ClaudeCodeBackend
 from skeleton_crew.agents.session import run_session
 from skeleton_crew.domain.settings import Role
 

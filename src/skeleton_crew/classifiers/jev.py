@@ -1,13 +1,9 @@
 from collections.abc import Sequence
 from typing import Literal
 
-from pydantic import BaseModel, SecretStr
+from pydantic import BaseModel
 
-from skeleton_crew.classifiers.base import (
-    Answers,
-    ClassifierSpec,
-    post_json,
-)
+from skeleton_crew.classifiers.base import Answers, ClassifierSpec, HttpClassifier
 from skeleton_crew.domain.classifier_policy import Choice
 
 URL = "https://api.typesafe.ai/v1/systemone"
@@ -22,13 +18,12 @@ class _Response(BaseModel):
     answers: dict[str, _Answer]
 
 
-class JevClassifier:
-    def __init__(self, api_key: SecretStr | None, model: str) -> None:
-        self._api_key = api_key
-        self._model = model
+class JevClassifier(HttpClassifier[_Response]):
+    url = URL
+    response = _Response
 
-    async def classify(self, state: str, questions: Sequence[Choice]) -> Answers:
-        body = {
+    def _body(self, state: str, questions: Sequence[Choice]) -> dict[str, object]:
+        return {
             "model": self._model,
             "state": state,
             "questions": {
@@ -40,7 +35,8 @@ class JevClassifier:
                 for q in questions
             },
         }
-        reply = await post_json(URL, self._api_key, body, _Response)
+
+    def _answers(self, reply: _Response) -> Answers:
         return {name: answer.probabilities for name, answer in reply.answers.items()}
 
 

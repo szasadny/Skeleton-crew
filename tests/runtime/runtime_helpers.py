@@ -3,8 +3,11 @@ import shutil
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
+
+from skeleton_crew.runtime.containers import ContainerSpec, Mount
 
 GIT_ENV = {
     "GIT_CONFIG_GLOBAL": os.devnull,
@@ -16,6 +19,24 @@ GIT_ENV = {
     "HOME": os.devnull,
     "PATH": os.environ.get("PATH", ""),
 }
+
+
+def container_spec(root: Path, **overrides: Any) -> ContainerSpec:
+    values: dict[str, Any] = {
+        "name": "agent-1",
+        "image": "skeleton-crew-agent:latest",
+        "network": "skeleton-crew-agents",
+        "mounts": [
+            Mount(root / "agent", "/workspace", read_only=False),
+            Mount(root / "inbox", "/skeleton-in", read_only=True),
+        ],
+        "env": {"HTTPS_PROXY": "http://egress-proxy:3128", "CLAUDE_CODE_OAUTH_TOKEN": "x"},
+        "cpus": 1.5,
+        "memory_gb": 2.0,
+        "pids": 512,
+        "labels": {"skeleton-crew.task": "w-1"},
+    }
+    return ContainerSpec(**(values | overrides))
 
 
 def run(argv: Sequence[str], cwd: Path, stdin: bytes | None = None) -> bytes:

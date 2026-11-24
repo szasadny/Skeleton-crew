@@ -2,7 +2,8 @@ import asyncio
 import shutil
 
 from skeleton_crew.pipeline.deps import RunContext
-from skeleton_crew.runtime.workspace import TaskPaths, head_commit, make_readonly_copy
+from skeleton_crew.runtime.controller_git import head_commit, make_readonly_copy
+from skeleton_crew.runtime.task_dirs import TaskPaths
 
 
 async def readonly_checkout(ctx: RunContext, paths: TaskPaths) -> None:

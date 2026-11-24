@@ -5,10 +5,14 @@ from pathlib import Path
 
 from skeleton_crew.domain.container_policy import check_env
 from skeleton_crew.runtime.containers import (
-    AgentContainerSpec,
+    MANAGED_LABEL,
+    MANAGED_VALUE,
     ContainerHandle,
     ContainerInfo,
+    ContainerSpec,
+    ExecRequest,
     ExecResult,
+    SandboxTarget,
     check_spec,
 )
 
@@ -36,7 +40,7 @@ class _Entry:
 
 
 def ok(stdout: bytes = b"") -> ExecResult:
-    return ExecResult(exit_code=0, stdout_path=None, stdout=stdout, stderr=b"", timed_out=False)
+    return ExecResult(exit_code=0, stdout=stdout, stderr=b"", timed_out=False)
 
 
 def argv_starts_with(*prefix: str) -> ArgvPredicate:
@@ -46,7 +50,7 @@ def argv_starts_with(*prefix: str) -> ArgvPredicate:
 @dataclass
 class FakeRuntime:
     health_problems: list[str] = field(default_factory=list)
-    started: list[AgentContainerSpec] = field(default_factory=list)
+    started: list[ContainerSpec] = field(default_factory=list)
     removed: list[ContainerHandle] = field(default_factory=list)
     execs: list[ExecCall] = field(default_factory=list)
     running: dict[str, ContainerHandle] = field(default_factory=dict)
@@ -59,30 +63,27 @@ class FakeRuntime:
     ) -> None:
         self._script.append(_Entry(predicate, response, once))
 
-    async def start(self, spec: AgentContainerSpec) -> ContainerHandle:
+    async def start(self, spec: ContainerSpec) -> ContainerHandle:
         check_spec(spec)
         self.started.append(spec)
         handle = ContainerHandle(id=f"fake-{len(self.started)}", name=spec.name)
         self.running[handle.id] = handle
-        self.labels[handle.id] = dict(spec.labels)
+        self.labels[handle.id] = {**spec.labels, MANAGED_LABEL: MANAGED_VALUE}
         return handle
 
-    async def exec(
-        self,
-        handle: ContainerHandle,
-        argv: Sequence[str],
-        *,
-        env: Mapping[str, str],
-        cwd: str,
-        user: str,
-        timeout_s: float,
-        stdout_path: Path | None = None,
-        max_stdout_bytes: int = 50_000_000,
-    ) -> ExecResult:
-        check_env(env)
+    async def exec(self, handle: ContainerHandle, request: ExecRequest) -> ExecResult:
+        check_env(request.env)
         if any(h.id == handle.id for h in self.removed) and handle.id not in self.running:
             raise RuntimeError(f"container {handle.name} is not running")
-        call = ExecCall(handle, tuple(argv), dict(env), cwd, user, timeout_s, stdout_path)
+        call = ExecCall(
+            handle,
+            tuple(request.argv),
+            dict(request.env),
+            request.cwd,
+            request.user,
+            request.timeout_s,
+            request.stdout_path,
+        )
         self.execs.append(call)
         entry = next((e for e in self._script if e.predicate(call.argv)), None)
         if entry is None:
@@ -90,20 +91,15 @@ class FakeRuntime:
         if entry.once:
             self._script.remove(entry)
         result = entry.response(call) if callable(entry.response) else entry.response
-        if stdout_path is None:
+        if request.stdout_path is None:
             return result
-        await asyncio.to_thread(stdout_path.write_bytes, result.stdout[:max_stdout_bytes])
-        return ExecResult(result.exit_code, stdout_path, b"", result.stderr, result.timed_out)
+        stdout = result.stdout[: request.max_stdout_bytes]
+        await asyncio.to_thread(request.stdout_path.write_bytes, stdout)
+        return ExecResult(result.exit_code, b"", result.stderr, result.timed_out)
 
     async def remove(self, handle: ContainerHandle) -> None:
         self.removed.append(handle)
         self.running.pop(handle.id, None)
-
-    async def remove_all_managed(self) -> int:
-        handles = list(self.running.values())
-        for handle in handles:
-            await self.remove(handle)
-        return len(handles)
 
     async def list_labeled(self, label: str, value: str) -> list[ContainerInfo]:
         return [
@@ -121,5 +117,5 @@ class FakeRuntime:
     def exit(self, handle: ContainerHandle) -> None:
         self.exited.add(handle.id)
 
-    async def health(self, *, image: str, network: str, proxy_container: str) -> list[str]:
+    async def health(self, target: SandboxTarget) -> list[str]:
         return list(self.health_problems)

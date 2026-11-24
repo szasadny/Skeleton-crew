@@ -1,31 +1,20 @@
 import csv
 import io
-from collections.abc import AsyncIterator
-from pathlib import Path
 
-import pytest
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from web_helpers import Web, open_web
+from factories import seed_run, seed_task
+from web_helpers import Web
 
 from skeleton_crew.domain.task_state import RunTrigger
 from skeleton_crew.models.run import Run
 from skeleton_crew.models.worker_task import WorkerTask
-from skeleton_crew.store import runs_store
-
-
-@pytest.fixture
-async def web(tmp_path: Path, sessionmaker: async_sessionmaker[AsyncSession]) -> AsyncIterator[Web]:
-    async with open_web(tmp_path, sessionmaker) as harness:
-        await harness.login()
-        yield harness
+from skeleton_crew.web.pagination import PAGE_SIZE
 
 
 async def _seed(web: Web, blockers: list[str]) -> tuple[Run, WorkerTask]:
     async with web.sessionmaker() as session:
-        run = await runs_store.create_run(session, RunTrigger.MANUAL, dry_run=False)
-        task = await runs_store.add_worker_task(session, run.id, 12, "Add retries")
-        await runs_store.update_worker_task(session, task.id, blockers=blockers, pr_number=42)
-        await runs_store.add_worker_task(session, run.id, 13, "Clean task")
+        run = await seed_run(session)
+        task = await seed_task(session, run.id, 12, "Add retries", blockers=blockers, pr_number=42)
+        await seed_task(session, run.id, 13, "Clean task")
         await session.commit()
     return run, task
 
@@ -43,13 +32,12 @@ async def test_blockers_page_lists_only_tasks_with_blockers(web: Web) -> None:
 
 async def test_blockers_page_paginates(web: Web) -> None:
     async with web.sessionmaker() as session:
-        run = await runs_store.create_run(session, RunTrigger.SCHEDULE, dry_run=True)
-        for n in range(26):
-            task = await runs_store.add_worker_task(session, run.id, n, f"Issue {n}")
-            await runs_store.update_worker_task(session, task.id, blockers=["stuck"])
+        run = await seed_run(session, RunTrigger.SCHEDULE, dry_run=True)
+        for n in range(PAGE_SIZE + 1):
+            await seed_task(session, run.id, n, f"Issue {n}", blockers=["stuck"])
         await session.commit()
     first = (await web.client.get("/blockers")).text
-    assert first.count('<a href="/runs/') == 25
+    assert first.count('<a href="/runs/') == PAGE_SIZE
     assert 'href="/blockers?page=2"' in first
     second = (await web.client.get("/blockers?page=2")).text
     assert second.count('<a href="/runs/') == 1
@@ -80,10 +68,7 @@ async def test_blockers_export_is_csv_with_one_row_per_blocker(web: Web) -> None
     assert "Clean task" not in response.text
 
 
-async def test_blockers_export_requires_login(
-    tmp_path: Path, sessionmaker: async_sessionmaker[AsyncSession]
-) -> None:
-    async with open_web(tmp_path, sessionmaker) as harness:
-        response = await harness.client.get("/blockers/export")
+async def test_blockers_export_requires_login(anon_web: Web) -> None:
+    response = await anon_web.client.get("/blockers/export")
     assert response.status_code == 303
     assert response.headers["location"] == "/login"

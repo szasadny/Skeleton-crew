@@ -1,52 +1,52 @@
-from collections.abc import AsyncIterator
-from pathlib import Path
-
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from web_helpers import Web, open_web
+from web_helpers import Web
 
 from skeleton_crew.core.audit import AuditEntry, AuditKind, AuditOutcome
 from skeleton_crew.store import audit_store
+from skeleton_crew.web.routes.logs import PAGE_SIZE
+
+_WRITES = PAGE_SIZE + 10
 
 
 @pytest.fixture
-async def web(tmp_path: Path, sessionmaker: async_sessionmaker[AsyncSession]) -> AsyncIterator[Web]:
-    async with open_web(tmp_path, sessionmaker) as harness:
-        await harness.login()
-        async with sessionmaker() as session:
-            for i in range(60):
-                entry = AuditEntry(AuditKind.GITHUB_WRITE, AuditOutcome.DRY_RUN, f"write {i}")
-                await audit_store.record(session, entry)
-            blocked = AuditEntry(AuditKind.POLICY_VIOLATION, AuditOutcome.BLOCKED, "x")
-            await audit_store.record(session, blocked)
-            await session.commit()
-        yield harness
+async def logged(web: Web) -> Web:
+    async with web.sessionmaker() as session:
+        for i in range(_WRITES):
+            entry = AuditEntry(AuditKind.GITHUB_WRITE, AuditOutcome.DRY_RUN, f"write {i}")
+            await audit_store.record(session, entry)
+        blocked = AuditEntry(AuditKind.POLICY_VIOLATION, AuditOutcome.BLOCKED, "x")
+        await audit_store.record(session, blocked)
+        await session.commit()
+    return web
 
 
-async def test_logs_lists_newest_first_with_pagination(web: Web) -> None:
-    first = (await web.client.get("/logs")).text
-    assert first.index("policy_violation</td>") < first.index("write 59")
-    assert "write 9<" not in first
+async def test_logs_lists_newest_first_with_pagination(logged: Web) -> None:
+    first = (await logged.client.get("/logs")).text
+    assert first.index("policy_violation</td>") < first.index(f"write {_WRITES - 1}")
+    assert f"write {_WRITES - PAGE_SIZE}<" not in first
     assert 'href="/logs?page=2"' in first
-    second = (await web.client.get("/logs?page=2")).text
+    second = (await logged.client.get("/logs?page=2")).text
     assert "write 0<" in second
 
 
-async def test_logs_filter_by_kind(web: Web) -> None:
-    html = (await web.client.get("/logs?kind=policy_violation")).text
+async def test_logs_filter_by_kind(logged: Web) -> None:
+    html = (await logged.client.get("/logs?kind=policy_violation")).text
     assert "write 1" not in html
     assert '<option value="policy_violation" selected>' in html
     assert "<td>x</td>" in html
+    assert 'href="/logs?page=2' not in html
 
 
-async def test_unknown_kind_shows_all_events(web: Web) -> None:
-    html = (await web.client.get("/logs?kind=bogus")).text
-    assert "write 59" in html
+async def test_filtered_logs_keep_the_kind_when_paging(logged: Web) -> None:
+    html = (await logged.client.get("/logs?kind=github_write")).text
+    assert 'href="/logs?page=2&amp;kind=github_write"' in html
+
+
+async def test_unknown_kind_shows_all_events(logged: Web) -> None:
+    html = (await logged.client.get("/logs?kind=bogus")).text
+    assert f"write {_WRITES - 1}" in html
     assert "<td>x</td>" in html
 
 
-async def test_old_audit_path_redirects_to_logs(web: Web) -> None:
-    response = await web.client.get("/audit?kind=policy_violation&page=2")
-    assert response.status_code == 308
-    assert response.headers["location"] == "/logs?kind=policy_violation&page=2"
-    assert (await web.client.get("/audit")).headers["location"] == "/logs"
+async def test_old_audit_path_is_gone(logged: Web) -> None:
+    assert (await logged.client.get("/audit")).status_code == 404

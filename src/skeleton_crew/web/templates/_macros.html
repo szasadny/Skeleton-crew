@@ -1,4 +1,4 @@
-{% macro csrf() %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endmacro %}
+{% macro csrf() %}<input type="hidden" name="{{ csrf_field }}" value="{{ csrf_token }}">{% endmacro %}
 
 {% macro flash() %}<p class="notice" role="status">{{ message or "" }}</p>{% endmacro %}
 
@@ -14,9 +14,11 @@
 {% for error in errors.get(name, []) %}<p class="field-error">{{ error }}</p>{% endfor %}
 {% endmacro %}
 
-{% macro general_errors(errors) %}
-{% if errors.get("") %}<div class="alert">{% for error in errors[""] %}<p>{{ error }}</p>{% endfor %}</div>{% endif %}
+{% macro alert(messages) %}
+{% if messages %}<div class="alert">{% for message in messages %}<p>{{ message }}</p>{% endfor %}</div>{% endif %}
 {% endmacro %}
+
+{% macro general_errors(errors) %}{{ alert(errors.get("")) }}{% endmacro %}
 
 {% macro value_of(values, name) %}{{ values.get(name) if values.get(name) is not none else "" }}{% endmacro %}
 
@@ -47,6 +49,25 @@
   <p class="hint">{{ hint }}</p>
   {{ field_errors(errors, name) }}
 </div>
+{% endmacro %}
+
+{% macro time(name, label, values, errors) %}
+<div class="field">
+  <label for="{{ name }}">{{ label }}</label>
+  <input id="{{ name }}" name="{{ name }}" type="time" required value="{{ (values.get(name) or '')[:5] }}">
+  {{ field_errors(errors, name) }}
+</div>
+{% endmacro %}
+
+{% macro multi(name, legend, options, values, errors, hint) %}
+<fieldset>
+  <legend>{{ legend }}</legend>
+  {% for option in options %}
+  <label class="inline"><input type="checkbox" name="{{ name }}" value="{{ option.value }}"{% if option.value in values.get(name, []) %} checked{% endif %}> {{ option.value | capitalize }}</label>
+  {% endfor %}
+  <p class="hint">{{ hint }}</p>
+  {{ field_errors(errors, name) }}
+</fieldset>
 {% endmacro %}
 
 {% macro checkbox(name, label, values, errors, disabled=false) %}
@@ -81,13 +102,17 @@
 {% if count %}<span class="badge warning">{{ count }} {{ "task" if count == 1 else "tasks" }} with blockers</span>{% endif %}
 {% endmacro %}
 
-{% macro pager(base, page, has_next, extra="") %}
+{% macro pager(base, page, extra="") %}
 <nav class="pager">
-  {% if page > 1 %}<a href="{{ base }}?page={{ page - 1 }}{{ extra }}">Previous</a>{% endif %}
-  <span>Page {{ page }}</span>
-  {% if has_next %}<a href="{{ base }}?page={{ page + 1 }}{{ extra }}">Next</a>{% endif %}
+  {% if page.number > 1 %}<a href="{{ base }}?page={{ page.number - 1 }}{{ extra }}">Previous</a>{% endif %}
+  <span>Page {{ page.number }}</span>
+  {% if page.has_next %}<a href="{{ base }}?page={{ page.number + 1 }}{{ extra }}">Next</a>{% endif %}
 </nav>
 {% endmacro %}
+
+{% macro pr_link(number) %}{% if number %}<a href="{{ repo_url }}/pull/{{ number }}">#{{ number }}</a>{% endif %}{% endmacro %}
+
+{% macro blockers(items) %}<ul class="blockers">{% for blocker in items %}<li>{{ blocker }}</li>{% endfor %}</ul>{% endmacro %}
 
 {% macro rule_tabs(keys, key) %}
 <nav class="tabs">{% for k in keys %}<a href="/rules/{{ k }}"{% if k == key %} class="current"{% endif %}>{{ k }}</a>{% endfor %}</nav>

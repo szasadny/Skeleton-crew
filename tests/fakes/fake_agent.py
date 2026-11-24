@@ -5,6 +5,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from skeleton_crew.agents.backends._shared import NO_STRUCTURED_OUTPUT, REPORTED_ERROR, TIMED_OUT
 from skeleton_crew.agents.base import ExecOutcome, SessionOutcome, SessionRequest, failed_outcome
 from skeleton_crew.domain.settings import Role, RoleAgent
 
@@ -25,7 +26,7 @@ def stopped_outcome(
     *, session_id: str | None = "worker-session", reason: str = "hook_stopped"
 ) -> SessionOutcome:
     return replace(
-        failed_outcome("no structured output"),
+        failed_outcome(NO_STRUCTURED_OUTPUT),
         session_id=session_id,
         cost_usd=0.01,
         turns=2,
@@ -35,7 +36,7 @@ def stopped_outcome(
 
 def limited_outcome(*, session_id: str | None = "worker-session") -> SessionOutcome:
     return replace(
-        failed_outcome("session reported an error"),
+        failed_outcome(REPORTED_ERROR),
         session_id=session_id,
         cost_usd=0.03,
         turns=1,
@@ -44,38 +45,30 @@ def limited_outcome(*, session_id: str | None = "worker-session") -> SessionOutc
 
 
 class FakeBackend:
+    name = "fake"
+
     def __init__(
-        self,
-        outcomes: Mapping[Role, Sequence[SessionOutcome | str]] | None = None,
-        *,
-        name: str = "fake",
-        env: Mapping[str, str] | None = None,
-        problems: Sequence[str] = (),
-        egress: tuple[str, ...] = ("fake.example.com",),
+        self, outcomes: Mapping[Role, Sequence[SessionOutcome | str]] | None = None
     ) -> None:
-        self.name = name
         self.requests: list[SessionRequest] = []
         self._queues: dict[Role, deque[SessionOutcome | str]] = defaultdict(deque)
         for role, items in (outcomes or {}).items():
             self._queues[role].extend(items)
-        self._env = dict(env or {})
-        self._problems = list(problems)
-        self._egress = egress
 
     def script(self, role: Role, *items: SessionOutcome | str) -> None:
         self._queues[role].extend(items)
 
     def egress_domains(self) -> tuple[str, ...]:
-        return self._egress
+        return ("fake.example.com",)
 
     def auto_loaded_docs(self) -> tuple[str, ...]:
         return ("CLAUDE.md",)
 
     def credential_problems(self) -> list[str]:
-        return list(self._problems)
+        return []
 
     def env(self) -> dict[str, str]:
-        return dict(self._env)
+        return {}
 
     def command(self, req: SessionRequest) -> list[str]:
         self.requests.append(req)
@@ -83,7 +76,7 @@ class FakeBackend:
 
     def parse(self, stdout_path: Path, exit_code: int, timed_out: bool) -> SessionOutcome:
         if timed_out:
-            return failed_outcome("timed out", timed_out=True)
+            return failed_outcome(TIMED_OUT, timed_out=True)
         queue = self._queues[self.requests[-1].role]
         if not queue:
             return failed_outcome("fake: no scripted outcome")
@@ -101,7 +94,7 @@ class ExecStep:
 
 
 @dataclass(frozen=True)
-class ExecCall:
+class ExecutorCall:
     argv: list[str]
     env: dict[str, str]
     cwd: str
@@ -113,7 +106,7 @@ class ExecCall:
 class FakeExecutor:
     steps: list[ExecStep] = field(default_factory=list)
     default: ExecStep = field(default_factory=ExecStep)
-    calls: list[ExecCall] = field(default_factory=list)
+    calls: list[ExecutorCall] = field(default_factory=list)
 
     async def __call__(
         self,
@@ -124,7 +117,7 @@ class FakeExecutor:
         timeout_s: float,
         stdout_path: Path,
     ) -> ExecOutcome:
-        self.calls.append(ExecCall(list(argv), dict(env), cwd, timeout_s, stdout_path))
+        self.calls.append(ExecutorCall(list(argv), dict(env), cwd, timeout_s, stdout_path))
         step = self.steps.pop(0) if self.steps else self.default
         await asyncio.to_thread(stdout_path.write_text, step.stdout, encoding="utf-8")
         if step.error is not None:

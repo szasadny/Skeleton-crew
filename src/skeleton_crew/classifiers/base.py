@@ -1,6 +1,7 @@
+from abc import ABC, abstractmethod
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Protocol
+from typing import ClassVar, Protocol
 
 import httpx
 from pydantic import BaseModel, SecretStr, ValidationError
@@ -51,3 +52,22 @@ async def post_json[T: BaseModel](
         return response.model_validate_json(reply.content)
     except ValidationError:
         raise ClassifierError("unexpected response") from None
+
+
+class HttpClassifier[R: BaseModel](ABC):
+    url: ClassVar[str]
+    response: type[R]
+
+    def __init__(self, api_key: SecretStr | None, model: str) -> None:
+        self._api_key = api_key
+        self._model = model
+
+    async def classify(self, state: str, questions: Sequence[Choice]) -> Answers:
+        body = self._body(state, questions)
+        return self._answers(await post_json(self.url, self._api_key, body, self.response))
+
+    @abstractmethod
+    def _body(self, state: str, questions: Sequence[Choice]) -> dict[str, object]: ...
+
+    @abstractmethod
+    def _answers(self, reply: R) -> Answers: ...

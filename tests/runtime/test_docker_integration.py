@@ -10,12 +10,15 @@ from docker.models.images import Image
 
 from skeleton_crew.domain.branch_policy import BRANCH_PREFIX
 from skeleton_crew.runtime.containers import (
+    MANAGED_LABEL,
+    MANAGED_VALUE,
     READY_FILE,
     SANDBOX_RUNTIME,
-    AgentContainerSpec,
     ContainerHandle,
+    ContainerSpec,
     ContainerStartError,
     DockerRuntime,
+    ExecRequest,
     Mount,
 )
 
@@ -56,7 +59,7 @@ async def started(
     (workspace / "hello.txt").write_text("hi\n")
     runtime = DockerRuntime(client)
     handle = await runtime.start(
-        AgentContainerSpec(
+        ContainerSpec(
             name=f"sc-test-{uuid.uuid4().hex[:8]}", image=IMAGE, network=network,
             mounts=[Mount(workspace, "/workspace", read_only=True)], env={"SC_TEST": "1"},
             cpus=1, memory_gb=1, pids=256, labels={"skeleton-crew.test": "true"},
@@ -70,10 +73,8 @@ async def test_exec_runs_as_agent_in_sysbox(
     started: tuple[DockerRuntime, ContainerHandle], client: DockerClient
 ) -> None:
     runtime, handle = started
-    result = await runtime.exec(
-        handle, ["sh", "-c", 'id -un; cat /workspace/hello.txt; echo "$SC_TEST"'],
-        env={}, cwd="/workspace", user="agent", timeout_s=30,
-    )  # fmt: skip
+    argv = ["sh", "-c", 'id -un; cat /workspace/hello.txt; echo "$SC_TEST"']
+    result = await runtime.exec(handle, ExecRequest.as_agent(argv, timeout_s=30))
     assert result.exit_code == 0
     assert result.stdout.decode().split() == ["agent", "hi", "1"]
     attrs = client.containers.get(handle.id).attrs["HostConfig"]
@@ -85,9 +86,7 @@ async def test_start_returns_only_after_the_entrypoint_is_ready(
     started: tuple[DockerRuntime, ContainerHandle],
 ) -> None:
     runtime, handle = started
-    result = await runtime.exec(
-        handle, ["test", "-f", READY_FILE], env={}, cwd="/", user="agent", timeout_s=30
-    )
+    result = await runtime.exec(handle, ExecRequest(["test", "-f", READY_FILE], "agent", "/", 30))
     assert result.exit_code == 0
 
 
@@ -96,17 +95,13 @@ async def test_every_agent_cli_is_installed(
     started: tuple[DockerRuntime, ContainerHandle], cli: str
 ) -> None:
     runtime, handle = started
-    result = await runtime.exec(
-        handle, [cli, "--version"], env={}, cwd="/workspace", user="agent", timeout_s=60
-    )
+    result = await runtime.exec(handle, ExecRequest.as_agent([cli, "--version"], timeout_s=60))
     assert result.exit_code == 0
 
 
 async def test_workspace_mount_is_read_only(started: tuple[DockerRuntime, ContainerHandle]) -> None:
     runtime, handle = started
-    result = await runtime.exec(
-        handle, ["touch", "/workspace/x"], env={}, cwd="/", user="agent", timeout_s=30
-    )
+    result = await runtime.exec(handle, ExecRequest(["touch", "/workspace/x"], "agent", "/", 30))
     assert result.exit_code != 0
 
 
@@ -114,7 +109,7 @@ async def test_exec_timeout_interrupts_the_command(
     started: tuple[DockerRuntime, ContainerHandle],
 ) -> None:
     runtime, handle = started
-    result = await runtime.exec(handle, ["sleep", "60"], env={}, cwd="/", user="agent", timeout_s=1)
+    result = await runtime.exec(handle, ExecRequest(["sleep", "60"], "agent", "/", 1))
     assert result.timed_out is True
 
 
@@ -122,16 +117,14 @@ async def test_container_has_no_route_to_the_internet(
     started: tuple[DockerRuntime, ContainerHandle],
 ) -> None:
     runtime, handle = started
-    result = await runtime.exec(
-        handle, ["curl", "-sS", "--max-time", "5", "https://example.com"],
-        env={}, cwd="/", user="agent", timeout_s=30,
-    )  # fmt: skip
+    argv = ["curl", "-sS", "--max-time", "5", "https://example.com"]
+    result = await runtime.exec(handle, ExecRequest(argv, "agent", "/", 30))
     assert result.exit_code != 0
 
 
-async def test_remove_all_managed_cleans_up(started: tuple[DockerRuntime, ContainerHandle]) -> None:
+async def test_remove_managed_cleans_up(started: tuple[DockerRuntime, ContainerHandle]) -> None:
     runtime, _ = started
-    assert await runtime.remove_all_managed() >= 1
+    assert await runtime.remove_labeled(MANAGED_LABEL, MANAGED_VALUE) >= 1
     await asyncio.sleep(0)
 
 
@@ -150,7 +143,7 @@ async def test_unregistered_runner_never_becomes_ready(
     config.mkdir()
     label = f"sc-test-{uuid.uuid4().hex[:8]}"
     runtime = DockerRuntime(client)
-    spec = AgentContainerSpec(
+    spec = ContainerSpec(
         name=label,
         image=RUNNER_IMAGE,
         network=network,

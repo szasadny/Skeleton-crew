@@ -25,10 +25,10 @@ from skeleton_crew.domain.ci_policy import CiState, CiStatus, FailedJob, ReviewC
 from skeleton_crew.domain.settings import Role
 from skeleton_crew.domain.task_state import RunTrigger, TaskState
 from skeleton_crew.pipeline.job_engine import USAGE_LIMIT_REASON
-from skeleton_crew.pipeline.sessions import AGENT_USER, INBOX, ROLE_LABEL, WORKSPACE
+from skeleton_crew.pipeline.sessions import INBOX
 from skeleton_crew.pipeline.task_record import MAX_STORED_BLOCKERS, WorkerTaskRecord
 from skeleton_crew.pipeline.texts import REVIEW_PENDING_SUMMARY
-from skeleton_crew.runtime.containers import ExecResult
+from skeleton_crew.runtime.containers import AGENT_USER, ROLE_LABEL, WORKSPACE, ExecResult
 from skeleton_crew.store import runs_store
 
 BRANCH = "skeleton/1-add-greeting"

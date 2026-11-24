@@ -1,21 +1,17 @@
-from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass, field
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from enum import StrEnum
 from types import NoneType
 from typing import Any, get_args
 
-from fastapi import Request
-from fastapi.responses import Response
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 from starlette.datastructures import ImmutableMultiDict, UploadFile
 
 from skeleton_crew.domain.settings import AppSettings
-from skeleton_crew.store.settings_store import load_settings, save_settings
-from skeleton_crew.web.rendering import redirect, render
-from skeleton_crew.web.state import get_state
 
-GENERAL = ""
 _ACRONYMS = {"usd": "USD", "ci": "CI", "gb": "GB"}
+
+type FormFields = ImmutableMultiDict[str, UploadFile | str]
 
 
 class Kind(StrEnum):
@@ -29,22 +25,19 @@ class Kind(StrEnum):
 
 
 def label(name: str) -> str:
-    words = [_ACRONYMS.get(word, word) for word in name.split("_")]
-    return " ".join(words)[:1].upper() + " ".join(words)[1:]
+    words = " ".join(_ACRONYMS.get(word, word) for word in name.split("_"))
+    return words[:1].upper() + words[1:]
 
 
-type FormFields = ImmutableMultiDict[str, UploadFile | str]
-
-
-def _text(form: FormFields, name: str) -> str:
+def form_value(form: FormFields, name: str) -> str:
     value = form.get(name)
-    return value.strip() if isinstance(value, str) else ""
+    return value if isinstance(value, str) else ""
 
 
 def parse_form(form: FormFields, fields: Mapping[str, Kind]) -> dict[str, object]:
     parsed: dict[str, object] = {}
     for name, kind in fields.items():
-        text = _text(form, name)
+        text = form_value(form, name).strip()
         match kind:
             case Kind.TEXT | Kind.NUMBER:
                 parsed[name] = text
@@ -59,41 +52,19 @@ def parse_form(form: FormFields, fields: Mapping[str, Kind]) -> dict[str, object
     return parsed
 
 
-def flatten(data: Mapping[str, Any], prefix: str = "") -> dict[str, object]:
+def _flatten(data: Mapping[str, Any], prefix: str = "") -> dict[str, object]:
     flat: dict[str, object] = {}
     for key, value in data.items():
         name = f"{prefix}{key}"
         if isinstance(value, Mapping):
-            flat.update(flatten(value, f"{name}."))
+            flat.update(_flatten(value, f"{name}."))
         else:
             flat[name] = value
     return flat
 
 
-def merge(current: AppSettings, updates: Mapping[str, object]) -> dict[str, Any]:
-    data: dict[str, Any] = current.model_dump(mode="json")
-    for dotted, value in updates.items():
-        *parents, leaf = dotted.split(".")
-        target = data
-        for part in parents:
-            target = target.setdefault(part, {})
-        target[leaf] = value
-    return data
-
-
-def _message(error: Mapping[str, Any]) -> str:
-    return str(error["msg"]).removeprefix("Value error, ")
-
-
-def field_errors(exc: ValidationError, known: Iterable[str]) -> dict[str, list[str]]:
-    names = set(known)
-    errors: dict[str, list[str]] = {}
-    for error in exc.errors():
-        parts = [str(part) for part in error["loc"]]
-        prefixes = (".".join(parts[:i]) for i in range(len(parts), 0, -1))
-        target = next((p for p in prefixes if p in names), GENERAL)
-        errors.setdefault(target, []).append(_message(error))
-    return errors
+def form_values(settings: AppSettings) -> dict[str, object]:
+    return _flatten(settings.model_dump(mode="json"))
 
 
 @dataclass(frozen=True)
@@ -127,54 +98,3 @@ def number_specs(prefix: str, model: type[BaseModel], names: Iterable[str]) -> l
             )
         )
     return specs
-
-
-@dataclass(frozen=True)
-class SettingsPage:
-    template: str
-    fields: Mapping[str, Kind]
-    context: Mapping[str, Any] = field(default_factory=dict)
-    on_saved: Callable[[Request, AppSettings], None] | None = None
-    check: Callable[[AppSettings], dict[str, list[str]]] | None = None
-    live_context: Callable[[Request, Mapping[str, object]], Mapping[str, Any]] | None = None
-
-    def _render(
-        self,
-        request: Request,
-        values: Mapping[str, object],
-        errors: Mapping[str, list[str]],
-        status_code: int = 200,
-    ) -> Response:
-        live = self.live_context(request, values) if self.live_context is not None else {}
-        context = {**self.context, **live, "values": values, "errors": errors}
-        return render(request, self.template, context, status_code)
-
-    async def show(self, request: Request) -> Response:
-        async with get_state(request).sessionmaker() as session:
-            current = await load_settings(session)
-        return self._render(request, flatten(current.model_dump(mode="json")), {})
-
-    async def draft(self, request: Request) -> Response:
-        updates = parse_form(request.query_params, self.fields)
-        async with get_state(request).sessionmaker() as session:
-            current = await load_settings(session)
-        return self._render(request, flatten(current.model_dump(mode="json")) | updates, {})
-
-    async def submit(self, request: Request) -> Response:
-        updates = parse_form(await request.form(), self.fields)
-        async with get_state(request).sessionmaker() as session:
-            current = await load_settings(session)
-            try:
-                new = AppSettings.model_validate(merge(current, updates))
-            except ValidationError as exc:
-                errors = field_errors(exc, self.fields)
-            else:
-                errors = self.check(new) if self.check is not None else {}
-            if errors:
-                values = flatten(current.model_dump(mode="json")) | updates
-                return self._render(request, values, errors, 422)
-            await save_settings(session, new)
-            await session.commit()
-        if self.on_saved is not None:
-            self.on_saved(request, new)
-        return redirect(request.url.path, "saved")

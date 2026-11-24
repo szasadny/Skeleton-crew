@@ -3,7 +3,7 @@
 {% block content %}
 <h1>Rules</h1>
 {{ m.rule_tabs(keys, key) }}
-{% if error %}<div class="alert"><p>{{ error }}</p></div>{% endif %}
+{{ m.general_errors(errors) }}
 <form method="post" action="/rules/{{ key }}">
   {{ m.csrf() }}
   <div class="panel editor">

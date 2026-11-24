@@ -1,5 +1,6 @@
 import asyncio
 import base64
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -8,11 +9,21 @@ from github_helpers import TOKEN, AuditLog, commit_on_top, git, make_bare_remote
 
 from skeleton_crew.core import git as core_git
 from skeleton_crew.core.audit import AuditKind, AuditOutcome
-from skeleton_crew.core.git import HARDENING, GitCommandError
+from skeleton_crew.core.git import HARDENING, GitCommandError, git_env
 from skeleton_crew.domain.errors import PolicyViolation
 from skeleton_crew.github import _git as git_module
-from skeleton_crew.github._git import auth_env, git_branch_head, git_clone
+from skeleton_crew.github._git import (
+    REMOTE_PROTOCOL,
+    GitRemote,
+    auth_env,
+    git_branch_head,
+    git_clone,
+)
 from skeleton_crew.github.gateway import github_remote_url
+
+
+def _local(path: Path | str, token: str | None = TOKEN, protocol: str = "file") -> GitRemote:
+    return GitRemote(str(path), protocol, token)
 
 
 def test_remote_url_is_https_github() -> None:
@@ -42,7 +53,7 @@ async def test_token_never_reaches_git_argv(
     monkeypatch.setattr(asyncio, "create_subprocess_exec", spy)
 
     bare, _ = make_bare_remote(tmp_path)
-    await git_branch_head(str(bare), "main", TOKEN, protocol="file")
+    await git_branch_head(_local(bare), "main")
 
     assert seen
     assert all(TOKEN not in str(arg) for args in seen for arg in args)
@@ -51,30 +62,57 @@ async def test_token_never_reaches_git_argv(
 
 async def test_git_failure_redacts_token(tmp_path: Path) -> None:
     with pytest.raises(GitCommandError) as info:
-        await git_branch_head(str(tmp_path / TOKEN), "main", TOKEN, protocol="file")
+        await git_branch_head(_local(tmp_path / TOKEN), "main")
 
     assert "failed" in str(info.value)
     assert TOKEN not in str(info.value)
 
 
-async def test_remote_git_allows_only_https_by_default(tmp_path: Path) -> None:
+async def test_https_remote_refuses_every_other_transport(tmp_path: Path) -> None:
     bare, _ = make_bare_remote(tmp_path)
 
     with pytest.raises(GitCommandError, match="transport 'file' not allowed"):
-        await git_clone(str(bare), tmp_path / "clone", "main", TOKEN)
+        await git_clone(_local(bare, protocol=REMOTE_PROTOCOL), tmp_path / "clone", "main")
+    ext = _local("ext::sh -c touch% /tmp/pwned", None, REMOTE_PROTOCOL)
     with pytest.raises(GitCommandError, match="transport 'ext' not allowed"):
-        await git_branch_head("ext::sh -c touch% /tmp/pwned", "main", None)
+        await git_branch_head(ext, "main")
 
 
 @pytest.mark.parametrize("protocol", ["", "file -c x=y", "file.allow", "Ext", "a=b"])
 async def test_remote_git_rejects_malformed_protocol(tmp_path: Path, protocol: str) -> None:
     with pytest.raises(ValueError, match="protocol"):
-        await git_branch_head(str(tmp_path), "main", None, protocol=protocol)
+        await git_branch_head(_local(tmp_path, None, protocol), "main")
+
+
+def test_remote_repr_hides_the_token() -> None:
+    assert TOKEN not in repr(_local("/srv/remote.git"))
+
+
+async def test_remote_git_runs_with_the_core_hardening_and_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[tuple[str, ...], Mapping[str, str]]] = []
+    real_exec = asyncio.create_subprocess_exec
+
+    async def spy(*argv: str, **kwargs: Any) -> asyncio.subprocess.Process:
+        calls.append((argv, kwargs["env"]))
+        return await real_exec(*argv, **kwargs)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spy)
+    bare, _ = make_bare_remote(tmp_path)
+
+    await git_clone(_local(bare), tmp_path / "clone", "main")
+
+    assert calls
+    auth_keys = set(auth_env(TOKEN))
+    for argv, env in calls:
+        assert argv[: 1 + len(HARDENING)] == ("git", *HARDENING)
+        assert {k: v for k, v in env.items() if k not in auth_keys} == git_env()
 
 
 async def test_clone_checks_out_base_and_stores_no_credentials(tmp_path: Path) -> None:
     bare, sha = make_bare_remote(tmp_path)
-    gateway = make_gateway(AuditLog(), remote_url=lambda _: str(bare))
+    gateway = make_gateway(AuditLog(), local_remote=bare)
     dest = tmp_path / "clone"
 
     assert await gateway.clone(dest) == sha
@@ -98,7 +136,7 @@ async def test_clone_with_planted_credential_is_rejected(
         return out
 
     monkeypatch.setattr(git_module, "run_git", run_and_plant)
-    gateway = make_gateway(AuditLog(), remote_url=lambda _: str(bare))
+    gateway = make_gateway(AuditLog(), local_remote=bare)
 
     with pytest.raises(PolicyViolation):
         await gateway.clone(tmp_path / "clone")
@@ -108,7 +146,7 @@ async def test_clone_with_planted_credential_is_rejected(
 async def test_push_branch_rewrites_the_branch_it_leased(tmp_path: Path) -> None:
     bare, _ = make_bare_remote(tmp_path)
     audit = AuditLog()
-    gateway = make_gateway(audit, remote_url=lambda _: str(bare))
+    gateway = make_gateway(audit, local_remote=bare)
     clone = tmp_path / "clone"
     await gateway.clone(clone)
     first = commit_on_top(clone, "a.txt")
@@ -124,7 +162,7 @@ async def test_push_branch_rewrites_the_branch_it_leased(tmp_path: Path) -> None
 
 async def test_push_without_lease_never_overwrites_an_existing_branch(tmp_path: Path) -> None:
     bare, _ = make_bare_remote(tmp_path)
-    gateway = make_gateway(AuditLog(), remote_url=lambda _: str(bare))
+    gateway = make_gateway(AuditLog(), local_remote=bare)
     clone = tmp_path / "clone"
     await gateway.clone(clone)
     human = commit_on_top(clone, "human.txt")
@@ -140,7 +178,7 @@ async def test_push_without_lease_never_overwrites_an_existing_branch(tmp_path: 
 
 async def test_branch_head_reads_only_the_exact_branch(tmp_path: Path) -> None:
     bare, _ = make_bare_remote(tmp_path)
-    gateway = make_gateway(AuditLog(), remote_url=lambda _: str(bare))
+    gateway = make_gateway(AuditLog(), local_remote=bare)
     clone = tmp_path / "clone"
     await gateway.clone(clone)
     longer = commit_on_top(clone, "a.txt")
@@ -152,7 +190,7 @@ async def test_branch_head_reads_only_the_exact_branch(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("branch", ["main", "--upload-pack=x", "skeleton/4-fix:refs/heads/main"])
 async def test_branch_head_only_accepts_skeleton_branches(tmp_path: Path, branch: str) -> None:
-    gateway = make_gateway(AuditLog(), remote_url=lambda _: str(tmp_path))
+    gateway = make_gateway(AuditLog(), local_remote=tmp_path)
 
     with pytest.raises(PolicyViolation):
         await gateway.branch_head(branch)
@@ -162,7 +200,7 @@ async def test_branch_head_only_accepts_skeleton_branches(tmp_path: Path, branch
 async def test_push_to_base_or_non_skeleton_branch_is_blocked(tmp_path: Path, branch: str) -> None:
     bare, sha = make_bare_remote(tmp_path)
     audit = AuditLog()
-    gateway = make_gateway(audit, remote_url=lambda _: str(bare))
+    gateway = make_gateway(audit, local_remote=bare)
     clone = tmp_path / "clone"
     await gateway.clone(clone)
     new = commit_on_top(clone, "a.txt")
@@ -175,7 +213,7 @@ async def test_push_to_base_or_non_skeleton_branch_is_blocked(tmp_path: Path, br
 
 
 async def test_push_rejects_refspec_injection_through_sha(tmp_path: Path) -> None:
-    gateway = make_gateway(AuditLog(), remote_url=lambda _: str(tmp_path))
+    gateway = make_gateway(AuditLog(), local_remote=tmp_path)
 
     with pytest.raises(PolicyViolation):
         await gateway.push_branch(tmp_path, "skeleton/4-fix", "HEAD:refs/heads/main")
@@ -184,7 +222,7 @@ async def test_push_rejects_refspec_injection_through_sha(tmp_path: Path) -> Non
 async def test_dry_run_push_does_not_push(tmp_path: Path) -> None:
     bare, _ = make_bare_remote(tmp_path)
     audit = AuditLog()
-    gateway = make_gateway(audit, dry_run=True, remote_url=lambda _: str(bare))
+    gateway = make_gateway(audit, dry_run=True, local_remote=bare)
     clone = tmp_path / "clone"
     await gateway.clone(clone)
     new = commit_on_top(clone, "a.txt")
@@ -198,7 +236,7 @@ async def test_dry_run_push_does_not_push(tmp_path: Path) -> None:
 async def test_lease_push_updates_the_branch_it_expects(tmp_path: Path) -> None:
     bare, _ = make_bare_remote(tmp_path)
     audit = AuditLog()
-    gateway = make_gateway(audit, remote_url=lambda _: str(bare))
+    gateway = make_gateway(audit, local_remote=bare)
     clone = tmp_path / "clone"
     await gateway.clone(clone)
     first = commit_on_top(clone, "a.txt")
@@ -215,7 +253,7 @@ async def test_lease_push_updates_the_branch_it_expects(tmp_path: Path) -> None:
 
 async def test_lease_push_refuses_to_overwrite_someone_elses_commit(tmp_path: Path) -> None:
     bare, _ = make_bare_remote(tmp_path)
-    gateway = make_gateway(AuditLog(), remote_url=lambda _: str(bare))
+    gateway = make_gateway(AuditLog(), local_remote=bare)
     clone = tmp_path / "clone"
     await gateway.clone(clone)
     ours = commit_on_top(clone, "a.txt")
@@ -232,7 +270,7 @@ async def test_lease_push_refuses_to_overwrite_someone_elses_commit(tmp_path: Pa
 
 
 async def test_lease_push_rejects_a_non_sha_lease(tmp_path: Path) -> None:
-    gateway = make_gateway(AuditLog(), remote_url=lambda _: str(tmp_path))
+    gateway = make_gateway(AuditLog(), local_remote=tmp_path)
 
     with pytest.raises(PolicyViolation):
         await gateway.push_branch(tmp_path, "skeleton/4-fix", "a" * 40, expected_sha="main")
@@ -240,7 +278,7 @@ async def test_lease_push_rejects_a_non_sha_lease(tmp_path: Path) -> None:
 
 async def test_fetch_branch_returns_the_remote_head(tmp_path: Path) -> None:
     bare, _ = make_bare_remote(tmp_path)
-    gateway = make_gateway(AuditLog(), remote_url=lambda _: str(bare))
+    gateway = make_gateway(AuditLog(), local_remote=bare)
     clone = tmp_path / "clone"
     await gateway.clone(clone)
     pushed = commit_on_top(clone, "a.txt")
@@ -254,7 +292,7 @@ async def test_fetch_branch_returns_the_remote_head(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("branch", ["main", "--upload-pack=x", "skeleton/4-fix:refs/heads/main"])
 async def test_fetch_only_accepts_skeleton_branches(tmp_path: Path, branch: str) -> None:
-    gateway = make_gateway(AuditLog(), remote_url=lambda _: str(tmp_path))
+    gateway = make_gateway(AuditLog(), local_remote=tmp_path)
 
     with pytest.raises(PolicyViolation):
         await gateway.fetch_branch(tmp_path, branch)

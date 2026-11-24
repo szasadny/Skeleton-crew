@@ -53,7 +53,6 @@ class SessionOutcome:
     ok: bool
     error: str | None
     timed_out: bool
-    # Short reason code when the session ended cleanly without a result, e.g. a hook stopped it.
     stopped_early: str | None = None
     usage_limited: bool = False
 
@@ -81,7 +80,6 @@ class OptionSpec:
 
 
 type BackendFactory = Callable[[Mapping[str, SecretStr], Mapping[str, str]], AgentBackend]
-# Narrows the models to those valid for the resolved options, e.g. a provider prefix.
 type ModelFilter = Callable[[str, Mapping[str, str]], bool]
 
 

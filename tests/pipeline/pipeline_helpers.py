@@ -33,9 +33,8 @@ from skeleton_crew.models.run import Run
 from skeleton_crew.models.worker_task import WorkerTask
 from skeleton_crew.pipeline.deps import PipelineDeps
 from skeleton_crew.pipeline.run_controller import RunController
-from skeleton_crew.pipeline.sessions import WORKSPACE
-from skeleton_crew.runtime.containers import ExecResult
-from skeleton_crew.runtime.workspace import AGENT_PATCH_ARGV
+from skeleton_crew.runtime.containers import WORKSPACE, ExecResult
+from skeleton_crew.runtime.controller_git import AGENT_PATCH_ARGV
 from skeleton_crew.store import audit_store, runs_store, settings_store
 
 MODEL_TOKEN = "model-token-for-tests"  # noqa: S105
@@ -208,9 +207,7 @@ def is_repo_command(argv: Sequence[str]) -> bool:
 
 
 def command_result(exit_code: int = 0, output: bytes = b"") -> ExecResult:
-    return ExecResult(
-        exit_code=exit_code, stdout_path=None, stdout=output, stderr=b"", timed_out=False
-    )
+    return ExecResult(exit_code=exit_code, stdout=output, stderr=b"", timed_out=False)
 
 
 def review_json(

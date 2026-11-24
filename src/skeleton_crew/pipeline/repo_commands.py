@@ -2,8 +2,9 @@ import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 
-from skeleton_crew.pipeline.sessions import AGENT_USER, WORKSPACE, next_numbered
+from skeleton_crew.pipeline.sessions import next_numbered
 from skeleton_crew.pipeline.worker_job import WorkerJob
+from skeleton_crew.runtime.containers import ExecRequest
 
 OUTPUT_TAIL_CHARS = 20_000
 
@@ -34,15 +35,12 @@ async def run_repo_command(job: WorkerJob, command: str, name: str) -> CommandRe
         raise RuntimeError("worker container is not running")
     log_path = await asyncio.to_thread(next_numbered, job.sandbox.transcripts, name, ".log")
     # No env is passed: the repo's own commands never see the model credential.
-    result = await job.ctx.deps.runtime.exec(
-        job.sandbox.handle,
+    request = ExecRequest.as_agent(
         ["sh", "-c", f"exec 2>&1\n{command}"],
-        env={},
-        cwd=WORKSPACE,
-        user=AGENT_USER,
         timeout_s=job.ctx.settings.limits.command_timeout_s,
         stdout_path=log_path,
     )
+    result = await job.ctx.deps.runtime.exec(job.sandbox.handle, request)
     return CommandResult(
         result.exit_code, result.timed_out, await asyncio.to_thread(_tail, log_path)
     )

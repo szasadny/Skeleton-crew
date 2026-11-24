@@ -9,40 +9,31 @@ import docker.types
 import pytest
 from docker.api.client import APIClient
 from docker.client import DockerClient
+from runtime_helpers import container_spec
 
 from skeleton_crew.domain.errors import PolicyViolation
 from skeleton_crew.runtime import containers
 from skeleton_crew.runtime.containers import (
+    AGENT_USER,
     MANAGED_LABEL,
+    MANAGED_VALUE,
     READY_FILE,
-    AgentContainerSpec,
     ContainerHandle,
     ContainerStartError,
     DockerRuntime,
+    ExecRequest,
     Mount,
+    SandboxTarget,
+    error_tail,
+    proxy_env,
     timeout_argv,
 )
 
 HANDLE = ContainerHandle(id="c1", name="agent-1")
 
 
-def make_spec(tmp_path: Path, **overrides: Any) -> AgentContainerSpec:
-    values: dict[str, Any] = {
-        "name": "agent-1",
-        "image": "skeleton-crew-agent:latest",
-        "network": "skeleton-crew-agents",
-        "mounts": [
-            Mount(tmp_path / "agent", "/workspace", read_only=False),
-            Mount(tmp_path / "inbox", "/skeleton-in", read_only=True),
-        ],
-        "env": {"HTTPS_PROXY": "http://egress-proxy:3128", "CLAUDE_CODE_OAUTH_TOKEN": "x"},
-        "cpus": 1.5,
-        "memory_gb": 2.0,
-        "pids": 512,
-        "labels": {"skeleton-crew.task": "w-1"},
-    }
-    values.update(overrides)
-    return AgentContainerSpec(**values)
+def request(argv: list[str], timeout_s: float = 5, **extra: Any) -> ExecRequest:
+    return ExecRequest(argv, AGENT_USER, "/", timeout_s, **extra)
 
 
 @pytest.fixture
@@ -74,7 +65,7 @@ def script_exec(client: MagicMock, stream: Any, exit_code: int = 0) -> None:
 
 async def test_start_builds_hardened_container(tmp_path: Path, client: MagicMock) -> None:
     client.containers.run.return_value.id = "abc"
-    handle = await DockerRuntime(client).start(make_spec(tmp_path))
+    handle = await DockerRuntime(client).start(container_spec(tmp_path))
 
     assert handle == ContainerHandle(id="abc", name="agent-1")
     kwargs = client.containers.run.call_args.kwargs
@@ -98,7 +89,7 @@ async def test_start_builds_hardened_container(tmp_path: Path, client: MagicMock
 
 async def test_managed_label_cannot_be_overridden(tmp_path: Path, client: MagicMock) -> None:
     client.containers.run.return_value.id = "abc"
-    await DockerRuntime(client).start(make_spec(tmp_path, labels={MANAGED_LABEL: "false"}))
+    await DockerRuntime(client).start(container_spec(tmp_path, labels={MANAGED_LABEL: "false"}))
     assert client.containers.run.call_args.kwargs["labels"][MANAGED_LABEL] == "true"
 
 
@@ -111,7 +102,7 @@ async def test_start_waits_for_the_ready_marker(
     container.status = "running"
     container.exec_run.side_effect = [MagicMock(exit_code=1), MagicMock(exit_code=0)]
 
-    handle = await DockerRuntime(client).start(make_spec(tmp_path))
+    handle = await DockerRuntime(client).start(container_spec(tmp_path))
 
     assert handle.id == "abc"
     assert container.exec_run.call_count == 2
@@ -130,7 +121,7 @@ async def test_start_fails_closed_when_never_ready(
     container.exec_run.return_value.exit_code = 1
 
     with pytest.raises(ContainerStartError, match="not ready"):
-        await DockerRuntime(client).start(make_spec(tmp_path))
+        await DockerRuntime(client).start(container_spec(tmp_path))
     client.containers.get.assert_called_once_with("abc")
     client.containers.get.return_value.remove.assert_called_once_with(force=True, v=True)
 
@@ -144,7 +135,7 @@ async def test_start_fails_when_container_stops_during_startup(
     container.exec_run.side_effect = docker.errors.APIError("container is not running")
 
     with pytest.raises(ContainerStartError, match="stopped during startup"):
-        await DockerRuntime(client).start(make_spec(tmp_path))
+        await DockerRuntime(client).start(container_spec(tmp_path))
     client.containers.get.return_value.remove.assert_called_once_with(force=True, v=True)
 
 
@@ -155,7 +146,7 @@ async def test_start_error_survives_a_failed_cleanup(tmp_path: Path, client: Mag
     client.containers.get.return_value.remove.side_effect = docker.errors.APIError("wedged")
 
     with pytest.raises(ContainerStartError):
-        await DockerRuntime(client).start(make_spec(tmp_path))
+        await DockerRuntime(client).start(container_spec(tmp_path))
 
 
 @pytest.mark.parametrize(
@@ -170,7 +161,7 @@ async def test_start_error_survives_a_failed_cleanup(tmp_path: Path, client: Mag
 async def test_docker_socket_mount_is_refused(
     tmp_path: Path, client: MagicMock, host: Path, target: str
 ) -> None:
-    spec = make_spec(tmp_path, mounts=[Mount(host, target, read_only=True)])
+    spec = container_spec(tmp_path, mounts=[Mount(host, target, read_only=True)])
     with pytest.raises(PolicyViolation, match="docker socket"):
         await DockerRuntime(client).start(spec)
     client.containers.run.assert_not_called()
@@ -179,7 +170,7 @@ async def test_docker_socket_mount_is_refused(
 async def test_symlink_to_docker_socket_is_refused(tmp_path: Path, client: MagicMock) -> None:
     link = tmp_path / "innocent"
     link.symlink_to("/var/run/docker.sock")
-    spec = make_spec(tmp_path, mounts=[Mount(link, "/data", read_only=True)])
+    spec = container_spec(tmp_path, mounts=[Mount(link, "/data", read_only=True)])
     with pytest.raises(PolicyViolation, match="docker socket"):
         await DockerRuntime(client).start(spec)
 
@@ -203,9 +194,9 @@ async def test_github_credentials_never_enter_a_container(
 ) -> None:
     runtime = DockerRuntime(client)
     with pytest.raises(PolicyViolation, match="GitHub credential"):
-        await runtime.start(make_spec(tmp_path, env={key: value}))
+        await runtime.start(container_spec(tmp_path, env={key: value}))
     with pytest.raises(PolicyViolation, match="GitHub credential"):
-        await runtime.exec(HANDLE, ["true"], env={key: value}, cwd="/", user="agent", timeout_s=5)
+        await runtime.exec(HANDLE, request(["true"], env={key: value}))
     client.containers.run.assert_not_called()
     client.api.exec_create.assert_not_called()
 
@@ -223,13 +214,15 @@ async def test_exec_streams_stdout_to_file_with_cap(tmp_path: Path, client: Magi
     out = tmp_path / "out.jsonl"
 
     result = await DockerRuntime(client).exec(
-        HANDLE, ["claude", "-p"], env={"A": "1"}, cwd="/workspace", user="agent",
-        timeout_s=60, stdout_path=out, max_stdout_bytes=7,
+        HANDLE,
+        ExecRequest(
+            ["claude", "-p"], "agent", "/workspace", 60,
+            env={"A": "1"}, stdout_path=out, max_stdout_bytes=7,
+        ),
     )  # fmt: skip
 
     assert out.read_bytes() == b"0123456"
     assert result.exit_code == 0
-    assert result.stdout_path == out
     assert result.stdout == b""
     assert result.stderr == b"warn!"
     assert result.timed_out is False
@@ -248,9 +241,7 @@ async def test_exec_keeps_bounded_stdout_and_stderr_in_memory(
 ) -> None:
     monkeypatch.setattr(containers, "STDERR_TAIL_BYTES", 4)
     script_exec(client, Stream([(b"abcdef", b"123456")]), exit_code=3)
-    result = await DockerRuntime(client).exec(
-        HANDLE, ["x"], env={}, cwd="/", user="agent", timeout_s=5, max_stdout_bytes=3
-    )
+    result = await DockerRuntime(client).exec(HANDLE, request(["x"], max_stdout_bytes=3))
     assert result.stdout == b"abc"
     assert result.stderr == b"3456"
     assert result.exit_code == 3
@@ -258,9 +249,7 @@ async def test_exec_keeps_bounded_stdout_and_stderr_in_memory(
 
 async def test_exec_exit_124_is_timed_out(client: MagicMock) -> None:
     script_exec(client, Stream([]), exit_code=124)
-    result = await DockerRuntime(client).exec(
-        HANDLE, ["x"], env={}, cwd="/", user="agent", timeout_s=5
-    )
+    result = await DockerRuntime(client).exec(HANDLE, request(["x"]))
     assert result.timed_out is True
 
 
@@ -279,9 +268,7 @@ async def test_exec_controller_deadline_marks_timed_out(
     stream.__iter__.side_effect = hanging
     script_exec(client, stream)
     try:
-        result = await DockerRuntime(client).exec(
-            HANDLE, ["sleep", "100"], env={}, cwd="/", user="agent", timeout_s=0.2
-        )
+        result = await DockerRuntime(client).exec(HANDLE, request(["sleep", "100"], 0.2))
     finally:
         release.set()
     assert result.timed_out is True
@@ -299,11 +286,11 @@ async def test_remove_forces_removal(client: MagicMock) -> None:
     client.containers.get.return_value.remove.assert_called_once_with(force=True, v=True)
 
 
-async def test_remove_all_managed_filters_by_label(client: MagicMock) -> None:
+async def test_remove_managed_filters_by_label_and_skips_raced(client: MagicMock) -> None:
     gone = MagicMock()
     gone.remove.side_effect = docker.errors.NotFound("raced")
     client.containers.list.return_value = [MagicMock(), gone, MagicMock()]
-    assert await DockerRuntime(client).remove_all_managed() == 2
+    assert await DockerRuntime(client).remove_labeled(MANAGED_LABEL, MANAGED_VALUE) == 2
     client.containers.list.assert_called_once_with(
         all=True, filters={"label": f"{MANAGED_LABEL}=true"}
     )
@@ -336,7 +323,8 @@ def healthy(client: MagicMock) -> None:
 
 
 async def health(client: MagicMock) -> list[str]:
-    return await DockerRuntime(client).health(image="img", network="net", proxy_container="proxy")
+    target = SandboxTarget("img", "net", "http://proxy:3128", "proxy", Path("/srv/allowlist.txt"))
+    return await DockerRuntime(client).health(target)
 
 
 async def test_health_ok(client: MagicMock) -> None:
@@ -375,3 +363,29 @@ async def test_health_network_without_internal_flag_fails_closed(client: MagicMo
     healthy(client)
     client.networks.get.return_value.attrs = {}
     assert await health(client) == ["network net is not internal"]
+
+
+async def test_health_image_lookup_failure_is_not_reported_as_missing(client: MagicMock) -> None:
+    healthy(client)
+    client.images.get.side_effect = docker.errors.NotFound("no such thing")
+    assert await health(client) == ["image img could not be inspected"]
+
+
+def test_agent_exec_runs_in_the_workspace_without_env() -> None:
+    agent = ExecRequest.as_agent(["x"], timeout_s=5)
+    root = ExecRequest.as_root(["y"], timeout_s=5)
+
+    assert (agent.user, agent.cwd, agent.env) == ("agent", "/workspace", {})
+    assert (root.user, root.cwd, root.env) == ("root", "/", {})
+
+
+def test_proxy_env_keeps_local_hosts_first_without_duplicates() -> None:
+    env = proxy_env("http://p:3128", ("127.0.0.1", "::1", "internal"))
+
+    assert env["HTTPS_PROXY"] == env["http_proxy"] == "http://p:3128"
+    assert env["NO_PROXY"] == env["no_proxy"] == "localhost,127.0.0.1,::1,internal"
+    assert proxy_env("http://p:3128")["NO_PROXY"] == "localhost,127.0.0.1"
+
+
+def test_error_tail_keeps_the_end() -> None:
+    assert error_tail(b"  " + b"x" * 400 + b"end\n") == "x" * 297 + "end"

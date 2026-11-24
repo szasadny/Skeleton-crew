@@ -61,7 +61,7 @@ async def test_title_rename_by_untrusted_editor_drops_issue() -> None:
 
 async def test_edits_before_label_or_by_trusted_users_are_fine() -> None:
     gw = _gateway()
-    issue = gw.add_issue(1, "a", author="stranger")
+    issue = gw.add_issue(1, "a")
     issue.edits.append(ContentEdit("stranger", gw.tick()))
     issue.labels.add(READY)
     issue.label_events.append(LabelEvent(READY, MAINTAINER, gw.tick(), added=True))

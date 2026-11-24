@@ -1,9 +1,8 @@
 import pytest
+from audit_helpers import audit_events
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from skeleton_crew.core.audit import AuditKind
 from skeleton_crew.domain.settings import MAX_RULES_CHARS, InvalidRules
-from skeleton_crew.store import audit_store
 from skeleton_crew.store.rules_store import active_rules, get_revision, rule_history, save_rules
 
 
@@ -17,14 +16,13 @@ async def test_newest_revision_is_active(session: AsyncSession) -> None:
     assert [r.content for r in await rule_history(session, "worker", limit=1)] == ["v2"]
 
 
-async def test_each_change_is_audited_and_unchanged_save_is_skipped(session: AsyncSession) -> None:
-    await save_rules(session, "reviewer", "r1")
-    await save_rules(session, "reviewer", "r1")
-    events = await audit_store.list_events(session, limit=10, offset=0)
-    assert [e.kind for e in events] == [AuditKind.RULES_CHANGED]
-    assert events[0].payload is not None
-    assert events[0].payload["key"] == "reviewer"
+async def test_unchanged_save_is_skipped_and_nothing_is_audited(session: AsyncSession) -> None:
+    first = await save_rules(session, "reviewer", "r1")
+    assert first is not None
+    assert (first.role, first.content) == ("reviewer", "r1")
+    assert await save_rules(session, "reviewer", "r1") is None
     assert len(await rule_history(session, "reviewer", limit=10)) == 1
+    assert await audit_events(session) == []
 
 
 @pytest.mark.parametrize("key", ["admin", "Worker", "", "../worker"])
@@ -52,7 +50,6 @@ async def test_invalid_rules_are_rejected_and_not_stored(
     with pytest.raises(InvalidRules, match=message):
         await save_rules(session, "worker", content)
     assert await active_rules(session, "worker") is None
-    assert await audit_store.list_events(session, limit=10, offset=0) == []
 
 
 async def test_rules_at_the_limit_are_saved(session: AsyncSession) -> None:

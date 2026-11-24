@@ -5,7 +5,13 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from skeleton_crew.domain.settings import check_domains
-from skeleton_crew.runtime.containers import ContainerHandle, ContainerRuntime
+from skeleton_crew.runtime.containers import (
+    ContainerHandle,
+    ContainerRuntime,
+    ExecRequest,
+    SandboxTarget,
+    error_tail,
+)
 
 PLACEHOLDER_DOMAIN = ".invalid"
 RECONFIGURE_ARGV = ("squid", "-k", "reconfigure")
@@ -51,19 +57,13 @@ def _write_atomic(path: Path, content: str) -> None:
 
 
 async def apply_allowlist(
-    runtime: ContainerRuntime, domains: Iterable[str], file: Path, proxy_container: str
+    runtime: ContainerRuntime, domains: Iterable[str], target: SandboxTarget
 ) -> None:
     content = render_allowlist(domains)
-    await asyncio.to_thread(_write_atomic, file, content)
-    handle = ContainerHandle(id=proxy_container, name=proxy_container)
-    result = await runtime.exec(
-        handle,
-        RECONFIGURE_ARGV,
-        env={},
-        cwd="/",
-        user="root",
-        timeout_s=RECONFIGURE_TIMEOUT_S,
-    )
+    await asyncio.to_thread(_write_atomic, target.allowlist_path, content)
+    handle = ContainerHandle(id=target.proxy_container, name=target.proxy_container)
+    request = ExecRequest.as_root(RECONFIGURE_ARGV, timeout_s=RECONFIGURE_TIMEOUT_S)
+    result = await runtime.exec(handle, request)
     if result.exit_code != 0 or result.timed_out:
-        detail = result.stderr.decode(errors="replace").strip()[-300:]
+        detail = error_tail(result.stderr)
         raise EgressError(f"egress proxy reconfigure failed ({result.exit_code}): {detail}")

@@ -7,7 +7,7 @@ from skeleton_crew.pipeline.job_engine import Skip, deliver, iterate
 from skeleton_crew.pipeline.texts import COMMIT_AUTHOR, RERUN_CI_MESSAGE, merge_message
 from skeleton_crew.pipeline.worker_job import WorkerJob
 from skeleton_crew.pipeline.worker_policy import inspect_commit
-from skeleton_crew.runtime.workspace import commit_tree, merge_trees, tree_of
+from skeleton_crew.runtime.controller_git import CommitSpec, commit_tree, merge_trees, tree_of
 
 CONFLICTS_MESSAGE = "Unresolved merge (local only)"
 
@@ -35,9 +35,7 @@ async def resolve_conflicts(job: WorkerJob, merge: BaseMerge) -> None:
     conflicted = await commit_tree(
         job.paths.controller_repo,
         tree=merge.tree,
-        parents=[merge.head],
-        message=CONFLICTS_MESSAGE,
-        author=COMMIT_AUTHOR,
+        commit=CommitSpec((merge.head,), CONFLICTS_MESSAGE, COMMIT_AUTHOR),
     )
     job.git.resolve_merge(conflicted, merge.head, merge.conflicts)
     await job.record.fire(TaskEvent.PREPARED, base_sha=merge.base)
@@ -52,9 +50,11 @@ async def publish_clean_merge(job: WorkerJob, merge: BaseMerge) -> None:
         merged = await commit_tree(
             repo,
             tree=merge.tree,
-            parents=[merge.head, merge.base],
-            message=merge_message(job.ctx.settings.repo.base_branch, job.branch),
-            author=COMMIT_AUTHOR,
+            commit=CommitSpec(
+                (merge.head, merge.base),
+                merge_message(job.ctx.settings.repo.base_branch, job.branch),
+                COMMIT_AUTHOR,
+            ),
         )
     job.git.continue_from(merged)
     await job.record.fire(TaskEvent.PREPARED, base_sha=merge.base)
@@ -76,7 +76,5 @@ async def _rerun_failed_ci(job: WorkerJob, merge: BaseMerge) -> str:
     return await commit_tree(
         job.paths.controller_repo,
         tree=merge.tree,
-        parents=[merge.head],
-        message=RERUN_CI_MESSAGE,
-        author=COMMIT_AUTHOR,
+        commit=CommitSpec((merge.head,), RERUN_CI_MESSAGE, COMMIT_AUTHOR),
     )

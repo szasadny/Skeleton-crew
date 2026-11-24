@@ -1,5 +1,3 @@
-from dataclasses import dataclass
-
 from githubkit.exception import RequestFailed
 
 from skeleton_crew.domain.repo_policy import (
@@ -14,19 +12,13 @@ from skeleton_crew.domain.repo_policy import (
 from skeleton_crew.github.gateway import Gateway, RulesUnavailable
 
 
-@dataclass(frozen=True)
-class PreflightReport:
-    ok: bool
-    problems: list[str]
-
-
 def _describe(exc: Exception) -> str:
     if isinstance(exc, RequestFailed):
         return f"HTTP {exc.response.status_code}"
     return type(exc).__name__
 
 
-async def _ruleset_problems(gw: Gateway, base_branch: str, allow_unprotected: bool) -> list[str]:
+async def _ruleset_problems(gw: Gateway, base_branch: str, *, allow_unprotected: bool) -> list[str]:
     try:
         rules = await gw.branch_rules(base_branch)
     except RulesUnavailable:
@@ -63,7 +55,6 @@ async def _permission_problems(gw: Gateway) -> list[str]:
 
 async def check_repository(
     gw: Gateway, *, base_branch: str, allow_unprotected: bool = False
-) -> PreflightReport:
-    problems = await _ruleset_problems(gw, base_branch, allow_unprotected)
-    problems += await _permission_problems(gw)
-    return PreflightReport(ok=not problems, problems=problems)
+) -> list[str]:
+    problems = await _ruleset_problems(gw, base_branch, allow_unprotected=allow_unprotected)
+    return problems + await _permission_problems(gw)

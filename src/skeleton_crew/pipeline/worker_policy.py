@@ -15,11 +15,12 @@ from skeleton_crew.domain.errors import PolicyViolation
 from skeleton_crew.domain.merge_policy import check_resolution, conflict_markers
 from skeleton_crew.domain.schemas import WorkerResult
 from skeleton_crew.pipeline.escalation import Escalation
-from skeleton_crew.pipeline.sessions import AGENT_USER, WORKSPACE
 from skeleton_crew.pipeline.texts import COMMIT_AUTHOR, commit_message, merge_message
 from skeleton_crew.pipeline.worker_job import WorkerJob
-from skeleton_crew.runtime.workspace import (
+from skeleton_crew.runtime.containers import ExecRequest
+from skeleton_crew.runtime.controller_git import (
     MAX_PATCH_BYTES,
+    CommitSpec,
     agent_patch_argv,
     apply_agent_patch,
     binary_diff,
@@ -49,15 +50,12 @@ class _Inspection:
 async def read_agent_patch(job: WorkerJob) -> bytes:
     if job.sandbox is None:
         raise RuntimeError("worker container is not running")
-    result = await job.ctx.deps.runtime.exec(
-        job.sandbox.handle,
+    request = ExecRequest.as_agent(
         agent_patch_argv(job.git.patch_base_sha),
-        env={},
-        cwd=WORKSPACE,
-        user=AGENT_USER,
         timeout_s=PATCH_TIMEOUT_S,
         max_stdout_bytes=MAX_PATCH_BYTES + 1,
     )
+    result = await job.ctx.deps.runtime.exec(job.sandbox.handle, request)
     if result.exit_code != 0 or result.timed_out:
         raise Escalation("could not read the worker's changes from its workspace")
     return result.stdout
@@ -73,14 +71,12 @@ async def check_change(job: WorkerJob, result: WorkerResult) -> PolicyCheck:
         else commit_message(job.issue.number, result.pr_title)
     )
     try:
+        parents = git.merge_parents if resolving else (git.tip_sha,)
         head = await apply_agent_patch(
             repo,
             patch=patch,
             base_sha=git.patch_base_sha,
-            parent_sha=git.merge_parents[0] if resolving else git.tip_sha,
-            message=message,
-            author=COMMIT_AUTHOR,
-            extra_parents=git.merge_parents[1:],
+            commit=CommitSpec(parents, message, COMMIT_AUTHOR),
         )
     except PolicyViolation as exc:
         return PolicyCheck(None, [str(exc)], patch, [], [])
@@ -88,9 +84,9 @@ async def check_change(job: WorkerJob, result: WorkerResult) -> PolicyCheck:
     open_findings, contested = contest(found.contestable, job.objections)
     violations = found.violations + [str(finding_violation(f)) for f in open_findings]
     if resolving:
-        raw, numstat, _ = await diff_summary(repo, git.patch_base_sha, head)
+        summary = await diff_summary(repo, git.patch_base_sha, head)
         try:
-            touched = [c.path for c in parse_diff_summary(raw, numstat)]
+            touched = [c.path for c in parse_diff_summary(summary.raw, summary.numstat)]
         except PolicyViolation as exc:
             return PolicyCheck(head, [str(exc)], found.patch, [], [])
         violations += [str(v) for v in check_resolution(touched, git.conflicts)]
@@ -109,10 +105,10 @@ async def _inspect(job: WorkerJob, head: str, agent_patch: bytes) -> _Inspection
     is_update = job.on_existing_branch
     # The reviewer of an updated PR needs the whole change, not only the agent's last patch.
     patch = await binary_diff(repo, base, head) if is_update else agent_patch
-    raw, numstat, unified = await diff_summary(repo, base, head)
+    summary = await diff_summary(repo, base, head)
     try:
-        changes = parse_diff_summary(raw, numstat)
-        lines = added_lines(unified)
+        changes = parse_diff_summary(summary.raw, summary.numstat)
+        lines = added_lines(summary.unified)
     except PolicyViolation as exc:
         return _Inspection([str(exc)], patch, [], [])
     settings = job.ctx.settings

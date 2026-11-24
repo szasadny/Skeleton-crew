@@ -6,6 +6,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
+from skeleton_crew.core.config import BootstrapConfig
 from skeleton_crew.domain.branch_policy import BRANCH_PREFIX
 from skeleton_crew.domain.runner_policy import (
     DRAINING_REASON,
@@ -21,22 +22,25 @@ from skeleton_crew.domain.runner_policy import (
 from skeleton_crew.domain.settings import AppSettings
 from skeleton_crew.github.gateway import Gateway
 from skeleton_crew.pipeline.deps import PipelineDeps, audit_sink
-from skeleton_crew.pipeline.sessions import ROLE_LABEL, proxy_env
 from skeleton_crew.runtime.containers import (
-    AgentContainerSpec,
+    CONTAINER_PREFIX,
+    ROLE_LABEL,
     ContainerHandle,
     ContainerInfo,
+    ContainerSpec,
     ContainerStartError,
+    ExecRequest,
     Mount,
+    SandboxTarget,
+    proxy_env,
 )
 from skeleton_crew.runtime.egress import apply_allowlist
 from skeleton_crew.store import runs_store, settings_store
 
 RUNNER_ROLE = "runner"
-CONTAINER_PREFIX = "skeleton-crew-"
 CONFIG_MOUNT = "/runner-config"
 REGISTRATION_FILE = ".runner"
-LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
+_EXTRA_LOCAL_HOSTS = ("::1",)
 # By process name: the exec's own timeout wrapper has "Runner.Worker" in its command line.
 BUSY_ARGV = ("pgrep", "-x", "Runner.Worker")
 TICK_S = 5.0
@@ -69,24 +73,30 @@ def registered_runners(deps: PipelineDeps, settings: AppSettings) -> list[str]:
     return [n for n in names if (config_dir(deps, n) / REGISTRATION_FILE).is_file()]
 
 
-def runner_env(proxy_url: str, no_proxy: Sequence[str]) -> dict[str, str]:
-    bypass = ",".join(dict.fromkeys([*LOCAL_HOSTS, *no_proxy]))
-    return proxy_env(proxy_url) | {
-        "NO_PROXY": bypass,
-        "no_proxy": bypass,
-        "SC_BRANCH_PREFIX": BRANCH_PREFIX,
-    }
-
-
-def runner_spec(deps: PipelineDeps, settings: AppSettings, runner: str) -> AgentContainerSpec:
-    config, ci = deps.config, settings.ci
-    return AgentContainerSpec(
-        name=container_name(runner),
+def runner_target(config: BootstrapConfig) -> SandboxTarget:
+    return SandboxTarget(
         image=config.runner_image,
         network=config.runner_network,
+        proxy_url=config.runner_proxy_url,
+        proxy_container=config.runner_proxy_container,
+        allowlist_path=config.runner_allowlist_path,
+    )
+
+
+def runner_env(proxy_url: str, no_proxy: Sequence[str]) -> dict[str, str]:
+    env = proxy_env(proxy_url, (*_EXTRA_LOCAL_HOSTS, *no_proxy))
+    return env | {"SC_BRANCH_PREFIX": BRANCH_PREFIX}
+
+
+def runner_spec(deps: PipelineDeps, settings: AppSettings, runner: str) -> ContainerSpec:
+    target, ci = runner_target(deps.config), settings.ci
+    return ContainerSpec(
+        name=container_name(runner),
+        image=target.image,
+        network=target.network,
         # Read-only, so a job cannot tamper with the registration the next job starts from.
         mounts=[Mount(config_dir(deps, runner), CONFIG_MOUNT, read_only=True)],
-        env=runner_env(config.runner_proxy_url, ci.no_proxy),
+        env=runner_env(target.proxy_url, ci.no_proxy),
         cpus=ci.cpus,
         memory_gb=ci.memory_gb,
         pids=ci.pids,
@@ -105,12 +115,7 @@ async def visibility_problem(gw: Gateway) -> str | None:
 async def runner_problems(deps: PipelineDeps, settings: AppSettings, gw: Gateway) -> list[str]:
     if not settings.ci.enabled:
         return []
-    config = deps.config
-    problems = await deps.runtime.health(
-        image=config.runner_image,
-        network=config.runner_network,
-        proxy_container=config.runner_proxy_container,
-    )
+    problems = await deps.runtime.health(runner_target(deps.config))
     problem = await visibility_problem(gw)
     if problem is not None:
         problems.append(problem)
@@ -256,10 +261,7 @@ class RunnerPool:
         domains = frozenset(settings.ci.egress_allowlist)
         if domains == self._allowlist:
             return
-        config = self._deps.config
-        await apply_allowlist(
-            self._deps.runtime, domains, config.runner_allowlist_path, config.runner_proxy_container
-        )
+        await apply_allowlist(self._deps.runtime, domains, runner_target(self._deps.config))
         self._allowlist = domains
 
     async def _reconcile(
@@ -299,9 +301,8 @@ class RunnerPool:
 
     async def _activity(self, handle: ContainerHandle) -> RunnerStatus:
         try:
-            result = await self._deps.runtime.exec(
-                handle, BUSY_ARGV, env={}, cwd="/", user="root", timeout_s=_EXEC_TIMEOUT_S
-            )
+            request = ExecRequest.as_root(BUSY_ARGV, timeout_s=_EXEC_TIMEOUT_S)
+            result = await self._deps.runtime.exec(handle, request)
         except Exception:
             return RunnerStatus.OFFLINE
         if result.exit_code == 0:

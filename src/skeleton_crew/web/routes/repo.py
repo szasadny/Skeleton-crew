@@ -1,14 +1,14 @@
-from fastapi import APIRouter, Request
-from fastapi.responses import Response
+from fastapi import APIRouter
 
 from skeleton_crew.domain.settings import RuntimeLimits
-from skeleton_crew.web.forms import Kind, SettingsPage, number_specs
+from skeleton_crew.web.forms import Kind, number_specs
+from skeleton_crew.web.settings_page import SettingsPage
 
 router = APIRouter()
 
 _RESOURCES = number_specs("runtime", RuntimeLimits, ["cpus", "memory_gb", "pids"])
 
-_PAGE = SettingsPage(
+SettingsPage(
     template="repo.html",
     fields={
         "labels.ready": Kind.TEXT,
@@ -25,14 +25,4 @@ _PAGE = SettingsPage(
         **{spec.name: Kind.NUMBER for spec in _RESOURCES},
     },
     context={"resources": _RESOURCES},
-)
-
-
-@router.get("/repo")
-async def show(request: Request) -> Response:
-    return await _PAGE.show(request)
-
-
-@router.post("/repo")
-async def submit(request: Request) -> Response:
-    return await _PAGE.submit(request)
+).include(router, "/repo")

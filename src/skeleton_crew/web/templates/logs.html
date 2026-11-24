@@ -10,11 +10,11 @@
   </select>
   <button type="submit" class="secondary">Filter</button>
 </form>
-{% if events %}
+{% if page.items %}
 <table>
   <thead><tr><th>Time</th><th>Kind</th><th>Outcome</th><th>Summary</th><th>Run</th><th>Details</th></tr></thead>
   <tbody>
-  {% for event in events %}
+  {% for event in page.items %}
   <tr>
     <td>{{ event.at | dt }}</td>
     <td>{{ event.kind.value }}</td>
@@ -29,5 +29,5 @@
 {% else %}
 <p>No events on this page.</p>
 {% endif %}
-{{ m.pager("/logs", page, has_next, "&kind=" ~ kind if kind else "") }}
+{{ m.pager("/logs", page, "&kind=" ~ kind if kind else "") }}
 {% endblock %}

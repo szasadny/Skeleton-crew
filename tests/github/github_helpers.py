@@ -1,7 +1,6 @@
 import os
 import shutil
 import subprocess
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -10,8 +9,9 @@ import pytest
 from githubkit import GitHub
 
 from skeleton_crew.core.audit import AuditEntry, AuditKind, AuditOutcome
-from skeleton_crew.domain.settings import LabelNames
-from skeleton_crew.github.gateway import GitHubGateway, github_remote_url
+from skeleton_crew.domain.settings import LabelNames, Limits
+from skeleton_crew.github._git import REMOTE_PROTOCOL, GitRemote
+from skeleton_crew.github.gateway import GatewayConfig, GitHubGateway, github_remote_url
 
 API = "https://api.github.com"
 REPO = "o/r"
@@ -45,34 +45,20 @@ def make_client() -> GitHub[Any]:
     return GitHub("test-client-token", http_cache=False, auto_retry=False)
 
 
-def token_provider(calls: list[int] | None = None) -> Callable[[], Awaitable[str]]:
-    async def provide() -> str:
-        if calls is not None:
-            calls.append(1)
-        return TOKEN
-
-    return provide
-
-
 def make_gateway(
     audit: AuditLog,
     *,
     dry_run: bool = False,
-    max_comment_chars: int = 1500,
-    remote_url: Callable[[str], str] | None = None,
+    max_comment_chars: int = Limits().max_comment_chars,
+    local_remote: Path | None = None,
 ) -> GitHubGateway:
-    return GitHubGateway(
-        client=make_client(),
-        repo=REPO,
-        labels=LabelNames(),
-        base_branch="main",
-        dry_run=dry_run,
-        audit=audit,
-        max_comment_chars=max_comment_chars,
-        token_provider=token_provider(),
-        remote_url=remote_url or github_remote_url,
-        remote_protocol="https" if remote_url is None else "file",
-    )
+    async def remote() -> GitRemote:
+        if local_remote is None:
+            return GitRemote(github_remote_url(REPO), REMOTE_PROTOCOL, TOKEN)
+        return GitRemote(str(local_remote), "file", TOKEN)
+
+    config = GatewayConfig(REPO, LabelNames(), "main", dry_run, max_comment_chars)
+    return GitHubGateway(make_client(), config, audit, remote)
 
 
 def git(cwd: Path, *args: str) -> str:

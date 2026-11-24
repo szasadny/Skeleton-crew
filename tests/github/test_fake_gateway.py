@@ -1,20 +1,52 @@
+from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from pathlib import Path
 
 import pytest
 from fake_gateway import BOT_LOGIN, FakeGitHubGateway, FakePull
-from github_helpers import SHA, commit_on_top, git, make_bare_remote
+from github_helpers import SHA, AuditLog, commit_on_top, git, make_bare_remote, make_gateway
 
 from skeleton_crew.core.audit import AuditKind, AuditOutcome
-from skeleton_crew.domain.ci_policy import CiState
+from skeleton_crew.domain.ci_policy import CiState, ReviewCheck
 from skeleton_crew.domain.errors import PolicyViolation
 from skeleton_crew.domain.label_policy import LabelChange, escalation_change
 from skeleton_crew.domain.settings import LabelNames
 from skeleton_crew.github.gateway import Gateway
 
+Write = Callable[[Gateway], Awaitable[object]]
+WRITES: dict[str, Write] = {
+    "labels": lambda gw: gw.change_labels(escalation_change(4, LabelNames())),
+    "bad labels": lambda gw: gw.change_labels(LabelChange(4, frozenset({"skeleton"}), frozenset())),
+    "comment": lambda gw: gw.comment(4, "c" * 5000),
+    "issue": lambda gw: gw.create_hitl_issue("Found", "b" * 5000),
+    "bad issue": lambda gw: gw.create_hitl_issue("two\nlines", "b"),
+    "pr": lambda gw: gw.open_pr(branch="skeleton/4-fix", title="t", body="Closes #4"),
+    "bad pr": lambda gw: gw.open_pr(branch="main", title="t", body="b"),
+    "check": lambda gw: gw.set_review_check(sha=SHA, state=ReviewCheck.PASSED, summary="ok"),
+    "bad check": lambda gw: gw.set_review_check(sha="HEAD", state=ReviewCheck.PENDING, summary=""),
+    "push": lambda gw: gw.push_branch(Path("/nonexistent"), "skeleton/4-fix", SHA),
+    "lease push": lambda gw: gw.push_branch(Path("/x"), "skeleton/4-fix", SHA, "b" * 40),
+    "bad lease": lambda gw: gw.push_branch(Path("/x"), "skeleton/4-fix", SHA, "main"),
+    "bad push": lambda gw: gw.push_branch(Path("/nonexistent"), "main", SHA),
+}
+
 
 def test_fake_satisfies_gateway_protocol() -> None:
     gateway: Gateway = FakeGitHubGateway()
-    assert gateway.base_branch == "main"
+    assert gateway.labels == LabelNames()
+
+
+@pytest.mark.parametrize("name", WRITES)
+async def test_fake_audits_every_write_exactly_like_the_gateway(name: str) -> None:
+    audit = AuditLog()
+    fake = FakeGitHubGateway(dry_run=True)
+
+    for gateway in (make_gateway(audit, dry_run=True), fake):
+        with suppress(PolicyViolation):
+            await WRITES[name](gateway)
+
+    assert len(audit.events) == 1
+    assert fake.audit_events == audit.events
 
 
 async def test_fake_runs_label_policy_and_audits_block() -> None:

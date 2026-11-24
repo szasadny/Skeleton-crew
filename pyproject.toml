@@ -115,8 +115,16 @@ layers = [
 name = "Private gateway modules are imported only by the gateway"
 type = "forbidden"
 source_modules = ["skeleton_crew.*", "skeleton_crew.github.*"]
-forbidden_modules = ["skeleton_crew.github._git"]
-ignore_imports = ["skeleton_crew.github.gateway -> skeleton_crew.github._git"]
+forbidden_modules = [
+    "skeleton_crew.github._auth",
+    "skeleton_crew.github._git",
+    "skeleton_crew.github._parse",
+]
+ignore_imports = [
+    "skeleton_crew.github.gateway -> skeleton_crew.github._auth",
+    "skeleton_crew.github.gateway -> skeleton_crew.github._git",
+    "skeleton_crew.github.gateway -> skeleton_crew.github._parse",
+]
 allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]
