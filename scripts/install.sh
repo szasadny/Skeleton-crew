@@ -5,6 +5,8 @@ SYSBOX_VERSION=0.7.1
 SYSBOX_SHA256=9d6d5484f980d0a17f86c492c1262015c2afb66280bdb97215b79fde6a0261c5
 SYSBOX_DEB="sysbox-ce_${SYSBOX_VERSION}.linux_amd64.deb"
 APP_UID=1000
+BUILD_CACHE_MAX=10GB
+DAEMON_JSON=/etc/docker/daemon.json
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="$REPO_DIR/.env"
@@ -95,6 +97,22 @@ install_sysbox() {
 		|| die "sysbox-runc is not registered as a Docker runtime"
 }
 
+limit_build_cache() {
+	local current tmp
+	current="$(cat "$DAEMON_JSON" 2>/dev/null || echo '{}')"
+	tmp="$(mktemp)"
+	jq --arg max "$BUILD_CACHE_MAX" '.builder.gc = {enabled: true, policy: [{maxUsedSpace: $max, all: true}]}' \
+		<<<"$current" >"$tmp"
+	if [[ $(jq -S . "$tmp") == $(jq -S . <<<"$current") ]]; then
+		rm -f "$tmp"
+		return
+	fi
+	dockerd --validate --config-file "$tmp" || die "invalid $DAEMON_JSON after adding the build cache limit"
+	install -m 0644 "$tmp" "$DAEMON_JSON"
+	rm -f "$tmp"
+	systemctl restart docker
+}
+
 prepare_env() {
 	if [[ ! -f $ENV_FILE ]]; then
 		install -m 0600 "$REPO_DIR/.env.example" "$ENV_FILE"
@@ -128,9 +146,12 @@ main() {
 	check_host
 	install_docker
 	install_sysbox
+	limit_build_cache
 	prepare_env
 	prepare_data_dir
 	compose --profile build build
+	docker builder prune -f --max-used-space "$BUILD_CACHE_MAX"
+	docker image prune -f
 	if is_configured; then
 		compose up -d
 		echo "Skeleton Crew is running: https://$(env_value SC_SITE_ADDRESS)"

@@ -155,7 +155,7 @@ Prefer exact hosts over wildcards for storage domains (`*.r2.cloudflarestorage.c
 
 ### Maintenance
 
-- **Updates**: runners do not update themselves. GitHub stops sending jobs to a runner that is too old, so pull and rerun `sudo scripts/install.sh` regularly; the image pins the runner version.
+- **Updates**: runners do not update themselves. GitHub stops sending jobs to a runner that is too old, so pull and rerun `sudo scripts/install.sh` regularly; the image pins the runner version. Each rerun rebuilds the images; the installer caps Docker's build cache at 10 GB (`builder.gc` in `/etc/docker/daemon.json`) and removes the old untagged images, so updates do not fill the disk.
 - **Expired registrations**: GitHub removes a runner that has not connected for 14 days. Since runners only connect while CI waits on a skeleton branch, this happens after 14 days without such CI. The CI page then shows the runner offline with "check its registration". Delete its directory and register it again.
 - **Kill switch and off**: both remove the runner containers within seconds, and no new ones start.
 - **Deregister**: remove the runner in Settings → Actions → Runners, then delete its directory under `/var/lib/skeleton-crew/runners/`. If a registration may have leaked, do this at once and register a new one.
